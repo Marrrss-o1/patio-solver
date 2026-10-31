@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.2.1
+// @version      1.2.2
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -2030,6 +2030,7 @@ ENGINE();
 
     newHand() {
       const s = this.snap || { players: [] };
+      this.settleLog(s);
       const players = {};
       for (const p of s.players) {
         if (p.playState !== 'playing' && p.playState !== 'folded' && p.playState !== 'all_in') continue;
@@ -2040,14 +2041,14 @@ ENGINE();
           stageBet: 0, total: 0, folded: false, allin: false,
           seq: { pre: [], flop: [], turn: [], river: [] },
           pfCat: null, acted: false, faced3: false, cbetSeen: false,
-          agg: [], sizes: {}, shown: [],
+          agg: [], sizes: {}, shown: [], start: +p.stack || 0,
         };
       }
       this.hand = {
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
         currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
-        finished: false,
+        finished: false, log: [],
       };
       this.emit('hand', this.hand);
     }
@@ -2079,7 +2080,10 @@ ENGINE();
         case 'game:big_blind_paid': {
           if (!h) break;
           const p = h.players[data.playerId];
-          if (p) { p.stageBet += data.amount; p.total += data.amount; }
+          if (p) {
+            p.stageBet += data.amount; p.total += data.amount;
+            h.log.push({ st: 'pre', who: p.name, hero: p.id === this.heroId(), act: ev === 'game:big_blind_paid' ? 'bb' : 'sb', amt: data.amount });
+          }
           h.currentBet = Math.max(h.currentBet, data.amount);
           if (ev === 'game:big_blind_paid') h.bigBlind = data.amount;
           break;
@@ -2170,6 +2174,7 @@ ENGINE();
       if (snapP && snapP.stack - added <= 0 && d.actionType !== 'fold' && d.actionType !== 'check') p.allin = true;
       if (key) p.seq[key].push(kind);
       p.acted = true;
+      this.logAction(p, kind, added, facing, potBefore, snapP);
 
       const isHero = p.id === this.heroId();
       const r = isHero ? null : this.record(p.auth, p.name);
@@ -2251,8 +2256,9 @@ ENGINE();
         hero: h.heroUids.map((u) => h.heroCards[u]).filter(Boolean),
         pot: Object.values(h.players).reduce((a, p) => a + p.total, 0),
         advice: (h.advice || []).slice(),
+        log: h.log.slice(),
         players: Object.values(h.players).map((p) => ({
-          name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded,
+          name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded, stack: p.start,
           put: p.total, actions: p.seq, shown: p.shown,
         })),
       };
@@ -2262,11 +2268,70 @@ ENGINE();
       if (list.length > MAX_HISTORY) list.splice(0, list.length - MAX_HISTORY);
     }
 
-    // The overlay reports each piece of advice so the hand log can show it.
-    noteAdvice(text, ev) {
+    // Every action with its amount, the pot before it, what the player faced and their stack,
+    // so a hand can be replayed exactly from the log. Hero's action is also matched to the
+    // advice shown for that decision.
+    logAction(p, kind, added, facing, potBefore, snapP) {
+      const h = this.hand;
+      const r2 = (x) => Math.round(x * 100) / 100;
+      const isHero = p.id === this.heroId();
+      const e = {
+        st: STREET_KEY[h.street] || 'pre', who: p.name, act: kind, amt: r2(added), to: r2(p.stageBet),
+        pot: r2(potBefore), facing: r2(facing),
+      };
+      if (isHero) e.hero = true;
+      if (snapP && snapP.stack != null) e.stack = r2(+snapP.stack);
+      if (potBefore > 0 && (kind === 'bet' || kind === 'raise' || kind === '3bet')) e.potPct = Math.round(100 * Math.max(0, added - facing) / (potBefore + facing));
+      if (p.allin) e.allin = true;
+      h.log.push(e);
+      if (!isHero || !h.advice) return;
+      const adv = h.advice.slice().reverse().find((a) => a.street === h.board.length && !a.did);
+      if (!adv) return;
+      adv.did = kind + (added > 0 ? ' ' + r2(added) : '');
+      const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
+      if (adv.kind) adv.followed = group(adv.kind) === group(kind) || (adv.kind === 'allin' && kind === 'call');
+    }
+
+    // Stacks only update after the pot is paid, so each hand's result is filled in from the
+    // next hand's starting stacks (rebuys between hands would show up as winnings).
+    settleLog(s) {
+      const prev = this.hand;
+      if (!prev || !prev.logEntry || prev.logEntry.net) return;
+      const net = {};
+      for (const p of Object.values(prev.players)) {
+        const now = s.players.find((x) => x.id === p.id);
+        if (now && now.stack != null) net[p.name] = Math.round((+now.stack - p.start) * 100) / 100;
+      }
+      prev.logEntry.net = net;
+      const hero = Object.values(prev.players).find((p) => p.id === this.heroId());
+      if (hero && net[hero.name] != null) {
+        prev.logEntry.heroNet = net[hero.name];
+        if (prev.bigBlind) prev.logEntry.heroNetBB = Math.round((net[hero.name] / prev.bigBlind) * 10) / 10;
+      }
+      this.emit('save', this.db);
+    }
+
+    // The overlay reports each piece of advice so the hand log can show it. With the solver
+    // result (and a formatter for its options) the log also keeps the pot, price, equity,
+    // the other options' EVs and whether hero followed the advice.
+    noteAdvice(text, ev, r, fmt) {
       const h = this.hand;
       if (!h || h.finished) return;
-      (h.advice || (h.advice = [])).push({ street: h.board.length, text, ev: Math.round(ev * 100) / 100 });
+      const r2 = (x) => Math.round(x * 100) / 100;
+      const a = { street: h.board.length, text, ev: r2(ev) };
+      if (r) {
+        if (r.best) { a.kind = r.best.kind; a.amount = r2(r.best.amount || 0); }
+        a.pot = r2(r.pot); a.toCall = r2(r.toCall || 0);
+        if (r.equity) a.equity = r2(r.equity.share);
+        if (r.potOdds != null && r.toCall > 0) a.needed = r2(r.potOdds);
+        if (r.hero && r.hero.made) a.hand = r.hero.made;
+        if (r.best && r.best.foldPct > 0.02) a.foldPct = r2(r.best.foldPct);
+        if (r.mix) a.mix = r.mix.map((m) => m.label + ' ' + Math.round(m.freq * 100) + '%');
+        if (r.solver) a.riverSolve = true;
+        if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
+        if (r.opponents) a.reads = r.opponents.map((o) => ({ name: o.name, type: o.type && o.type.label, hands: Math.round(o.stats.hands || 0), bluff: o.bluffChance != null ? r2(o.bluffChance) : undefined }));
+      }
+      (h.advice || (h.advice = [])).push(a);
     }
 
     // Players in postflop order: small blind first, button last.
@@ -2721,7 +2786,7 @@ function slim(r) {
       thinking = false;
       if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
       advice = { result: res.result, ctx: built, stale: false };
-      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0);
+      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0, res.result, function (sc) { return actionText(sc, built.heroStageBet, res.result.toCall); });
       render();
     });
   }
