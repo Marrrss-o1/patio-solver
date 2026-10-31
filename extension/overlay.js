@@ -10,9 +10,9 @@
     get: (k) => new Promise((res) => chrome.storage.local.get(k, (v) => res(v[k]))),
     set: (k, v) => new Promise((res) => chrome.storage.local.set({ [k]: v }, res)),
   };
-  const analyze = TEST ? TEST.analyze : (input) => new Promise((res) => {
+  const analyze = TEST ? TEST.analyze : (input, quick) => new Promise((res) => {
     try {
-      chrome.runtime.sendMessage({ type: 'analyze', input }, (r) => {
+      chrome.runtime.sendMessage({ type: 'analyze', input, quick: !!quick }, (r) => {
         if (chrome.runtime.lastError) res({ ok: false, error: chrome.runtime.lastError.message });
         else res(r || { ok: false, error: 'No answer from the solver.' });
       });
@@ -230,6 +230,9 @@
     if (thinking && !(advice && !advice.stale)) {
       html += `<div class="rec"><div class="sub"><span class="spin"></span>Working out your best move…</div></div>`;
     }
+    if (thinking && advice && advice.quick && !advice.stale) {
+      html += `<div class="sub"><span class="spin"></span>Quick read below. The full solve is still running and will replace it.</div>`;
+    }
     if (advice) {
       const r = advice.result, c = advice.ctx;
       const best = r.best;
@@ -247,7 +250,7 @@
       kv.push(['Position', r.inPosition ? 'In position (you act last)' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (r.solver) kv.push([{ preflop: 'Preflop solve', turn: 'Turn + river solve', river: 'River solve' }[r.solver.kind] || 'Solve', r.solver.field ? 'Your range vs the field' : 'Your range vs theirs']);
-      if (advice.ms != null) kv.push(['Thinking', `${(advice.ms / 1000).toFixed(1)}s on ${advice.workers || 1} core${advice.workers > 1 ? 's' : ''}`]);
+      if (advice.ms != null) kv.push(['Thinking', `${advice.quick ? 'Quick read: ' : ''}${(advice.ms / 1000).toFixed(1)}s on ${advice.workers || 1} core${advice.workers > 1 ? 's' : ''}`]);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += `<div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
 
@@ -273,19 +276,40 @@
   }
 
   // ---------- solver ----------
-  async function requestAdvice() {
+  // The computer answers twice: a quick read on one core within about a second, then the full
+  // solve on every spare core. If you act before the full solve is back, the quick read is logged.
+  function note(a) {
+    if (!a || a.noted) return;
+    a.noted = true;
+    const r = a.result, c = a.ctx;
+    tracker.noteAdvice(actionText(r.best, c.heroStageBet, r.toCall), r.best.ev || 0, r, function (sc) { return actionText(sc, c.heroStageBet, r.toCall); });
+  }
+  async function requestAdvice(timeLeftMs) {
     const built = tracker.solverInput(ui.tableStyle);
     if (built.error) { status = built.error; render(); return; }
     const id = ++reqId;
     thinking = true;
     if (advice) advice.stale = true;
     render();
-    const res = await analyze(built.input);
+    const input = timeLeftMs > 0 ? Object.assign({}, built.input, { timeLeftMs }) : built.input;
+    const full = analyze(input);
+    if (!TEST || TEST.quick) {
+      analyze(input, true).then((q) => {
+        if (id !== reqId || !thinking || !q || !q.ok) return;
+        q.result.quick = true;
+        advice = { result: q.result, ctx: built, stale: false, ms: q.ms, workers: q.workers, quick: true };
+        render();
+      });
+    }
+    const res = await full;
     if (id !== reqId) return;
     thinking = false;
-    if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
+    if (!res || !res.ok) {
+      if (advice && advice.quick && !advice.stale) { note(advice); render(); return; }
+      status = 'Solver error: ' + (res && res.error); advice = null; render(); return;
+    }
     advice = { result: res.result, ctx: built, stale: false, ms: res.ms, workers: res.workers };
-    tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0, res.result, function (sc) { return actionText(sc, built.heroStageBet, res.result.toCall); });
+    note(advice);
     render();
   }
 
@@ -306,9 +330,12 @@
       if (type === 'action' || type === 'street' || type === 'cards') render();
     });
     tracker.on((type, p) => {
-      if (type === 'turn' && p.isHero) requestAdvice();
+      if (type === 'turn' && p.isHero) requestAdvice(p.timeLeftMs);
       else if (type === 'turn' && advice && !advice.stale) { advice.stale = true; render(); }
-      if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
+      if (type === 'heroDone') {
+        if (thinking && advice && advice.quick && !advice.stale) note(advice);
+        reqId++; thinking = false; if (advice) advice.stale = true; render();
+      }
     });
 
     window.addEventListener('message', (e) => {
