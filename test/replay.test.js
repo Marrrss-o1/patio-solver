@@ -1099,5 +1099,17 @@ test('look-ahead bets stop at the chips the opponent has left', () => {
   assert.ok(call.evRead <= 200 + 20 + 1e-6, String(call.evRead));
 });
 
+test('robust EV: shoves on the flop and turn are stress-tested like other bets', () => {
+  // A draw with a short stack: the all-in leans on fold equity, so an opponent who calls
+  // more than the read says must cost it, as it costs the smaller bets.
+  const r = E.analyzeSync({ hero: C('9c 8c'), board: C('Tc 7d 2h 3s'), pot: 150, toCall: 0, stack: 300, bigBlind: 10, mix: false, seed: 3, iterations: 6000, inPosition: true,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check' } }] });
+  assert.ok(r.robustWeight > 0);
+  const shove = r.ranked.find((s) => s.kind === 'allin');
+  assert.ok(shove.evWorst < shove.evRead - 10, `${shove.evWorst} vs ${shove.evRead}`);
+  assert.ok(shove.ev < shove.evRead);
+  assert.notStrictEqual(r.best.kind, 'allin');
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
