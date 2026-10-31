@@ -10,11 +10,12 @@ never add code that clicks, sends `player:game:perform_action`, or otherwise pla
 ```
 src/engine.js            The solver (exploitative Monte Carlo + CFR solvers). Pure JS, no deps. Shared by both builds.
                          Holds the 169x169 preflop equity table (`PF_EQ_B64`, written by scripts/preflop-equity.js).
-                         The river and preflop solvers' inner loops also run as WebAssembly SIMD kernels assembled at
-                         load time (`cfrK`, `terminalK`; JS fallback, `useKernels(false)`), bit-identical to the JS
-                         loops. Any change to CFR or leaf code in riverSolve/preflopSolve needs the same change
-                         there; the "kernels: ... bit-identical" test catches drift for the spots it covers. The
-                         extension's manifest allows 'wasm-unsafe-eval' for this.
+                         The river, turn and preflop solvers' inner loops also run as WebAssembly SIMD kernels
+                         assembled at load time (`cfrK`, `terminalK`, the turn solver's showTurn/foldTurn kernels and
+                         per-card data; JS fallback, `useKernels(false)`), bit-identical to the JS loops. Any change
+                         to CFR or leaf code in riverSolve/turnSolve/preflopSolve (cfr loop, showAdd, foldValues)
+                         needs the same change there; the "kernels: ... bit-identical" test catches drift for the
+                         spots it covers. flopSolve is JS only. The manifest allows 'wasm-unsafe-eval' for this.
 src/tracker.js           Socket events -> hand state, opponent tallies, solver input. Pure JS, unit-tested.
 src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
@@ -26,7 +27,7 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
                          30% of the time left on the game's clock, 2.5-8 s, 6 s if unknown; the clock is 23 s), with
                          its own river-card samples; one final analysis with `merge` adds the tallies, averages the
                          turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
-                         phone's (24x MC, 8x plan samples, 8x river and preflop iterations). One more worker answers
+                         phone's (24x MC, 8x plan samples, 16x river and preflop iterations). One more worker answers
                          `quick` requests with the phone's budget: the overlay shows that within ~1 s ("Quick read")
                          and replaces it with the full solve; if hero acts first, the quick one is logged
                          (`advice.quick`). The tracker's `turn` event carries `timeLeftMs` for this. With
@@ -93,7 +94,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   raises and all-ins, up to 4 raises. Leaves: fold, all-in (table equity), flop (pot split by realized shares,
   `shares`: equity x 0.92 + strength, suited/connected/pair bonus, +-0.06 position, faded toward raw equity below SPR
   4). The opponent's fixed strategy uses the Monte Carlo's `sc.opp` cont rates at the first response and
-  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations (~1 ms each), computer 2400 / 1.5 s.
+  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations, computer 4800 / 2.5 s.
   `vsOpenRead` reads `stats.vsOpen` ({small <=2.5bb, medium <=3.5bb, large} x {cont, threeBet}) when the tracker
   provides it, so learned defence by open size feeds both the Monte Carlo (`continueRule` via `kind.openTo`) and the
   preflop solver's first response. Without it the old size-blind rule (VPIP-based) is used.
@@ -113,7 +114,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the results are averaged.
 - Flop solver (`flopSolve`, computer only: `input.flopSolver === true`; the offscreen pool's `FLOP_SOLVER` turns it
   on, currently off): flop and turn betting in one Discounted CFR with the river checked down (leaves average the
-  showdown over sampled rivers, so river value bets and bluffs are missing). Each iteration samples 3 turn and 4
+  showdown over sampled rivers; `flopRiverBet` = beta replaces that with a crude river: the hand that is ahead bets
+  beta x pot with probability b (its river strength in its range, `betCut`) and the other calls with c (opponent: the
+  read's fold rate at that size, hero: pot odds), `riverExtra`). Each iteration samples 3 turn and 4
   river cards (`flopTurnSamples`, `flopRiverSamples`), turn subgames are built lazily per line and card, and the final
   pass uses every turn card with 10 rivers each. Hero bets 33/75% pot on the flop and 50/100% on the turn
   (`flopBets`, `flopTurnBets`), the opponent their size, one pot-size raise per street. Heads-up, or against the
@@ -206,17 +209,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the owner's home game: friends call big bets far more than the old fold curve assumed. `modelFold` elasticity is
   0.8*sqrt(ftb/0.45) and `foldAtSize` grows only 30% as fast above 1.1 pot. Against a raise, opponents continue
   only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
-- Simulator (`test/sim.js`, v1.4.0, DUP=1, 2,000 hands, seed 1, bb/100 won from the bot): typical 46 ± 24 with the
-  preflop solver (23 ± 25 with PF=0), maniac 61 ± 35 (104 ± 36 with PF=0), station 171 ± 36 (PF=0). The simple
-  solid baseline bot in the same seat: 8 / 41 / 60. Paired PF on minus off: typical +22 ± 20, maniac -44 ± 32, which
-  the new simulator's rerun put at +18 ± 20 (noise). Multiway 4-handed mixed bots (`sim-multi.js`, DUP): +7 ± 40 at
-  v1.3.0. New simulator (`test/sim/run.js`, AIVAT bb/100, 1,000 dup deals vs friend bots): 4-handed about 195 ± 34
-  (v1.5.0 before the reads rebuild); multiway river fixes (fieldStats, overcalls) +3.5 ± 16; turn solver on vs off
+- Simulator results (`test/sim/run.js`: duplicate deals, luck-corrected bb/100 ± SE; the old `sim.js`/`sim-multi.js`
+  figures were much noisier and are dropped). 4-handed vs friend bots, 150bb: solver 225 ± 32 vs the simple baseline
+  bot 97 ± 26 (+128 ± 35, 1,000 deals, v1.4.0). Multiway preflop solver on vs off: +39 ± 18 (2,000 deals; the
+  heads-up preflop solver alone adds +2 ± 16 there); gain mostly from the blinds (SB +23 ± 11, BB +26 ± 10), UTG
+  −9 ± 8. Heads-up preflop solver on minus off: typical bot −4 ± 13 (2,000 deals), maniac +18 ± 20, friends −2 ± 22,
+  so about neutral (+2 ± 10 pooled). Multiway river fixes (fieldStats, overcalls) +3.5 ± 16; turn solver on vs off
   heads-up +1.9 ± 21; reads rebuild about +8 ± 12 over 4 runs. Bots are simple; this is a regression check, not proof
   of an edge against real players.
-- Ideas: river betting inside the flop solver (it checks the river down); multiway flops are the biggest pots still
-  on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing
-  reads between devices is not wanted: the owner keeps phone and computer separate.)
+- Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
+  flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
+  devices is not wanted: the owner keeps phone and computer separate.)
 
 ## Testing limits in the cloud sandbox
 
