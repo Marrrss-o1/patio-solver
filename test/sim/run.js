@@ -161,10 +161,15 @@ function playBlock(cfg, block) {
   };
   // Warm-up: a baseline player in hero's seat, every hero's tracker watching, so reads start warm.
   // Solver opponents play the warm-up too (the first variant's copies act; the others watch the same hands).
-  const listeners = heroes.filter((h) => h.onEvent);
+  // With solver opponents, hero's seat is warmed up by the solver as well (variant A's code): their reads of hero
+  // then come from solver-like play, as hero's reads of them do (a simple player there gave the solver copies
+  // wrong reads of hero, worth about +70 bb/100 to hero in self-play).
   const allWatchers = botSets.flatMap(watchersOf);
+  const v0 = cfg.variants[0];
+  const warmHero = allWatchers.length && v0.agent === 'solver'
+    ? solverAgent({ src: v0.src, solver: v0.solver, iters: cfg.iters, riverIters: cfg.riverIters, blueprint: v0.bp }) : bots.baseline();
+  const listeners = heroes.filter((h) => h.onEvent).concat(warmHero.onEvent ? [warmHero] : []);
   if (cfg.warm > 0 && (listeners.length || allWatchers.length)) {
-    const warmHero = bots.baseline();
     for (let w = 0; w < cfg.warm; w++) {
       const dl = deal(block * 100000 + w, 0, 31337);
       playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [warmHero].concat(botSets[0]), hero: 0, names: NAMES, uidBase: 1000,
@@ -172,6 +177,8 @@ function playBlock(cfg, block) {
         watchers: allWatchers }, dl));
     }
   }
+  // Count the solver opponents' decisions from here on (the warm-up is not part of the result).
+  for (const set of botSets) for (const b of set) if (b.stats) Object.assign(b.stats, { decisions: 0, errors: 0, ms: 0, solved: {} });
   const out = [];
   const start = block * cfg.block, end = Math.min(cfg.hands, start + cfg.block);
   for (let d = start; d < end; d++) {
@@ -242,10 +249,12 @@ function summarize(cfg, results, sec) {
 
 // Finished blocks are appended to test/out/sim-<tag>.blocks.jsonl, keyed by everything that affects them, so a
 // run that was cut off (the cloud container can be reclaimed) picks up where it stopped when started again.
+// Bumped when a change to the simulator changes results, so saved blocks from before are not mixed in.
+const SIM_VERSION = 2;
 function blockKey(cfg) {
   const crypto = require('crypto');
   const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp]);
-  const k = [cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
+  const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {

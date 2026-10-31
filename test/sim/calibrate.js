@@ -87,6 +87,14 @@ if (heroNames.some((n) => heroTallies[n])) {
   targets.hero = targetsFor(real.__hero);
 }
 
+// How much more often they fold to bigger bets, pooled over friends (too few spots each): fold share facing a bet of
+// 45% pot or more minus facing a smaller one. Real friends: about 0.36 below 45% pot, 0.65 above.
+const foldGap = (s) => {
+  const big = s.vs.medium.n + s.vs.large.n;
+  if (!s.vs.small.n || !big) return null;
+  return (s.vs.medium.fold * s.vs.medium.n + s.vs.large.fold * s.vs.large.n) / big - s.vs.small.fold;
+};
+const SIZE_GAP = foldGap(pool);
 // River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
 const SD_CALL = pool.sdRiverCall == null ? null : (pool.sdRiverCallN * pool.sdRiverCall + 10 * 0.76) / (pool.sdRiverCallN + 10);
 
@@ -144,8 +152,10 @@ function measure(round) {
   const t = prof.profileEntries(entriesSim, { includeHero: true });
   const out = {};
   for (const id of ids) if (t[id]) out[id] = prof.summarize(t[id]);
+  tallyOf = t;
   return out;
 }
+let tallyOf = {};
 const statVal = (s, k) => {
   const def = STATS.find((x) => x[0] === k);
   return def[1](s);
@@ -179,7 +189,14 @@ for (let round = 1; round <= ROUNDS; round++) {
     const wc = Math.max(0.03, Math.min(0.25, params[ids[0]].wc * Math.exp(6 * damp * (sc - SD_CALL))));
     for (const id of ids) if (id !== 'hero') params[id].wc = wc;
   }
-  process.stderr.write(`round ${round}: mean abs error ${(err / cnt * 100).toFixed(2)} points, river callers at showdown ${sc.toFixed(3)} (real ${SD_CALL})\n`);
+  // Pool-wide: the fold gap between big and small bets sets everyone's callSlope.
+  const simVs = prof.mergeTallies(Object.keys(tallyOf).filter((id) => id !== 'hero').map((id) => tallyOf[id]));
+  const gSim = foldGap(prof.summarize(simVs));
+  if (SIZE_GAP != null && gSim != null) {
+    const cs = Math.max(0, Math.min(1.5, params[ids[0]].callSlope + 2 * damp * (SIZE_GAP - gSim)));
+    for (const id of ids) if (id !== 'hero') params[id].callSlope = cs;
+  }
+  process.stderr.write(`round ${round}: fold gap big vs small bets ${gSim == null ? '-' : gSim.toFixed(3)} (real ${SIZE_GAP == null ? '-' : SIZE_GAP.toFixed(3)}), mean abs error ${(err / cnt * 100).toFixed(2)} points, river callers at showdown ${sc.toFixed(3)} (real ${SD_CALL})\n`);
 }
 
 // ---------- write ----------
@@ -201,6 +218,14 @@ for (const id of ids) {
   const src = id === 'pool' ? pool : id === 'hero' ? real.__hero : real[names[ids.indexOf(id)]];
   out[id] = { style: style(targets[id]), hands: src.hands, target: tgt, simulated: meas, params: rp,
     real: { wtsd: r3(src.wtsd), sdBluffShare: r3(src.sdBluffShare), limp: r3(src.limp), sdRiverCall: r3(src.sdRiverCall), sdRiverCallN: src.sdRiverCallN, sdRiverBet: r3(src.sdRiverBet), sdRiverBetN: src.sdRiverBetN } };
+  // Fold share facing a bet under 45% pot / 45-85% / over 85% (pooled numbers are the ones fitted).
+  const bySize = (x) => ['small', 'medium', 'large'].map((b) => r3(x.vs[b].fold));
+  out[id].real.foldBySize = bySize(src); out[id].real.foldBySizeN = ['small', 'medium', 'large'].map((b) => src.vs[b].n);
+  if (last[id]) out[id].simulated.foldBySize = bySize(last[id]);
+}
+{
+  const simPool = prof.summarize(prof.mergeTallies(Object.keys(tallyOf).filter((id) => id !== 'hero').map((id) => tallyOf[id])));
+  out.pool.simulated.foldBySizeAllBots = ['small', 'medium', 'large'].map((b) => r3(simPool.vs[b].fold));
 }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n');
 if (NAMES_OUT) fs.writeFileSync(NAMES_OUT, JSON.stringify(Object.fromEntries(names.map((n, i) => [ids[i], n])), null, 1));

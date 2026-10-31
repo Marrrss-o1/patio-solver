@@ -2168,6 +2168,18 @@ function ENGINE() {
    */
   const RIVER_ITERATIONS = 250;
 
+  // The solvers' final pass reads each root option's EV for hero's hand. Below the root, hero
+  // takes the best action at each decision (against the opponent's average strategy), so an
+  // option is worth what it is worth if hero plays the rest of the hand well. With the average
+  // strategy there instead, a line hero's hand never takes kept the strategy of the first few
+  // iterations (close to uniform): a check that hero would check-fold showed up as a loss.
+  function bestOf(vals, v, n) {
+    for (let i = 0; i < n; i++) { let m = vals[0][i]; for (let a = 1; a < vals.length; a++) if (vals[a][i] > m) m = vals[a][i]; v[i] = m; }
+  }
+  function bestRows(V, M, nA, out, n) {
+    for (let i = 0; i < n; i++) { let m = V[i]; for (let a = 1; a < nA; a++) if (V[a * M + i] > m) m = V[a * M + i]; out[i] = m; }
+  }
+
   function riverSolve(cfg) {
     const { board, heroCombo, heroW, oppW, oppStats, p, pot: P0, toCall, stack, heroFirst, bigBlind } = cfg;
     const strengths = cfg.strengths;
@@ -2340,7 +2352,7 @@ function ENGINE() {
         add({ kind: 'check', amount: 0 }, lastToAct ? { term: 'show', hIn, oIn } : () => node(1 - player, hIn, oIn, 0, raisesLeft, true));
         const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left ? 'allin' : 'bet', amount: b, frac: b / potNow }, () => node(1 - player, h2, o2, b, raisesLeft, true));
@@ -2426,6 +2438,7 @@ function ENGINE() {
         if (own) { vals.push(va); for (let i = 0; i < N; i++) v[i] += s[off + i] * va[i]; }
         else for (let i = 0; i < N; i++) v[i] += va[i];
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, N);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -2525,6 +2538,7 @@ function ENGINE() {
         if (own) { vals.push(va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, Np); }
         else k.addTo(v.byteOffset, va.byteOffset, Np);
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, N);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -2858,7 +2872,7 @@ function ENGINE() {
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 4 ? turnBets : riverBets) : [betFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
@@ -2968,25 +2982,27 @@ function ENGINE() {
       const nA = n.acts.length, N = sides[n.player].n, s = P.s, R2 = P.r2f, V = P.valf, M = NMAX;
       const reg = n.regret, sum = n.sum, fx = n.fixed;
       const base = n.player === 0 ? rH : rO;
-      if (avg) {
-        for (let i = 0; i < N; i++) {
+      // In the final pass (avg) a hand that never reached this node (or a subgame first built
+      // there) plays its current strategy, not a uniform one.
+      const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
+      for (let i = 0; i < N; i++) {
+        if (avg) {
           let t = 0;
           for (let a = 0; a < nA; a++) t += sum[a * N + i];
-          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * N + i] / t : 1 / nA; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
-        }
-      } else {
-        const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
-        for (let i = 0; i < N; i++) {
-          let t = 0;
-          for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
-          const inv = t > 0 ? 1 / t : 0;
-          for (let a = 0; a < nA; a++) {
-            const r = reg[a * N + i];
-            let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
-            if (mix) x = p * fx[a * N + i] + q1 * x;
-            s[a * N + i] = x;
-            R2[a * M + i] = base[i] * x;
+          if (t > 0) {
+            for (let a = 0; a < nA; a++) { const x = sum[a * N + i] / t; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
+            continue;
           }
+        }
+        let t = 0;
+        for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
+        const inv = t > 0 ? 1 / t : 0;
+        for (let a = 0; a < nA; a++) {
+          const r = reg[a * N + i];
+          let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
+          if (mix) x = p * fx[a * N + i] + q1 * x;
+          s[a * N + i] = x;
+          R2[a * M + i] = base[i] * x;
         }
       }
       for (let a = 0; a < nA; a++) {
@@ -2999,7 +3015,8 @@ function ENGINE() {
         return;
       }
       if (avg) {
-        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
+        if (n.player === 0) bestRows(V, M, nA, out, NT);
+        else for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
         if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
         return;
       }
@@ -3108,16 +3125,17 @@ function ENGINE() {
       }
       const k = KT.k, nA = n.acts.length, Np = n.Np, s = P.s, R2 = P.r2f, V = P.valf, M = MK;
       const base = n.player === 0 ? rH : rO;
+      // The current strategy; in the final pass (avg) the average replaces it for every hand that
+      // reached this node.
+      k.turnStrategy(n.regret.byteOffset, s.byteOffset, R2.byteOffset, base.byteOffset, nA, Np, M,
+        n.player === 1 ? n.fixed.byteOffset : 0, p, 1 - p, 1 / nA);
       if (avg) {
         const N = sides[n.player].n, sum = n.sum;
         for (let i = 0; i < N; i++) {
           let t = 0;
           for (let a = 0; a < nA; a++) t += sum[a * Np + i];
-          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * Np + i] / t : 1 / nA; s[a * Np + i] = x; R2[a * M + i] = base[i] * x; }
+          if (t > 0) for (let a = 0; a < nA; a++) { const x = sum[a * Np + i] / t; s[a * Np + i] = x; R2[a * M + i] = base[i] * x; }
         }
-      } else {
-        k.turnStrategy(n.regret.byteOffset, s.byteOffset, R2.byteOffset, base.byteOffset, nA, Np, M,
-          n.player === 1 ? n.fixed.byteOffset : 0, p, 1 - p, 1 / nA);
       }
       for (let a = 0; a < nA; a++) {
         if (n.player === 0) cfrK(n.kids[a], trav, P.r2[a], rO, avg, d + 1, P.vals[a]);
@@ -3126,7 +3144,8 @@ function ENGINE() {
       const NT = T.n;
       if (n.player !== trav) { k.sumRows(V.byteOffset, out.byteOffset, nA, ev(NT), M); return; }
       if (avg) {
-        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * Np + i] * V[a * M + i]; out[i] = v; }
+        if (n.player === 0) bestRows(V, M, nA, out, NT);
+        else for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * Np + i] * V[a * M + i]; out[i] = v; }
         if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
         return;
       }
@@ -3478,7 +3497,7 @@ function ENGINE() {
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg, nb) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 3 ? flopBets : turnBets) : [betFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
@@ -3572,25 +3591,27 @@ function ENGINE() {
       const nA = n.acts.length, N = sides[n.player].n, s = P.s, R2 = P.r2f, V = P.valf, M = NMAX;
       const reg = n.regret, sum = n.sum, fx = n.fixed;
       const base = n.player === 0 ? rH : rO;
-      if (avg) {
-        for (let i = 0; i < N; i++) {
+      // In the final pass (avg) a hand that never reached this node (or a subgame first built
+      // there) plays its current strategy, not a uniform one.
+      const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
+      for (let i = 0; i < N; i++) {
+        if (avg) {
           let t = 0;
           for (let a = 0; a < nA; a++) t += sum[a * N + i];
-          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * N + i] / t : 1 / nA; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
-        }
-      } else {
-        const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
-        for (let i = 0; i < N; i++) {
-          let t = 0;
-          for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
-          const inv = t > 0 ? 1 / t : 0;
-          for (let a = 0; a < nA; a++) {
-            const r = reg[a * N + i];
-            let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
-            if (mix) x = p * fx[a * N + i] + q1 * x;
-            s[a * N + i] = x;
-            R2[a * M + i] = base[i] * x;
+          if (t > 0) {
+            for (let a = 0; a < nA; a++) { const x = sum[a * N + i] / t; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
+            continue;
           }
+        }
+        let t = 0;
+        for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
+        const inv = t > 0 ? 1 / t : 0;
+        for (let a = 0; a < nA; a++) {
+          const r = reg[a * N + i];
+          let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
+          if (mix) x = p * fx[a * N + i] + q1 * x;
+          s[a * N + i] = x;
+          R2[a * M + i] = base[i] * x;
         }
       }
       for (let a = 0; a < nA; a++) {
@@ -3603,7 +3624,8 @@ function ENGINE() {
         return;
       }
       if (avg) {
-        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
+        if (n.player === 0) bestRows(V, M, nA, out, NT);
+        else for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
         if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
         return;
       }
@@ -4217,6 +4239,7 @@ function ENGINE() {
         if (own) { vals.push(avg ? Float64Array.from(va) : va); for (let i = 0; i < NC; i++) v[i] += s[a * NC + i] * va[i]; }
         else for (let i = 0; i < NC; i++) v[i] += va[i];
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, NC);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -4255,6 +4278,7 @@ function ENGINE() {
         if (own) { vals.push(avg ? Float64Array.from(va.subarray(0, NC)) : va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, NP); }
         else k.addTo(v.byteOffset, va.byteOffset, NP);
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, NC);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -5190,6 +5214,102 @@ function ENGINE() {
 
     const robustWeight = lookahead ? 0.35 * (1 - opps.reduce((a, o) => a + o.stats.exploitWeight, 0) / opps.length) : 0;
 
+    /*
+     * Blueprint as the base strategy (computer mode; one blueprint per table size). The blueprint
+     * gives hero's action frequencies from self-play; the reads adjust them through each
+     * option's EV against this opponent: freq ~ blueprint x exp((EV - best EV) / tau). tau is a
+     * share of the pot that shrinks as the reads firm up (exploitWeight 0.5 -> 0.9) and when the
+     * blueprint spot saw little training, so thin reads stay close to the blueprint and solid
+     * reads exploit. Off-tree lines, table sizes without a blueprint and stack depths far from
+     * the trained one keep the old advice.
+     *
+     * The blend is opt-in (input.blueprint === true): in the friends simulator it lost, 3-handed
+     * -10 +- 19 bb/100 and 4-handed -26 +- 14 even with a light touch (it folds the blinds too
+     * often and slow-plays big pairs against players who call too much). By default the
+     * blueprint's frequencies are only reported (panel line, hand log), the advice is unchanged.
+     */
+    function blueprintBlend(ranked, engineBest) {
+      if (input.blueprint === false || !Array.isArray(input.history) || !ranked.length) return null;
+      const nSeats = Array.isArray(input.seats) && input.seats.length ? input.seats.length : opps.length + 1;
+      const own = input.blueprintObj ? [].concat(input.blueprintObj).find((b) => b.players === nSeats) : null;
+      const BP = own || BLUEPRINTS[nSeats];
+      if (!BP) return null;
+      // Trained at one stack depth (150bb): full weight from 0.65x to 1.5x that, none below 0.35x or above 2.2x.
+      const bpBB = BP.head.stack / BP.head.bb;
+      const startBB = input.startStack > 0 ? input.startStack / bigBlind : isFinite(stack) ? (stack + (input.heroCommitted || 0)) / bigBlind : bpBB;
+      const r = startBB / bpBB;
+      const depth = r < 0.65 ? clamp((r - 0.35) / 0.3, 0, 1) : r > 1.5 ? clamp((2.2 - r) / 0.7, 0, 1) : 1;
+      if (depth <= 0) return { used: false, info: { used: false, why: 'stack depth' } };
+      // Tuning switches: blueprintStreets ('0123' = preflop..river) limits the streets it is used on,
+      // blueprintOverSolver: false keeps a solver's answer (preflop, turn, river) where one ran.
+      const bpStreet = board.length ? board.length - 2 : 0;
+      if (input.blueprintStreets != null && String(input.blueprintStreets).indexOf(String(bpStreet)) < 0) return { used: false, info: { used: false, why: 'street' } };
+      if (solved && input.blueprintOverSolver === false) return { used: false, info: { used: false, why: 'solver' } };
+      const adv = BP.advise({ hero, board, history: input.history, seats: input.seats, heroName: input.heroName, bigBlind, stack: isFinite(stack) ? stack : Infinity });
+      if (adv.error) return { used: false, info: { used: false, why: adv.error } };
+      const shown = { used: false, why: 'shown only', visits: adv.visits, street: adv.street, bucket: adv.bucket,
+        actions: adv.actions.map((a) => ({ kind: a.kind, amount: a.add, p: Math.round(a.p * 1000) / 1000 })) };
+      if (input.blueprint !== true) return { used: false, info: shown };
+      const K = input.blueprintTemp || {};
+      const kThin = K.thin != null ? K.thin : 0.15, kSolid = K.solid != null ? K.solid : 0.03;
+      const t = clamp((Math.min(...opps.map((o) => o.stats.exploitWeight)) - 0.5) / 0.4, 0, 1);
+      const trustBp = clamp((adv.visits - 4) / 8, 0, 1);
+      const opts = ranked.filter((o) => o && o.ev != null && isFinite(o.ev));
+      if (opts.length < 2) return null;
+      const aggressive = (o) => o.kind === 'bet' || o.kind === 'raise' || (o.kind === 'allin' && o.amount > toCall + 1e-9);
+      // Prior over the options: each blueprint action's frequency goes to the matching option
+      // (nearest size for bets and raises).
+      const prior = new Float64Array(opts.length);
+      for (const a of adv.actions) {
+        let j = -1;
+        if (a.kind === 'fold') j = opts.findIndex((o) => o.kind === 'fold');
+        else if (a.kind === 'check') j = opts.findIndex((o) => o.kind === 'check');
+        else if (a.kind === 'call') j = opts.findIndex((o) => o.kind === 'call' || (o.kind === 'allin' && o.amount <= toCall + 1e-9));
+        else {
+          let bestD = Infinity;
+          opts.forEach((o, i) => {
+            if (!aggressive(o)) return;
+            const d = a.kind === 'allin' && o.kind === 'allin' ? -1 : Math.abs(Math.log(Math.max(1e-9, o.amount)) - Math.log(Math.max(1e-9, a.add)));
+            if (d < bestD) { bestD = d; j = i; }
+          });
+        }
+        if (j >= 0) prior[j] += a.p;
+      }
+      let pt = 0;
+      // The floor caps how far the blueprint can overrule the EVs: at most tau x ln(1 / floor).
+      const floor = K.floor != null ? K.floor : 0.01;
+      for (let i = 0; i < opts.length; i++) { prior[i] += floor; pt += prior[i]; }
+      for (let i = 0; i < opts.length; i++) prior[i] /= pt;
+      const potNow = pot + toCall;
+      const seMax = Math.max(0, ...opts.map((o) => o.se || 0));
+      const tau = Math.max(1e-9, depth * trustBp * potNow * (kThin * (1 - t) + kSolid * t), depth * trustBp * 2 * seMax);
+      const evMax = Math.max(...opts.map((o) => o.ev));
+      const w = opts.map((o, i) => prior[i] * Math.exp(Math.max(-60, (o.ev - evMax) / tau)));
+      const wt = w.reduce((x, y) => x + y, 0);
+      const out = opts.map((o, i) => Object.assign({}, o, { freq: w[i] / wt, bpFreq: prior[i], engineFreq: o.freq }));
+      const order = out.slice().sort((a, b) => b.freq - a.freq || b.ev - a.ev);
+      let best = order[0];
+      const played = order.filter((a) => a.freq >= 0.1);
+      const mix = played.length >= 2 ? played.map((a) => ({ kind: a.kind, amount: a.amount, label: a.label, freq: Math.round(a.freq * 20) / 20 })) : null;
+      if (mix && input.mix !== false) {
+        let u = mulberry32((seed ^ 0x2545f491) >>> 0)() * played.reduce((x, a) => x + a.freq, 0);
+        best = played.find((a) => (u -= a.freq) <= 0) || played[0];
+      }
+      // Keep the scenario objects (the panel reads their fold rates) where there is one.
+      const asScenario = (o) => {
+        const sc = scenarios.find((x) => x.kind === o.kind && Math.abs(x.amount - o.amount) < 1e-9);
+        return sc ? Object.assign(sc, { freq: o.freq, bpFreq: o.bpFreq }) : o;
+      };
+      const rankedOut = order.map(asScenario);
+      best = rankedOut[order.indexOf(best)];
+      const runnerUp = rankedOut.find((a) => a !== best) || null;
+      return {
+        used: true, ranked: rankedOut, best, runnerUp, margin: runnerUp ? best.ev - runnerUp.ev : Infinity, close: !!mix, mix,
+        info: { used: true, visits: adv.visits, tau, depth, street: adv.street, bucket: adv.bucket, changed: engineBest ? !(engineBest.kind === best.kind && Math.abs((engineBest.amount || 0) - (best.amount || 0)) < 1e-9) : null,
+          actions: adv.actions.map((a) => ({ kind: a.kind, amount: a.add, p: Math.round(a.p * 1000) / 1000 })) },
+      };
+    }
+
     function result() {
       for (const sc of scenarios) {
         if (sc.kind === 'fold') { sc.ev = sc.evRead = sc.evWorst = 0; sc.se = 0; continue; }
@@ -5257,6 +5377,8 @@ function ENGINE() {
     }
 
     function finish(ranked, best, runnerUp, margin, close, mix) {
+      const bpOut = blueprintBlend(ranked, best);
+      if (bpOut && bpOut.used) ({ ranked, best, runnerUp, margin, close, mix } = bpOut);
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
       const base = scenarios.find((s) => s.kind !== 'fold');
       const equity = base ? {
@@ -5276,7 +5398,7 @@ function ENGINE() {
       return {
         street, streetName, pot, potWin, toCall, stack, bigBlind, realize, inPosition, lookahead,
         scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight,
-        credibility,
+        credibility, blueprint: bpOut ? bpOut.info : null,
         solver: solved ? { kind: solved.kind || 'river', iterations: solved.iterations, runs: solved.runs || 1, exploitWeight: opps[0].stats.exploitWeight, field: solved.field || solved.multiway || 0 } : null,
         equity, potOdds, hero: heroInfo, impliedOddsNeeded,
         iterations: done,
@@ -5357,6 +5479,14 @@ function ENGINE() {
     return null;
   }
 
+  // Blueprint strategies (src/blueprint.js) by number of players dealt in, set by whoever loads
+  // them (computer mode). setBlueprint(null) clears them.
+  const BLUEPRINTS = {};
+  function setBlueprint(bp) {
+    if (!bp) { for (const k of Object.keys(BLUEPRINTS)) delete BLUEPRINTS[k]; return; }
+    for (const b of [].concat(bp)) BLUEPRINTS[b.players] = b;
+  }
+
   // Chips opponents have put in beyond the most hero can match (hero's chips in plus `stack`):
   // a short hero facing a bigger bet can't win that part.
   function uncalledChips(input, stack) {
@@ -5417,7 +5547,7 @@ function ENGINE() {
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    createAnalysis, analyzeSync, solvableSpot, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
+    createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
     // For tests.
@@ -5598,7 +5728,7 @@ ENGINE();
       this.hand = {
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
-        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
+        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: this.settingsBB || s.bigBlind || null,
         finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
       };
       this.pendingRaw = null;
@@ -5644,7 +5774,18 @@ ENGINE();
             h.log.push({ st: 'pre', who: p.name, hero: p.id === this.heroId(), act: ev === 'game:big_blind_paid' ? 'bb' : 'sb', amt: data.amount });
           }
           h.currentBet = Math.max(h.currentBet, data.amount);
-          if (ev === 'game:big_blind_paid') h.bigBlind = data.amount;
+          if (ev === 'game:big_blind_paid') {
+            // A big blind posted short (the player is all-in for less) doesn't change the blinds.
+            const sp = p && this.snap && this.snap.players.find((x) => x.id === p.id);
+            const short = sp && sp.stack - data.amount <= 0;
+            h.bigBlind = Math.max(data.amount, this.settingsBB || 0, short ? (this.snap && this.snap.bigBlind) || 0 : 0);
+          }
+          break;
+        }
+        case 'admin:game:new_hand_started': {
+          // The table's settings for the next hand (it comes just before set_blinds).
+          const gs = data && data.gameSettings;
+          if (gs && gs.big_blind > 0) this.settingsBB = +gs.big_blind;
           break;
         }
         case 'game:cards_dealt_to_player':
@@ -5700,6 +5841,7 @@ ENGINE();
         case 'game:game_ended':
         case 'admin:game:game_stopped':
           this.finishHand();
+          if (ev === 'game:game_ended' && h) this.settleFromPayout(h, data);
           break;
         default:
           break;
@@ -6006,8 +6148,39 @@ ENGINE();
       list.push(rec);
     }
 
-    // Stacks only update after the pot is paid, so each hand's result is filled in from the
-    // next hand's starting stacks (rebuys between hands would show up as winnings).
+    // Each hand's result: what the server paid each player at game_ended (winnersInfo: won
+    // plus uncalled bets handed back) minus what they put in. Without a usable payout it is
+    // filled in from the next hand's starting stacks instead (settleLog), where rebuys show up
+    // as winnings and a player who busted and left has no result: in Marwin's log that dropped
+    // his own -60bb hand from the hand log's results.
+    settleFromPayout(h, data) {
+      if (!h.logEntry || h.logEntry.net) return;
+      const gr = data && data.endPopupData && data.endPopupData.gameResults;
+      const info = gr && gr.winnersInfo;
+      if (!info || typeof info !== 'object' || !Object.keys(info).length) return;
+      const list = Object.values(h.players);
+      const won = {};
+      let paid = 0;
+      for (const [auth, w] of Object.entries(info)) {
+        const pd = (w && w.playerData) || {};
+        const p = list.find((x) => x.auth === (pd.authUserId || auth)) || list.find((x) => pd.posType && x.pos === pd.posType);
+        if (!p) return; // a winner this hand doesn't know
+        const x = (+w.wonAmount || 0) + (+w.refundUncalledBetsAmount || 0);
+        won[p.id] = (won[p.id] || 0) + x;
+        paid += x;
+      }
+      // The payout has to account for every chip put in (less any rake), or the tracker missed
+      // something: then the stacks decide.
+      const rake = (gr.sidePotsWithWinners || []).reduce((a, sp) => a + (+(sp && sp.potRake) || 0), 0);
+      const put = list.reduce((a, p) => a + p.total, 0);
+      if (Math.abs(paid + rake - put) > 0.01) return;
+      const net = {};
+      for (const p of list) net[p.name] = Math.round(((won[p.id] || 0) - p.total) * 100) / 100;
+      this.applyNet(h, net);
+    }
+
+    // Stacks only update after the pot is paid, so without a payout (settleFromPayout) each
+    // hand's result is filled in from the next hand's starting stacks.
     settleLog(s) {
       const prev = this.hand;
       if (!prev || !prev.logEntry || prev.logEntry.net) return;
@@ -6016,6 +6189,10 @@ ENGINE();
         const now = s.players.find((x) => x.id === p.id);
         if (now && now.stack != null) net[p.name] = Math.round((+now.stack - p.start) * 100) / 100;
       }
+      this.applyNet(prev, net);
+    }
+
+    applyNet(prev, net) {
       prev.logEntry.net = net;
       const live = Object.values(prev.players).filter((p) => !p.folded).length;
       for (const p of Object.values(prev.players)) {
@@ -6048,6 +6225,10 @@ ENGINE();
         if (r.best && r.best.foldPct > 0.02) a.foldPct = r2(r.best.foldPct);
         if (r.mix) a.mix = r.mix.map((m) => m.label + ' ' + Math.round(m.freq * 100) + '%');
         if (r.solver) { a.solve = r.solver.kind; if (r.solver.kind === 'river') a.riverSolve = true; }
+        // Blueprint (computer mode): its own frequencies, or why it was not used.
+        if (r.blueprint) a.bp = r.blueprint.actions
+          ? { acts: r.blueprint.actions.filter((x) => x.p >= 0.02).map((x) => x.kind + (x.amount ? ' ' + r2(x.amount) : '') + ' ' + Math.round(x.p * 100) + '%'), visits: r2(r.blueprint.visits || 0), blended: !!r.blueprint.used }
+          : { off: r.blueprint.why };
         if (r.quick) a.quick = true;
         if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
         if (r.opponents) a.reads = r.opponents.map((o) => ({
@@ -6239,6 +6420,10 @@ ENGINE();
           heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
           heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
           heroCommitted: hero.total, heroBet: hero.stageBet,
+          // Every action so far and the effective stack at the start of the hand (blueprint lookup).
+          history: h.log.map((e) => ({ st: e.st, who: e.who, hero: !!e.hero, act: e.act, amt: e.amt, to: e.to, pot: e.pot, facing: e.facing, allin: !!e.allin })),
+          seats: afterDealer.map((p) => p.name), heroName: hero.name,
+          startStack: heroStack != null ? Math.min(heroStack + hero.total, Math.max(...opps.map((o) => { const s = snapOf(o.id); return s ? s.stack + o.total : 0; }))) : null,
           // Every known opponent's counts added up, for the engine's table prior.
           pool: this.poolTally(),
           iterations: opponents.length > 2 ? 16000 : 24000,
@@ -6507,7 +6692,7 @@ function slim(r) {
     panel.classList.toggle('stale', !!(advice && advice.stale));
 
     // Bar
-    if (blocked) mainEl.innerHTML = '<span class="act idle">Off at public tables</span>';
+    if (blocked) mainEl.innerHTML = '<span class="act idle">' + (status === WAIT_MSG ? 'Waiting for the table' : 'Off at public tables') + '</span>';
     else if (thinking && !fresh) mainEl.innerHTML = '<span class="act idle"><span class="spin"></span>Thinking…</span>';
     else if (advice) {
       var b = advice.result.best;
@@ -6599,6 +6784,8 @@ function slim(r) {
     'game:cards_deal_to_stack': 1, 'game:card_deal_to_stack': 1, 'player:game:action_taken': 1,
     'game:player_turn_started': 1, 'game:player_turn_ended': 1, 'game:game_ended': 1, 'admin:game:game_stopped': 1
   };
+  var PUBLIC_MSG = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.';
+  var WAIT_MSG = 'Waiting to see what kind of table this is…';
   function snapshot() {
     var gm = W.GameManager, st = (gm && gm.state) || {};
     var bs = (st.settings && st.settings.blind_sizes) || [];
@@ -6613,8 +6800,10 @@ function slim(r) {
   }
   function onEvent(ev, data) {
     var snap = snapshot();
-    if (snap.tableType && snap.tableType !== 'private') {
-      if (!blocked) { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; render(); }
+    // Private lobbies only. A table whose type isn't known yet (page still loading) is off too.
+    if (snap.tableType !== 'private') {
+      var msg = snap.tableType ? PUBLIC_MSG : WAIT_MSG;
+      if (!blocked || status !== msg) { blocked = true; status = msg; render(); }
       return;
     }
     blocked = false;
@@ -6630,8 +6819,8 @@ function slim(r) {
       if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
     });
     tracker.snap = snapshot();
-    if (tracker.snap.tableType && tracker.snap.tableType !== 'private') { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; }
-    else if (!tracker.hand) status = 'Connected. Advice starts next hand.';
+    if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
+    else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }
     render();
   }, 300);
 

@@ -58,7 +58,9 @@ bots, seed and block size), so a third arm can be added later without replaying 
   draw. Fitted per friend, shrunk toward the pool by sample size: VPIP, PFR, fold and 3-bet vs an open, continue vs
   8bb+ to call, a limper's fold to a raise (real limpers fold about half the time), an opener's fold to a 3-bet,
   open size, share of opens that are all-in, bet size, and bet / fold-to-bet / raise per street (average miss
-  ~1.7 points over 23 stats and 278 hands from three exports, deduplicated by time stamp). Opens of 12bb or more
+  ~1.7 points over 23 stats and 278 hands from three exports, deduplicated by time stamp). Pooled over all
+  friends: how much more often they fold to bigger bets (real: 36% fold facing under 45% pot, 64-67% above, flat
+  from about 2/3 pot; `callSlope` up to `sizeCap`), so bet-sizing changes can be scored. Opens of 12bb or more
   count as shove-opens (one friend opens all-in about a fifth of the time), so they don't set the open size or
   count as facing an open; each bet's size is capped at 2x pot so a few huge bets don't set the mean. Pooled
   over all friends (too few showdowns each), how strong river callers are at showdown sets how loosely they call
@@ -69,7 +71,9 @@ bots, seed and block size), so a third arm can be added later without replaying 
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
   a change does not only exploit the bots. It costs a solve per decision in every solver seat, and its decisions
   get no luck correction (its strategy isn't known in closed form), so expect more noise. Each A/B variant plays
-  against its own copy, since the copies learn from hero's play.
+  against its own copy, since the copies learn from hero's play. With solver opponents the warm-up puts the solver
+  (variant A's code) in hero's seat too, so the copies' reads of hero come from solver-like play; with a simple
+  player there instead, self-play came out about +70 bb/100 for hero, because the copies read hero wrong.
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 

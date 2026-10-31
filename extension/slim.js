@@ -4,13 +4,13 @@ function slim(r) {
   const sc = (s) => s && {
     kind: s.kind, label: s.label, sizeLabel: s.sizeLabel || '', amount: s.amount,
     ev: s.ev, se: s.se, foldPct: s.foldPct || 0, reraisedPct: s.reraisedPct || 0,
-    equityWhenCalled: s.equityWhenCalled, freq: s.freq,
+    equityWhenCalled: s.equityWhenCalled, freq: s.freq, bpFreq: s.bpFreq,
   };
   return {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
     bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver,
+    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver, blueprint: r.blueprint,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map((o) => ({
       name: o.name, pending: o.pending, aggressor: o.aggressor,

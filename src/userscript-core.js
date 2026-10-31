@@ -236,7 +236,7 @@ function slim(r) {
     panel.classList.toggle('stale', !!(advice && advice.stale));
 
     // Bar
-    if (blocked) mainEl.innerHTML = '<span class="act idle">Off at public tables</span>';
+    if (blocked) mainEl.innerHTML = '<span class="act idle">' + (status === WAIT_MSG ? 'Waiting for the table' : 'Off at public tables') + '</span>';
     else if (thinking && !fresh) mainEl.innerHTML = '<span class="act idle"><span class="spin"></span>Thinking…</span>';
     else if (advice) {
       var b = advice.result.best;
@@ -328,6 +328,8 @@ function slim(r) {
     'game:cards_deal_to_stack': 1, 'game:card_deal_to_stack': 1, 'player:game:action_taken': 1,
     'game:player_turn_started': 1, 'game:player_turn_ended': 1, 'game:game_ended': 1, 'admin:game:game_stopped': 1
   };
+  var PUBLIC_MSG = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.';
+  var WAIT_MSG = 'Waiting to see what kind of table this is…';
   function snapshot() {
     var gm = W.GameManager, st = (gm && gm.state) || {};
     var bs = (st.settings && st.settings.blind_sizes) || [];
@@ -342,8 +344,10 @@ function slim(r) {
   }
   function onEvent(ev, data) {
     var snap = snapshot();
-    if (snap.tableType && snap.tableType !== 'private') {
-      if (!blocked) { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; render(); }
+    // Private lobbies only. A table whose type isn't known yet (page still loading) is off too.
+    if (snap.tableType !== 'private') {
+      var msg = snap.tableType ? PUBLIC_MSG : WAIT_MSG;
+      if (!blocked || status !== msg) { blocked = true; status = msg; render(); }
       return;
     }
     blocked = false;
@@ -359,8 +363,8 @@ function slim(r) {
       if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
     });
     tracker.snap = snapshot();
-    if (tracker.snap.tableType && tracker.snap.tableType !== 'private') { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; }
-    else if (!tracker.hand) status = 'Connected. Advice starts next hand.';
+    if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
+    else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }
     render();
   }, 300);
 

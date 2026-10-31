@@ -250,6 +250,10 @@
       kv.push(['Position', r.inPosition ? 'In position (you act last)' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (r.solver) kv.push([{ preflop: 'Preflop solve', turn: 'Turn + river solve', river: 'River solve' }[r.solver.kind] || 'Solve', r.solver.field ? 'Your range vs the field' : 'Your range vs theirs']);
+      if (r.blueprint && r.blueprint.actions) {
+        const top = r.blueprint.actions.slice().sort((a, b) => b.p - a.p).filter((a) => a.p >= 0.1).map((a) => ({ fold: 'Fold', check: 'Check', call: 'Call', bet: 'Bet', raise: 'Raise', allin: 'All-in' }[a.kind] + ' ' + pct(a.p)));
+        kv.push(['Blueprint (self-play)', esc(top.join(' · ') || '—')]);
+      }
       if (advice.ms != null) kv.push(['Thinking', `${advice.quick ? 'Quick read: ' : ''}${(advice.ms / 1000).toFixed(1)}s on ${advice.workers || 1} core${advice.workers > 1 ? 's' : ''}`]);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += `<div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
@@ -341,9 +345,12 @@
     window.addEventListener('message', (e) => {
       if (e.source !== window || !e.data || e.data.source !== 'patio-solver-hook') return;
       const { ev, data, snap } = e.data;
-      if (snap && snap.tableType && snap.tableType !== 'private') {
+      // Private lobbies only. A table whose type isn't known yet (page still loading) is off too.
+      if (!snap || snap.tableType !== 'private') {
         blocked = true;
-        status = 'Patio Solver only runs in private lobbies you play with friends. It stays off at public tables.';
+        status = snap && snap.tableType
+          ? 'Patio Solver only runs in private lobbies you play with friends. It stays off at public tables.'
+          : 'Waiting to see what kind of table this is…';
         render();
         return;
       }

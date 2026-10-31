@@ -165,7 +165,7 @@
       this.hand = {
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
-        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
+        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: this.settingsBB || s.bigBlind || null,
         finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
       };
       this.pendingRaw = null;
@@ -211,7 +211,18 @@
             h.log.push({ st: 'pre', who: p.name, hero: p.id === this.heroId(), act: ev === 'game:big_blind_paid' ? 'bb' : 'sb', amt: data.amount });
           }
           h.currentBet = Math.max(h.currentBet, data.amount);
-          if (ev === 'game:big_blind_paid') h.bigBlind = data.amount;
+          if (ev === 'game:big_blind_paid') {
+            // A big blind posted short (the player is all-in for less) doesn't change the blinds.
+            const sp = p && this.snap && this.snap.players.find((x) => x.id === p.id);
+            const short = sp && sp.stack - data.amount <= 0;
+            h.bigBlind = Math.max(data.amount, this.settingsBB || 0, short ? (this.snap && this.snap.bigBlind) || 0 : 0);
+          }
+          break;
+        }
+        case 'admin:game:new_hand_started': {
+          // The table's settings for the next hand (it comes just before set_blinds).
+          const gs = data && data.gameSettings;
+          if (gs && gs.big_blind > 0) this.settingsBB = +gs.big_blind;
           break;
         }
         case 'game:cards_dealt_to_player':
@@ -267,6 +278,7 @@
         case 'game:game_ended':
         case 'admin:game:game_stopped':
           this.finishHand();
+          if (ev === 'game:game_ended' && h) this.settleFromPayout(h, data);
           break;
         default:
           break;
@@ -573,8 +585,39 @@
       list.push(rec);
     }
 
-    // Stacks only update after the pot is paid, so each hand's result is filled in from the
-    // next hand's starting stacks (rebuys between hands would show up as winnings).
+    // Each hand's result: what the server paid each player at game_ended (winnersInfo: won
+    // plus uncalled bets handed back) minus what they put in. Without a usable payout it is
+    // filled in from the next hand's starting stacks instead (settleLog), where rebuys show up
+    // as winnings and a player who busted and left has no result: in Marwin's log that dropped
+    // his own -60bb hand from the hand log's results.
+    settleFromPayout(h, data) {
+      if (!h.logEntry || h.logEntry.net) return;
+      const gr = data && data.endPopupData && data.endPopupData.gameResults;
+      const info = gr && gr.winnersInfo;
+      if (!info || typeof info !== 'object' || !Object.keys(info).length) return;
+      const list = Object.values(h.players);
+      const won = {};
+      let paid = 0;
+      for (const [auth, w] of Object.entries(info)) {
+        const pd = (w && w.playerData) || {};
+        const p = list.find((x) => x.auth === (pd.authUserId || auth)) || list.find((x) => pd.posType && x.pos === pd.posType);
+        if (!p) return; // a winner this hand doesn't know
+        const x = (+w.wonAmount || 0) + (+w.refundUncalledBetsAmount || 0);
+        won[p.id] = (won[p.id] || 0) + x;
+        paid += x;
+      }
+      // The payout has to account for every chip put in (less any rake), or the tracker missed
+      // something: then the stacks decide.
+      const rake = (gr.sidePotsWithWinners || []).reduce((a, sp) => a + (+(sp && sp.potRake) || 0), 0);
+      const put = list.reduce((a, p) => a + p.total, 0);
+      if (Math.abs(paid + rake - put) > 0.01) return;
+      const net = {};
+      for (const p of list) net[p.name] = Math.round(((won[p.id] || 0) - p.total) * 100) / 100;
+      this.applyNet(h, net);
+    }
+
+    // Stacks only update after the pot is paid, so without a payout (settleFromPayout) each
+    // hand's result is filled in from the next hand's starting stacks.
     settleLog(s) {
       const prev = this.hand;
       if (!prev || !prev.logEntry || prev.logEntry.net) return;
@@ -583,6 +626,10 @@
         const now = s.players.find((x) => x.id === p.id);
         if (now && now.stack != null) net[p.name] = Math.round((+now.stack - p.start) * 100) / 100;
       }
+      this.applyNet(prev, net);
+    }
+
+    applyNet(prev, net) {
       prev.logEntry.net = net;
       const live = Object.values(prev.players).filter((p) => !p.folded).length;
       for (const p of Object.values(prev.players)) {
@@ -615,6 +662,10 @@
         if (r.best && r.best.foldPct > 0.02) a.foldPct = r2(r.best.foldPct);
         if (r.mix) a.mix = r.mix.map((m) => m.label + ' ' + Math.round(m.freq * 100) + '%');
         if (r.solver) { a.solve = r.solver.kind; if (r.solver.kind === 'river') a.riverSolve = true; }
+        // Blueprint (computer mode): its own frequencies, or why it was not used.
+        if (r.blueprint) a.bp = r.blueprint.actions
+          ? { acts: r.blueprint.actions.filter((x) => x.p >= 0.02).map((x) => x.kind + (x.amount ? ' ' + r2(x.amount) : '') + ' ' + Math.round(x.p * 100) + '%'), visits: r2(r.blueprint.visits || 0), blended: !!r.blueprint.used }
+          : { off: r.blueprint.why };
         if (r.quick) a.quick = true;
         if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
         if (r.opponents) a.reads = r.opponents.map((o) => ({
@@ -806,6 +857,10 @@
           heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
           heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
           heroCommitted: hero.total, heroBet: hero.stageBet,
+          // Every action so far and the effective stack at the start of the hand (blueprint lookup).
+          history: h.log.map((e) => ({ st: e.st, who: e.who, hero: !!e.hero, act: e.act, amt: e.amt, to: e.to, pot: e.pot, facing: e.facing, allin: !!e.allin })),
+          seats: afterDealer.map((p) => p.name), heroName: hero.name,
+          startStack: heroStack != null ? Math.min(heroStack + hero.total, Math.max(...opps.map((o) => { const s = snapOf(o.id); return s ? s.stack + o.total : 0; }))) : null,
           // Every known opponent's counts added up, for the engine's table prior.
           pool: this.poolTally(),
           iterations: opponents.length > 2 ? 16000 : 24000,
