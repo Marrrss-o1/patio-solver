@@ -1250,5 +1250,29 @@ test('solver bets are at least the big blind (small pots on the river)', () => {
   for (const s of r.ranked) if (s.kind === 'bet') assert.ok(s.amount >= 10, `bet ${s.amount}`);
 });
 
+test('blinds: a big blind posted short (all-in for less) does not change the big blind', () => {
+  // Ann (s3) is the big blind with 4 chips left; the table's big blind is 10.
+  const msgs = [];
+  const add = (ev, data, snap) => msgs.push({ ev, data, snap });
+  const s0 = snap3(1000, 4, 1000);
+  add('admin:game:new_hand_started', { gameSettings: { big_blind: 10, small_blind: 5 } }, s0);
+  add('game:stage_began', { stageType: 'set_blinds' }, s0);
+  add('game:dealer_updated', { dealerSeatPos: 's7', smallBlindSeatPos: 's1', bigBlindSeatPos: 's3', underTheGunSeatPos: 's7' }, s0);
+  add('game:small_blind_paid', { amount: 5, playerId: 1 }, s0);
+  add('game:big_blind_paid', { amount: 4, playerId: 3 }, snap3(995, 4, 1000));
+  add('game:cards_dealt_to_player', [{ playerPos: 's1', cardData: { uniqueID: 11 } }, { playerPos: 's1', cardData: { uniqueID: 12 } }], snap3(995, 0, 1000));
+  add('game:update_card_data', { cardData: { uniqueID: 11, suite: 'spades', value: 'A' } }, snap3(995, 0, 1000));
+  add('game:update_card_data', { cardData: { uniqueID: 12, suite: 'hearts', value: 'K' } }, snap3(995, 0, 1000));
+  add('game:stage_began', { stageType: 'pre_flop' }, snap3(995, 0, 1000));
+  add('player:game:action_taken', { playerID: 7, actionType: 'raise', makeBetValue: 30 }, snap3(995, 0, 1000));
+  add('game:player_turn_started', { playerID: 1 }, snap3(995, 0, 970));
+  const { t, turns } = replay(msgs);
+  assert.strictEqual(t.hand.bigBlind, 10);
+  assert.strictEqual(turns[0].input.bigBlind, 10);
+  // Without the settings event, the snapshot's big blind is used for the short post.
+  const { t: t2 } = replay(msgs.slice(1));
+  assert.strictEqual(t2.hand.bigBlind, 10);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

@@ -165,7 +165,7 @@
       this.hand = {
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
-        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
+        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: this.settingsBB || s.bigBlind || null,
         finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
       };
       this.pendingRaw = null;
@@ -211,7 +211,18 @@
             h.log.push({ st: 'pre', who: p.name, hero: p.id === this.heroId(), act: ev === 'game:big_blind_paid' ? 'bb' : 'sb', amt: data.amount });
           }
           h.currentBet = Math.max(h.currentBet, data.amount);
-          if (ev === 'game:big_blind_paid') h.bigBlind = data.amount;
+          if (ev === 'game:big_blind_paid') {
+            // A big blind posted short (the player is all-in for less) doesn't change the blinds.
+            const sp = p && this.snap && this.snap.players.find((x) => x.id === p.id);
+            const short = sp && sp.stack - data.amount <= 0;
+            h.bigBlind = Math.max(data.amount, this.settingsBB || 0, short ? (this.snap && this.snap.bigBlind) || 0 : 0);
+          }
+          break;
+        }
+        case 'admin:game:new_hand_started': {
+          // The table's settings for the next hand (it comes just before set_blinds).
+          const gs = data && data.gameSettings;
+          if (gs && gs.big_blind > 0) this.settingsBB = +gs.big_blind;
           break;
         }
         case 'game:cards_dealt_to_player':
