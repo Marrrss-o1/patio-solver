@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Builds both deliverables from src/:
-//   extension/engine.js, extension/tracker.js  (copies, so "Load unpacked" works on extension/)
+//   extension/engine.js, extension/tracker.js, extension/blueprint.js  (copies, so "Load unpacked" works on extension/)
 //   dist/patio-solver.user.js                   (single-file userscript for iPhone Safari / Tampermonkey)
 //   dist/patio-solver-extension.zip             (if the `zip` command is available)
 const fs = require('fs');
@@ -19,6 +19,9 @@ const core = read('src/userscript-core.js');
 // 1. Extension copies
 write('extension/engine.js', engine);
 write('extension/tracker.js', tracker);
+// Blueprint lookup (computer only).
+// Trained strategies, extension/blueprint-<n>max.bin.gz, are published there by blueprint/publish.sh.
+write('extension/blueprint.js', read('src/blueprint.js'));
 const manifest = JSON.parse(read('extension/manifest.json'));
 manifest.version = pkg.version;
 write('extension/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
@@ -45,7 +48,11 @@ write('dist/patio-solver.user.js', userscript);
 try {
   const zipPath = path.join(root, 'dist/patio-solver-extension.zip');
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-  execSync(`zip -q -r "${zipPath}" manifest.json hook.js tracker.js overlay.js background.js engine.js slim.js offscreen.html offscreen.js solver-worker.js icon128.png`, { cwd: path.join(root, 'extension'), stdio: 'ignore' });
+  // The trained blueprints (35 MB) stay out of the zip: it is rebuilt and committed with every change, and
+  // they only feed the panel's "Blueprint (self-play)" line. Load unpacked from extension/ to get them.
+  const files = ['manifest.json', 'hook.js', 'tracker.js', 'overlay.js', 'background.js', 'engine.js', 'slim.js', 'offscreen.html', 'offscreen.js', 'solver-worker.js', 'blueprint.js',
+    'icon128.png'].filter((f) => fs.existsSync(path.join(root, 'extension', f)));
+  execSync(`zip -q -r "${zipPath}" ${files.join(' ')}`, { cwd: path.join(root, 'extension'), stdio: 'ignore' });
 } catch (e) {
   console.warn('zip not available; skipped dist/patio-solver-extension.zip');
 }
