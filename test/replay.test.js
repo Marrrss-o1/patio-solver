@@ -970,6 +970,11 @@ test('flop solver: computer mode only; heads-up and against the field', () => {
   assert.strictEqual(field.solver.kind, 'flop');
   assert.strictEqual(field.solver.field, 2);
   assert.ok(field.ranked.every((x) => isFinite(x.ev)));
+  // River betting at the end of the turn lines (flopRiverBet): a made flush draw gets paid.
+  const rb = flop('Ah 5h', { flopSolver: true, flopRiverBet: 0.5 });
+  const ev = (r, k) => r.ranked.find((x) => x.kind === k).ev;
+  assert.ok(rb.ranked.every((x) => isFinite(x.ev)));
+  assert.ok(ev(rb, 'call') > ev(draw, 'call'));
 });
 
 test('river: hands that play a straight-or-better board call, so bluffing into them is no edge', () => {

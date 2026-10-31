@@ -2926,6 +2926,17 @@
     const sides = [H, O];
     const multi = cfg.multi && cfg.multi.kappa ? cfg.multi : null;
     const kapCache = {};
+    // River betting at the end of the turn's lines (cfg.riverBet = bet as a share of the pot; off
+    // when unset): instead of a plain check-down, the hand that is ahead bets with probability
+    // b (by its river strength in its range) and the other calls with probability c, so strong
+    // hands and made draws get paid. b and c per combo and board come from scoresFor.
+    const RB = cfg.riverBet > 0 ? { beta: cfg.riverBet } : null;
+    if (RB) {
+      H.foldR = RB.beta / (1 + RB.beta);
+      H.betCut = 0.6;
+      O.foldR = clamp(foldAtSize(oppStats, RB.beta, 5), 0.05, 0.9);
+      O.betCut = 1 - clamp(streetStats(oppStats, 5).betFreq, 0.15, 0.6);
+    }
     const mtmp = multi ? new Float64Array(NMAX) : null, mrA = multi ? new Float64Array(H.n) : null, mrB = multi ? new Float64Array(H.n) : null;
 
     // Scores and showdown order on the board flop + t + r, for both sides (built when first needed).
@@ -2939,7 +2950,27 @@
         list.push(i);
       }
       list.sort((x, y) => score[x] - score[y]);
-      S.R[key] = { score, valid, order: Int32Array.from(list) };
+      const R = { score, valid, order: Int32Array.from(list) };
+      if (RB) {
+        // Call and bet probabilities by strength in the side's range on this board (ties share).
+        const c = new Float32Array(n), bt = new Float32Array(n);
+        let W = 0;
+        for (const i of list) W += S.w[i];
+        let g = 0, cumW = 0;
+        while (g < list.length) {
+          let e = g, w = 0;
+          const s0 = score[list[g]];
+          while (e < list.length && score[list[e]] === s0) { w += S.w[list[e]]; e++; }
+          const q = W > 0 ? (cumW + w / 2) / W : (g + e) / 2 / list.length;
+          const cc = sigmoid((q - S.foldR) / 0.06), bb = sigmoid((q - S.betCut) / 0.06);
+          for (let j = g; j < e; j++) { c[list[j]] = cc; bt[list[j]] = bb; }
+          cumW += w;
+          g = e;
+        }
+        R.c = c;
+        R.b = bt;
+      }
+      S.R[key] = R;
     }
     function pairKey(t, r) {
       const key = t * 52 + r;
@@ -2975,6 +3006,49 @@
         }
         for (let j = a; j < a2; j++) { const i = oo[j]; grp[xh[i]] = 0; grp[xl[i]] = 0; }
       }
+    }
+    // River bets of size B (see RB) for traverser T: when ahead it bets with its b and X calls with
+    // X's c; when behind X bets with X's b and T calls with its c. win/lose scale the two parts
+    // (wk: per-combo factor on the win part, for multiway).
+    const cumC = new Float64Array(52), cumB = new Float64Array(52), grpB = new Float64Array(52), allB = new Float64Array(52);
+    function riverExtra(r, X, T, key, out, sc, win, lose, wk) {
+      const RX = X.R[key], RT = T.R[key];
+      const oo = RX.order, os = RX.score, to = RT.order, ts = RT.score;
+      const xc = RX.c, xb = RX.b, tc = RT.c, tb = RT.b;
+      const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo;
+      const no = oo.length, nt = to.length;
+      cumC.fill(0); cumB.fill(0); allB.fill(0);
+      let tB = 0;
+      for (let j = 0; j < no; j++) { const i = oo[j], x = r[i] * xb[i]; tB += x; allB[xh[i]] += x; allB[xl[i]] += x; }
+      let a = 0, b = 0, cC = 0, cB = 0;
+      while (b < nt) {
+        const s0 = ts[to[b]];
+        while (a < no && os[oo[a]] < s0) {
+          const i = oo[a], x = r[i], y = x * xc[i], z = x * xb[i];
+          cC += y; cumC[xh[i]] += y; cumC[xl[i]] += y;
+          cB += z; cumB[xh[i]] += z; cumB[xl[i]] += z;
+          a++;
+        }
+        let a2 = a, gB = 0;
+        while (a2 < no && os[oo[a2]] === s0) { const i = oo[a2], z = r[i] * xb[i]; gB += z; grpB[xh[i]] += z; grpB[xl[i]] += z; a2++; }
+        while (b < nt && ts[to[b]] === s0) {
+          const i = to[b], h = th[i], l = tl[i];
+          const below = cC - cumC[h] - cumC[l];
+          const above = tB - allB[h] - allB[l] - (cB - cumB[h] - cumB[l]) - (gB - grpB[h] - grpB[l]);
+          out[i] += sc * ((wk ? win * wk[i] : win) * tb[i] * below - lose * tc[i] * above);
+          b++;
+        }
+        for (let j = a; j < a2; j++) { const i = oo[j]; grpB[xh[i]] = 0; grpB[xl[i]] = 0; }
+      }
+    }
+    function riverBets(r, X, T, key, out, sc, B, kap, trav) {
+      if (!kap) { riverExtra(r, X, T, key, out, sc, B, B, null); return; }
+      // Multiway: hero only wins the bet when it also beats the others (kap); the field loses
+      // it to hero only then.
+      if (trav === 0) { riverExtra(r, X, T, key, out, sc, B, B, kap); return; }
+      for (let i = 0; i < X.n; i++) mrA[i] = r[i] * kap[i];
+      riverExtra(r, X, T, key, out, sc, B, 0, null);
+      riverExtra(mrA, X, T, key, out, sc, 0, B, null);
     }
     function kapAt(nb) {
       if (kapCache[nb]) return kapCache[nb];
@@ -3171,7 +3245,14 @@
       const kap = multi ? kapAt(n.nb || 0) : null;
       out.fill(0, 0, T.n);
       if (n.term === 'show') {
-        for (const rc of riversFor(n.card)) show(r, X, T, pairKey(n.card, rc), out, scaleR, potF, myIn, kap, trav);
+        const L = RB ? Math.min(maxIn(0) - n.hIn, maxIn(1) - n.oIn) : 0;
+        const B = L > 0 ? Math.min(L, RB.beta * potF) : 0;
+        const kap2 = B > 0 && multi ? kapAt((n.nb || 0) + 1) : null;
+        for (const rc of riversFor(n.card)) {
+          const key = pairKey(n.card, rc);
+          show(r, X, T, key, out, scaleR, potF, myIn, kap, trav);
+          if (B > 0) riverBets(r, X, T, key, out, scaleR, B, kap2, trav);
+        }
         return;
       }
       // All-in on the flop: both cards to come.
@@ -4557,6 +4638,7 @@
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.flopIterations, timeMs: input.flopTimeMs, turnSamples: input.flopTurnSamples,
           riverSamples: input.flopRiverSamples, seed, flopBets: input.flopBets, turnBets: input.flopTurnBets, multi,
+          riverBet: input.flopRiverBet,
         });
         if (fs) {
           solved = Object.assign(fs, { kind: 'flop' }, opps.length > 1 ? { field: opps.length, multiway: opps.length } : {});
