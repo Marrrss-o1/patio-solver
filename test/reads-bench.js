@@ -1,12 +1,15 @@
 // Read-accuracy benchmark. Replays exported hand logs in time order and scores how well
 // the reads predict each opponent's actions and shown hands, using only earlier hands.
 //
-//   node test/reads-bench.js [--engine=path/to/engine.js] [--by=player] log.json [more.json ...]
+//   node test/reads-bench.js [--engine=path/to/engine.js] [--by=player] [--from=ISO time] log.json [more.json ...]
+// --from scores only hands from that time on (earlier hands still build the reads), e.g. to score a
+// new log the priors were not fitted on.
 //
 // Scores (lower log-loss / higher show likelihood is better):
 //   pf     preflop: fold (or check), call, raise for the hand, by position (VPIP / PFR)
 //   open   postflop, nobody has bet yet: check or bet (c-bet spots use the c-bet rate)
 //   face   postflop, facing a bet: fold, call or raise (by bet size when the log has sizes)
+//   vs open  first response to a single open raise, by its size (new-format logs; not in "all")
 //   show   shown hands: how much likelier the shown hand was under the predicted range than
 //          a random hand (geometric mean ratio, 1.0 = no better than a guess) and how often it
 //          sat in the likelier half of the range ("hits", 50% = calibrated)
@@ -69,7 +72,7 @@ function decisions(h) {
     return p ? p.name : null;
   })();
   const nDealt = h.players.length;
-  // Re-raised preflop (3-bet or more): such players fold much less after the flop.
+  // Re-raised preflop (3-bet or more): such players fold less after the flop.
   const reraisedBy = {};
   for (const p of h.players) {
     const pre = p.actions.pre || [];
@@ -78,6 +81,23 @@ function decisions(h) {
   for (const p of opps) {
     const c = pfCat(p.actions.pre);
     if (c) out.push({ name: p.name, kind: 'pf', out: c, pos: p.position, n: nDealt });
+  }
+  // First response to a single open raise, by its size (stats.vsOpen): new-format logs only.
+  if (h.log && h.bigBlind > 0) {
+    let raises = 0;
+    const acted = {};
+    for (const e of h.log) {
+      if (e.st !== 'pre') break;
+      if (e.act === 'sb' || e.act === 'bb') continue;
+      const first = !acted[e.who];
+      acted[e.who] = true;
+      const isRaise = /^(raise|\dbet)$/.test(e.act);
+      if (first && raises === 1 && !e.hero && e.who !== heroName && (e.act === 'fold' || e.act === 'call' || isRaise)) {
+        const toBB = ((e.to || 0) - (e.amt || 0) + (e.facing || 0)) / h.bigBlind;
+        out.push({ name: e.who, kind: 'vo', toBB, out: isRaise ? 'raise' : e.act, pos: (h.players.find((x) => x.name === e.who) || {}).position });
+      }
+      if (isRaise) raises++;
+    }
   }
   if (h.log) {
     const flopBet = {};
@@ -178,6 +198,7 @@ function simpleUpdate(db, h, dec, scorer) {
   for (const p of h.players) if (!p.hero) decayTally(rec(p.name).tally);
   for (const d of dec.list) {
     const t = rec(d.name).tally;
+    if (d.kind === 'vo') continue;
     if (d.kind === 'pf') {
       t[{ fold: 'pfFold', call: 'pfCall', raise: 'pfRaise' }[d.out]]++;
       const g = t.pos[d.pos];
@@ -244,6 +265,15 @@ function makeModel(enginePath) {
       const g = d.pos && st.byPos && st.byPos[d.pos] ? st.byPos[d.pos] : st;
       return { fold: 1 - g.vpip, call: g.vpip - g.pfr, raise: g.pfr };
     }
+    if (d.kind === 'vo') {
+      // The size-blind rule older engines use for a player facing an open (continueRule).
+      const mdf = 1.5 / (1.5 + d.toBB), sizeFactor = Math.min(1, 6 / Math.max(1, d.toBB));
+      const big = Math.min(1, Math.max(0, (d.toBB - 4) / 4)), callBig = st.callBig != null ? st.callBig : 0.25;
+      let cont = Math.max(Math.min(st.vpip, st.vpip * 0.7 * (mdf / 0.375) * Math.sqrt(sizeFactor)), big * callBig);
+      cont = Math.min(0.95, Math.max(0.01, cont));
+      const rr = Math.min(cont, Math.min(0.12, Math.max(0.02, st.pfr * 0.4)));
+      return { fold: 1 - cont, call: cont - rr, raise: rr };
+    }
     const bs = st.byStreet[d.n];
     if (d.kind === 'open') {
       const b = d.cbet ? st.cbet : bs.betFreq;
@@ -305,9 +335,12 @@ function run(model, hands, tableStyle, o) {
     return s;
   };
   const pool = () => (E.poolTally && o.pool !== false ? E.poolTally(Object.values(db.players).filter((r) => !o.only || r.name !== o.only).map((r) => r.tally)) : null);
+  const from = o.from != null ? +new Date(o.from) : -Infinity;
   for (const h of hands) {
     const dec = decisions(h);
     const pooled = pool();
+    // Hands before `from` only build the reads (scores count from there on).
+    const scoring = !(h.t < from);
     const statsOf = {};
     const st = (name) => {
       if (!statsOf[name]) {
@@ -323,7 +356,7 @@ function run(model, hands, tableStyle, o) {
       for (const v of Object.values(probs)) tot += Math.max(0, v);
       const p = Math.max(1e-4, (probs[d.out] || 0) / tot);
       const b = bucketOf(seen[d.name] || 0);
-      add(d.kind, b, d.name, -Math.log(p));
+      if (scoring) add(d.kind, b, d.name, -Math.log(p));
     }
     for (const s of shows(h, dec.pfAgg)) {
       if (s.folded) continue;
@@ -348,7 +381,7 @@ function run(model, hands, tableStyle, o) {
       const ll = Math.log(Math.max(1e-6, W[k] / tot)) - Math.log(1 / live);
       const hit = (above + same / 2) / tot < 0.5;
       const b = bucketOf(seen[s.name] || 0);
-      addShow('all', ll, hit); addShow(String(b), ll, hit); addShow('p:' + s.name, ll, hit);
+      if (scoring) { addShow('all', ll, hit); addShow(String(b), ll, hit); addShow('p:' + s.name, ll, hit); }
     }
     // Learn from the hand.
     if (h.raw && h.raw.length) rawUpdate(tracker, h);
@@ -362,6 +395,7 @@ function report(model, res) {
   const { acc, showAcc } = res;
   const fmt = (a) => (a ? (a.ll / a.n).toFixed(3) + ' (' + a.n + ')' : '-');
   const kinds = ['pf', 'open', 'face'];
+  const extra = ['vo'];
   const cols = ['all'].concat(SEEN_BUCKETS.map((_, i) => String(i)));
   console.log('\n== ' + model.name);
   console.log('log-loss per decision (n)'.padEnd(26) + cols.map((c) => (c === 'all' ? 'all' : bucketName(+c)).padStart(16)).join(''));
@@ -372,6 +406,7 @@ function report(model, res) {
     return n ? { n, ll } : null;
   };
   console.log('all actions'.padEnd(26) + cols.map((c) => fmt(tot(c)).padStart(16)).join(''));
+  for (const k of extra) if (acc[k + '|all']) console.log((k === 'vo' ? 'vs open (by size)' : k).padEnd(26) + cols.map((c) => fmt(acc[k + '|' + c]).padStart(16)).join(''));
   const sf = (a) => (a ? ('x' + Math.exp(a.ll / a.n).toFixed(2) + ' ' + Math.round((100 * a.hits) / a.n) + '%h (' + a.n + ')') : '-');
   console.log('shown hands vs guess'.padEnd(26) + cols.map((c) => sf(showAcc[c]).padStart(16)).join(''));
   if (opt.by === 'player') {
@@ -392,7 +427,7 @@ if (require.main === module) {
   console.log(hands.length + ' hands from ' + files.length + ' log(s)');
   for (const ep of engines) {
     const model = makeModel(ep);
-    report(model, run(model, hands, opt.style || 'typical'));
+    report(model, run(model, hands, opt.style || 'typical', { from: opt.from }));
   }
 }
 

@@ -695,7 +695,8 @@
       if (seq.includes('fold')) return 'fold';
       const first = seq[0];
       if (seq.includes('raise')) return first === 'check' ? 'checkraise' : 'raise';
-      if (seq.includes('bet')) return 'bet';
+      // Bet, then called a raise (multiway): their range is what continues against a raise.
+      if (seq.includes('bet')) return seq.includes('call') ? 'betcall' : 'bet';
       if (seq.includes('call')) return first === 'check' ? 'checkcall' : 'call';
       return 'check';
     }

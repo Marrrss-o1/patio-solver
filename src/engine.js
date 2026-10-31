@@ -296,30 +296,35 @@
   // the old 'typical' (a sound regular); it stands for hero's own range.
   const READ_PRIORS = {
     home: {
-      vpip: { mu: { all: 0.649, early: 0.62, late: 0.735, blinds: 0.603, other: 0.649 }, tau: 0.4, tauC: 0.3 },
-      pfr: { mu: { all: 0.232, early: 0.295, late: 0.202, blinds: 0.237, other: 0.232 }, tau: 1.0, tauC: 0.3 },
-      bet: { mu: { all: 0.289, cbet: 0.419, flop: 0.181, turn: 0.28, river: 0.441, other: 0.289 }, tau: 0.4, tauC: 0.3 },
-      fold: { mu: { all: 0.426, allMW: 0.526, flop: 0.332, turn: 0.401, river: 0.543, flopMW: 0.518, turnMW: 0.47, riverMW: 0.673, flopOld: 0.474, turnOld: 0.435, riverOld: 0.616, other: 0.489 }, tau: 0.45, tauC: 0.3 },
-      raise: { mu: { all: 0.197, flop: 0.216, turn: 0.143, river: 0.269, other: 0.197 }, tau: 0.4, tauC: 0.3 },
+      vpip: { mu: { all: 0.644, early: 0.667, late: 0.733, blinds: 0.584, other: 0.644 }, tau: 0.35, tauC: 0.3 },
+      pfr: { mu: { all: 0.253, early: 0.243, late: 0.241, blinds: 0.258, other: 0.253 }, tau: 1.15, tauC: 0.3 },
+      bet: { mu: { all: 0.272, cbet: 0.351, flop: 0.181, turn: 0.257, river: 0.422, other: 0.272 }, tau: 0.5, tauC: 0.3 },
+      fold: { mu: { all: 0.46, allMW: 0.541, flop: 0.378, turn: 0.435, river: 0.575, flopMW: 0.53, turnMW: 0.482, riverMW: 0.677, flopOld: 0.49, turnOld: 0.458, riverOld: 0.632, other: 0.46 }, tau: 0.35, tauC: 0.3 },
+      raise: { mu: { all: 0.19, flop: 0.21, turn: 0.14, river: 0.244, other: 0.19 }, tau: 0.35, tauC: 0.3 },
       rates: {
-        threeBet: [0.12, 10], callBig: [0.5, 6], foldAfterAgg: [0.28, 8], foldCbet: [0.45, 5], wtsd: [0.28, 5],
-        f3bet: [0.3, 5], fourBet: [0.45, 5], limp: [0.5, 6],
+        threeBet: [0.165, 10], callBig: [0.51, 6], foldAfterAgg: [0.351, 8], foldCbet: [0.348, 5], wtsd: [0.277, 5],
+        f3bet: [0.133, 5], fourBet: [0.5, 5], limp: [0.572, 6],
       },
       // Response to a single open raise by its size (raise-to <= 2.5bb, <= 3.5bb, more):
       // continue (call or 3-bet) and 3-bet, as shares of their chances to respond.
-      vsOpen: { small: [0.65, 0.12], medium: [0.6, 0.11], large: [0.45, 0.08], k: 6 },
-      af: 1.3, betSize: 0.45,
+      // Fitted on 78 responses: they continue against three in four opens of up to 3.5bb and 3-bet
+      // a quarter of them (min-raise wars); bigger opens get about half.
+      vsOpen: { small: [0.75, 0.3], medium: [0.72, 0.25], large: [0.49, 0.17], k: 6 },
+      // betSize is their usual bet (the median; the mean is pulled up by shoves).
+      af: 1.28, betSize: 0.5,
       // Range tilt (see buildRange) for lines with a bet or raise and for check/call lines: the
-      // friends' shown hands sit lower in the predicted ranges than the model alone puts them,
-      // most of all after checking and calling. k is the penalty that keeps a player near it;
-      // kUp is for reading a betting line stronger than this, which showdowns over-sample.
-      tilt: { agg: 0, pas: -0.3, k: 6, kUp: 20 },
+      // friends' shown hands sit a little lower than the model puts them after checking and
+      // calling. After betting they fit +0.15, but showdowns over-sample value there (bluffs that
+      // win uncontested are never shown), so it stays 0. k is the penalty that keeps a player near
+      // it; kUp is for reading a betting line stronger than this.
+      tilt: { agg: 0, pas: -0.15, k: 6, kUp: 20 },
       // Range noise (see applyAction): the share of each line's hands that take it whatever
       // their strength. The friends' showdowns fit about half.
       noise: { mu: 0.45, k: 6 },
-      // Players who re-raised preflop (3-bet or more) fold far less to bets after the flop: about
-      // 20% in both logs against 50% for everyone. Odds multiplier on their fold rates.
-      reraisedFold: 0.45,
+      // Players who re-raised preflop (3-bet or more) fold less to bets after the flop: 38% against
+      // 51% for everyone in the logs (25% on the flop and turn). Odds multiplier on their fold
+      // rates (the benchmark's best; a single open raise made no difference there).
+      reraisedFold: 0.65,
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -837,13 +842,18 @@
   }
 
   // The read's probability for each thing a player can do at a decision, from their stats.
-  // d: { kind: 'pf' | 'open' | 'face', n: street (3, 4, 5), pos, cbet, frac: bet faced as a
+  // d: { kind: 'pf' | 'vo' | 'open' | 'face', n: street (3, 4, 5), pos, cbet, toBB (vo), frac: bet faced as a
   // fraction of the pot before it, aggLine: they bet or raised earlier this hand }.
   // Used to score reads against what players really did (test/reads-bench.js, tracker.pred).
   function predictAction(stats, d) {
     if (d.kind === 'pf') {
       const g = d.pos && stats.byPos && stats.byPos[d.pos] ? stats.byPos[d.pos] : stats;
       return { fold: 1 - g.vpip, call: g.vpip - g.pfr, raise: g.pfr };
+    }
+    if (d.kind === 'vo') {
+      // First response to an open raise to d.toBB big blinds, as the preflop solver reads it.
+      const r = vsOpenRead(stats, d.toBB) || { cont: stats.vpip, threeBet: stats.threeBet };
+      return { fold: 1 - r.cont, call: r.cont - r.threeBet, raise: r.threeBet };
     }
     const bs = stats.byStreet[d.n] || stats;
     if (d.kind === 'open') {
@@ -1063,6 +1073,7 @@
     return w;
   }
 
+  const WAR_MIX = 1;
   function preflopRange(stats, action, sizePre) {
     const cw = new Float64Array(169);
     let raiseWidth = 1; // re-raising range width, for the floor below
@@ -1080,6 +1091,13 @@
       else if (action === '5bet') w = Math.max(0.015, w * fb * fb);
       cw.set(topClassWeights(w));
       raiseWidth = w;
+      // Raise wars (4-bets and 5-bets) are half premiums, half ordinary hands: of 9 hands shown
+      // from them in the logs, 4 were AA-JJ and 5 were K4s, Q9o, KTo, QJo and A8o. So the
+      // narrow range gets the same mass again spread over the hands they play.
+      if (action === '4bet' || action === '5bet') {
+        const v = Math.max(0.05, stats.vpip), ord = topClassWeights(v);
+        for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + WAR_MIX * (w / v) * ord[i]);
+      }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
       const trap = 0.15 + 0.35 * (1 - stats.pfr / Math.max(stats.vpip, 0.01));
@@ -1278,7 +1296,7 @@
   const PRE_RAISED = /^(raise|\dbet)$/;
   const STREET_ACTION_MAP = {
     check: 'check', bet: 'bet', call: 'call', raise: 'raise',
-    checkcall: 'call', checkraise: 'raise',
+    checkcall: 'call', checkraise: 'raise', betcall: 'bet',
   };
 
   function sumWeights(W) {
@@ -1303,6 +1321,12 @@
       const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet });
       if (sumWeights(next) > 1e-9) W = next;
       W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
+      // Bet, then called a raise: keep the part of the betting range that continues.
+      if (actions[name] === 'betcall') {
+        const after = applyAction(W, st, 'call', stats, null, {});
+        if (sumWeights(after) > 1e-9) W = after;
+        W.bluffShare = null;
+      }
     }
     if (sumWeights(W) <= 1e-9) {
       for (let k = 0; k < NUM_COMBOS; k++) W[k] = dead[COMBO_HI[k]] || dead[COMBO_LO[k]] ? 0 : 1;
@@ -3212,7 +3236,7 @@
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
         ? PRE_RAISED.test(actions.pre || '')
-        : currentAction === 'bet' || currentAction === 'raise' || currentAction === 'checkraise';
+        : currentAction === 'bet' || currentAction === 'betcall' || currentAction === 'raise' || currentAction === 'checkraise';
       return {
         name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
         // They bet or raised on some street after the flop: from here on their range is strong.

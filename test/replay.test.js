@@ -385,11 +385,24 @@ test('reads: vsOpen counts the response to a single open by its size', () => {
   assert.ok(st.vsOpen.large.cont < 0.2 && st.vsOpen.small.cont > 0.5, JSON.stringify(st.vsOpen));
 });
 
+test('reads: a bet that then calls a raise reads stronger than a plain bet', () => {
+  assert.strictEqual(T.streetAction(['bet', 'call'], 4), 'betcall');
+  assert.strictEqual(T.streetAction(['bet'], 4), 'bet');
+  assert.strictEqual(T.streetAction(['check', 'call'], 4), 'checkcall');
+  const board = C('Ks 9d Kh 6d');
+  const st = E.computeStats(T.blankTally(), 'typical');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board.slice(0, 3)), 4: E.boardStrength(board) };
+  const mean = (W) => { let a = 0, w = 0; for (let k = 0; k < W.length; k++) if (W[k] > 0 && strengths[4].hs[k] >= 0) { a += W[k] * strengths[4].hs[k]; w += W[k]; } return a / w; };
+  const bet = E.buildRange(st, { pre: 'call', flop: 'check', turn: 'bet' }, strengths, board);
+  const betcall = E.buildRange(st, { pre: 'call', flop: 'check', turn: 'betcall' }, strengths, board);
+  assert.ok(mean(betcall) > mean(bet) + 0.03, mean(bet) + ' vs ' + mean(betcall));
+});
+
 test('reads: players who re-raised preflop fold less after the flop', () => {
   const t = T.blankTally();
   const flat = E.computeStats(t, 'typical');
   const rr = E.computeStats(t, 'typical', null, { reraised: true });
-  assert.ok(rr.foldToBet < flat.foldToBet - 0.08, flat.foldToBet + ' vs ' + rr.foldToBet);
+  assert.ok(rr.foldToBet < flat.foldToBet - 0.04, flat.foldToBet + ' vs ' + rr.foldToBet);
   assert.ok(rr.byStreet[4].foldToBet < flat.byStreet[4].foldToBet && rr.foldBySize.large < flat.foldBySize.large);
   // The unblended read is left as it is; predictAction applies the same shift by decision.
   assert.strictEqual(rr.read.foldToBet, flat.read.foldToBet);
@@ -535,9 +548,10 @@ test('lookahead: an open-ended draw can call a pot-size bet on implied odds', ()
   const now = E.analyzeSync(Object.assign({}, spot, { lookahead: false }));
   const ahead = E.analyzeSync(spot);
   const call = (r) => r.ranked.find((s) => s.kind === 'call').ev;
-  // 12, not 15: with medium hands in the betting range the draw has a little more equity right
-  // away, so the lookahead adds slightly less (the call itself is worth more than before).
-  assert.ok(call(ahead) > call(now) + 12, `${call(ahead)} vs ${call(now)}`);
+  // 8, not 15: with medium hands in the betting range the draw has a little more equity right
+  // away, and in the home prior fitted on three logs a bettor folds more later in the hand
+  // (foldAfterAgg 0.35, 94 spots), so hitting pays a little less. The lookahead still adds ~9.
+  assert.ok(call(ahead) > call(now) + 8, `${call(ahead)} vs ${call(now)}`);
 });
 
 test('lookahead: real hand flop decision stays sane', () => {
