@@ -95,6 +95,25 @@ const foldGap = (s) => {
   return (s.vs.medium.fold * s.vs.medium.n + s.vs.large.fold * s.vs.large.n) / big - s.vs.small.fold;
 };
 const SIZE_GAP = foldGap(pool);
+// Sizing, pooled over friends (too few raises each): re-raise and postflop raise mix (min-raise / all-in / bigger,
+// and how big the bigger ones are), min-bets and the spread of bet sizes. Real friends: about 4 in 5 re-raises are
+// min-raises, postflop raises are a little over half min-raises with some all-ins, and bet sizes shrink as the pot grows
+// (about pot-size bets in pots under 6bb, a fifth of the pot above 25bb; log-sd about 0.64 around that).
+const shrink = (x, n, prior, K) => (x == null || !n ? prior : (n * x + K * prior) / (n + K));
+const SIZING = [
+  // [stat, param, prior, K, step, lo, hi, mode]
+  ['rrMinShare', 'rrMin', 0.5, 8, 1, 0.05, 0.98],
+  ['rrShoveShare', 'rrShove', 0.03, 8, 0.8, 0, 0.5],
+  ['raiseMinShare', 'raiseMin', 0.3, 8, 1, 0, 0.9],
+  ['raiseShoveShare', 'raiseShove', 0.05, 8, 0.8, 0, 0.5],
+  ['raiseOtherRatio', 'raiseX', 3, 4, 0.7, 2, 8, 'ratio'],
+  ['minBetShare', 'minBet', 0.1, 8, 0.9, 0, 0.5],
+  ['betSizeSlope', 'potSlope', -0.3, 8, 0.8, -1.2, 0.3],
+  ['betSizeResid', 'sizeSd', 0.6, 8, 0.8, 0.1, 1.2],
+];
+const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN' };
+const SIZING_T = {};
+for (const [k, , prior, K] of SIZING) SIZING_T[k] = shrink(pool[k], pool[sizingN[k]], prior, K);
 // River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
 const SD_CALL = pool.sdRiverCall == null ? null : (pool.sdRiverCallN * pool.sdRiverCall + 10 * 0.76) / (pool.sdRiverCallN + 10);
 
@@ -196,6 +215,18 @@ for (let round = 1; round <= ROUNDS; round++) {
     const cs = Math.max(0, Math.min(1.5, params[ids[0]].callSlope + 2 * damp * (SIZE_GAP - gSim)));
     for (const id of ids) if (id !== 'hero') params[id].callSlope = cs;
   }
+  // Pool-wide sizing parameters, each toward the friends' pooled number.
+  const simPoolS = prof.summarize(simVs);
+  for (const [k, key, , , step, lo, hi, mode] of SIZING) {
+    const x = simPoolS[k], T = SIZING_T[k];
+    if (x == null || T == null) continue;
+    const cur = params[ids[0]][key];
+    let nx = mode === 'ratio' ? cur * Math.pow(T / Math.max(1e-3, x), step * damp) : cur + step * damp * (T - x);
+    nx = Math.max(lo, Math.min(hi, nx));
+    for (const id of ids) if (id !== 'hero') params[id][key] = nx;
+  }
+  for (const id of ids) if (id !== 'hero' && params[id].raiseMin + params[id].raiseShove > 0.95) params[id].raiseMin = 0.95 - params[id].raiseShove;
+  process.stderr.write(`round ${round}: sizing ${SIZING.map(([k]) => `${k} ${simPoolS[k] == null ? '-' : simPoolS[k].toFixed(2)}/${SIZING_T[k].toFixed(2)}`).join(' ')}\n`);
   process.stderr.write(`round ${round}: fold gap big vs small bets ${gSim == null ? '-' : gSim.toFixed(3)} (real ${SIZE_GAP == null ? '-' : SIZE_GAP.toFixed(3)}), mean abs error ${(err / cnt * 100).toFixed(2)} points, river callers at showdown ${sc.toFixed(3)} (real ${SD_CALL})\n`);
 }
 
@@ -226,6 +257,9 @@ for (const id of ids) {
 {
   const simPool = prof.summarize(prof.mergeTallies(Object.keys(tallyOf).filter((id) => id !== 'hero').map((id) => tallyOf[id])));
   out.pool.simulated.foldBySizeAllBots = ['small', 'medium', 'large'].map((b) => r3(simPool.vs[b].fold));
+  out.pool.real.sizing = Object.fromEntries(SIZING.map(([k]) => [k, r3(pool[k])]));
+  out.pool.target.sizing = Object.fromEntries(SIZING.map(([k]) => [k, r3(SIZING_T[k])]));
+  out.pool.simulated.sizingAllBots = Object.fromEntries(SIZING.map(([k]) => [k, r3(simPool[k])]));
 }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n');
 if (NAMES_OUT) fs.writeFileSync(NAMES_OUT, JSON.stringify(Object.fromEntries(names.map((n, i) => [ids[i], n])), null, 1));

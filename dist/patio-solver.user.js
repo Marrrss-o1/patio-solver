@@ -151,6 +151,12 @@ function ENGINE() {
     for (let j = 0; j < L; j++) out[j] = keys[j] % 2048;
     return out;
   }
+  // scoreHole's cache key (the rank pair) for a hole on the current board, or -1 when its suits
+  // could make a flush there and it is scored on its own. Holes with the same key score the same.
+  function holeKey(a, b) {
+    const sa = a & 3, sb = b & 3;
+    return !SB_ALL && (sa === sb ? SB_CNT[sa] < 3 : SB_CNT[sa] < 4 && SB_CNT[sb] < 4) ? (a >> 2) * 13 + (b >> 2) : -1;
+  }
   function scoreHole(a, b) {
     const sa = a & 3, sb = b & 3;
     if (!SB_ALL && (sa === sb ? SB_CNT[sa] < 3 : SB_CNT[sa] < 4 && SB_CNT[sb] < 4)) {
@@ -1169,15 +1175,47 @@ function ENGINE() {
     return expandClassWeights(cw);
   }
 
+  // `list` (at most NUM_COMBOS entries) sorted by score[list[j]] ascending, ties kept in list
+  // order: what list.sort((a, b) => score[a] - score[b]) gives (a stable sort), as an LSD radix
+  // sort on the doubles' bits (8 byte passes, skipping bytes that are the same everywhere).
+  // -0 counts as +0; a NaN score (no consistent order) falls back to the comparator sort.
+  const SV_F = new Float64Array(1), SV_U = new Uint32Array(SV_F.buffer);
+  const SV_HI = new Uint32Array(NUM_COMBOS), SV_LO = new Uint32Array(NUM_COMBOS), SV_CNT = new Int32Array(256);
+  const SV_A = new Int32Array(NUM_COMBOS), SV_B = new Int32Array(NUM_COMBOS);
+  function sortByValue(list, score) {
+    const n = list.length;
+    for (let j = 0; j < n; j++) {
+      const x = score[list[j]];
+      if (x !== x) return Int32Array.from(list.slice().sort((a, b) => score[a] - score[b]));
+      SV_F[0] = x + 0;
+      let lo = SV_U[0], hi = SV_U[1];
+      if (hi & 0x80000000) { hi = ~hi; lo = ~lo; } else hi ^= 0x80000000;
+      SV_HI[j] = hi; SV_LO[j] = lo; SV_A[j] = j;
+    }
+    let src = SV_A, dst = SV_B;
+    for (let pass = 0; pass < 8; pass++) {
+      const words = pass < 4 ? SV_LO : SV_HI, shift = (pass & 3) * 8;
+      SV_CNT.fill(0);
+      for (let j = 0; j < n; j++) SV_CNT[(words[src[j]] >>> shift) & 255]++;
+      if (n && SV_CNT[(words[src[0]] >>> shift) & 255] === n) continue;
+      let sum = 0;
+      for (let b = 0; b < 256; b++) { const c = SV_CNT[b]; SV_CNT[b] = sum; sum += c; }
+      for (let j = 0; j < n; j++) { const e = src[j]; dst[SV_CNT[(words[e] >>> shift) & 255]++] = e; }
+      const t = src; src = dst; dst = t;
+    }
+    const out = new Int32Array(n);
+    for (let j = 0; j < n; j++) out[j] = list[src[j]];
+    return out;
+  }
   function rangeQuantiles(W, score) {
     const q = new Float64Array(NUM_COMBOS);
-    const idx = [];
+    let idx = [];
     let total = 0;
     for (let k = 0; k < NUM_COMBOS; k++) {
       if (W[k] > 0) { idx.push(k); total += W[k]; }
     }
     if (!total) return q;
-    idx.sort((a, b) => score[a] - score[b]);
+    idx = sortByValue(idx, score);
     let cum = 0, i = 0;
     while (i < idx.length) {
       let j = i, gw = 0;
@@ -1244,17 +1282,26 @@ function ENGINE() {
     const b = stats.byStreet && stats.byStreet[n];
     return b ? Object.assign({}, stats, b) : stats;
   }
+  // streetStats(stats, n)[key] without building the merged object (it copies every field of the
+  // read, and the fold curves below ask for one field many times per decision).
+  const ownEnum = (o, key) => Object.prototype.propertyIsEnumerable.call(o, key);
+  function streetField(stats, n, key) {
+    const b = stats.byStreet && stats.byStreet[n];
+    if (!b) return stats[key];
+    if (ownEnum(b, key)) return b[key];
+    return ownEnum(stats, key) ? stats[key] : undefined;
+  }
 
   // Fold probability against a bet of `f` x pot on street `n`: the size model for that
   // street, corrected by how they actually reacted to small, medium and large bets.
   function foldAtSize(stats, f, n) {
     // The field (several players as one): it folds only if every one of them folds.
     if (stats.fieldOf) return clamp(stats.fieldOf.reduce((a, x) => a * foldAtSize(Object.assign({}, x, { foldShift: 0 }), f, n), 1), 0.01, 0.98);
-    const ss = streetStats(stats, n);
+    const ftb = streetField(stats, n, 'foldToBet');
     // Past about pot size, folds grow much more slowly than the curve says: home-game
     // players call overbets more than the pot-odds math suggests.
     const top = SIZE_BUCKETS[SIZE_BUCKETS.length - 1][1];
-    const base = f <= top ? modelFold(ss.foldToBet, f) : modelFold(ss.foldToBet, top) + 0.3 * (modelFold(ss.foldToBet, f) - modelFold(ss.foldToBet, top));
+    const base = f <= top ? modelFold(ftb, f) : modelFold(ftb, top) + 0.3 * (modelFold(ftb, f) - modelFold(ftb, top));
     if (!stats.foldBySize) return base;
     const corr = SIZE_BUCKETS.map(([k, c]) => [c, stats.foldBySize[k] - modelFold(stats.foldToBet, c)]);
     let d;
@@ -1579,25 +1626,51 @@ function ENGINE() {
     // Cached by card (key as below), in arrays: lookups are on the Monte Carlo's hot path.
     const rivers = new Array(52 * 52), turns = new Array(52);
     const buf = new Int32Array(7);
-    const scores = new Int32Array(NUM_COMBOS);
-    const valid = new Int16Array(NUM_COMBOS);
-    const tmp = new Float64Array(NUM_COMBOS);
+    // strengthOn's scratch: per entry (a rank pair whose holes all score the same, or one hole
+    // scored on its own: 169 + combo) its score, live holes and percentile.
+    const dead = new Uint8Array(52), entOf = new Int16Array(NUM_COMBOS), live = new Int16Array(NUM_COMBOS);
+    const eScore = new Int32Array(169 + NUM_COMBOS), eCnt = new Int32Array(169 + NUM_COMBOS), eP = new Float64Array(169 + NUM_COMBOS);
+    const eList = new Int32Array(169 + NUM_COMBOS), eKeys = new Float64Array(169 + NUM_COMBOS);
+    // Each live hole's percentile among the live holes by score, ties sharing the middle: what
+    // percentiles() gives, worked out per distinct score (most holes score as their rank pair).
     function strengthOn(b) {
-      const dead = new Uint8Array(52);
+      dead.fill(0);
       for (const c of b) dead[c] = 1;
       for (let i = 0; i < 5; i++) buf[i] = b[i];
       setBoard(buf, 5);
-      let count = 0;
+      eCnt.fill(0, 0, 169);
+      let count = 0, ne = 0;
       for (let k = 0; k < NUM_COMBOS; k++) {
         const a = COMBO_HI[k], c = COMBO_LO[k];
         if (dead[a] || dead[c]) continue;
-        scores[k] = scoreHole(a, c);
-        valid[count++] = k;
+        let e = holeKey(a, c);
+        if (e < 0) { e = 169 + k; eScore[e] = scoreHole(a, c); eCnt[e] = 1; eList[ne++] = e; }
+        else if (eCnt[e]++ === 0) { eScore[e] = scoreHole(a, c); eList[ne++] = e; }
+        entOf[count] = e; live[count++] = k;
       }
-      percentiles(scores, valid, count, tmp);
-      const out = new Float32Array(NUM_COMBOS).fill(-1);
-      for (let i = 0; i < count; i++) out[valid[i]] = tmp[valid[i]];
+      // Entries in score order (scores are below 2^24, entries below 2048).
+      for (let j = 0; j < ne; j++) eKeys[j] = eScore[eList[j]] * 2048 + eList[j];
+      const sorted = eKeys.subarray(0, ne).sort();
+      const denom = Math.max(1, count - 1);
+      let i = 0, j = 0;
+      while (j < ne) {
+        const s = eScore[sorted[j] % 2048];
+        let c = 0, j2 = j;
+        while (j2 < ne && eScore[sorted[j2] % 2048] === s) { c += eCnt[sorted[j2] % 2048]; j2++; }
+        const p = (i + (c - 1) / 2) / denom;
+        for (let x = j; x < j2; x++) eP[sorted[x] % 2048] = p;
+        i += c;
+        j = j2;
+      }
+      const out = newTable();
+      for (let x = 0; x < count; x++) out[live[x]] = eP[entOf[x]];
       return out;
+    }
+    // Tables (-1 for dead holes) come out of chunks of 64: one allocation instead of one per table.
+    let chunk = null, chunkAt = 64;
+    function newTable() {
+      if (chunkAt === 64) { chunk = new Float32Array(64 * NUM_COMBOS).fill(-1); chunkAt = 0; }
+      return chunk.subarray(NUM_COMBOS * chunkAt, NUM_COMBOS * ++chunkAt);
     }
     // River strengths for a 4-card board plus x (y < 0), or a flop plus x and y.
     function river(x, y) {
@@ -2039,22 +2112,25 @@ function ENGINE() {
         ['for', 'j', I(0), I(52), 1, stf(at('cum', 'j', 3), ['f64', 0]), stf(at('all', 'j', 3), ['f64', 0])],
         ['set', 'tt', ['f64', 0]],
         ['for', 'j', I(0), 'no', 1,
-          ['set', 'x', ldf(at('r', ldi(at('xo', 'j', 2)), 3))], ['set', 'tt', add('tt', 'x')],
-          ['set', 'p', at('all', ldu8(['i32.add', 'xh', 'j']), 3)], stf('p', add(ldf('p'), 'x')),
-          ['set', 'p', at('all', ldu8(['i32.add', 'xl', 'j']), 3)], stf('p', add(ldf('p'), 'x'))],
+          ['set', 'x', ldf(at('r', ldi(at('xo', 'j', 2)), 3))],
+          ['if', ['f64.ne', 'x', ['f64', 0]], [['set', 'tt', add('tt', 'x')],
+            ['set', 'p', at('all', ldu8(['i32.add', 'xh', 'j']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'p', at('all', ldu8(['i32.add', 'xl', 'j']), 3)], stf('p', add(ldf('p'), 'x'))]]],
         ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cT', ['f64', 0]],
         ['while', ['i32.lt_s', 'b', 'nt'],
           ['set', 's', ldi(at('ts', 'b', 2))],
           ['while', ['i32.lt_s', ldi(at('xs', 'a', 2)), 's'],
-            ['set', 'x', ldf(at('r', ldi(at('xo', 'a', 2)), 3))], ['set', 'cT', add('cT', 'x')],
-            ['set', 'p', at('cum', ldu8(['i32.add', 'xh', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
-            ['set', 'p', at('cum', ldu8(['i32.add', 'xl', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a', 2)), 3))],
+            ['if', ['f64.ne', 'x', ['f64', 0]], [['set', 'cT', add('cT', 'x')],
+              ['set', 'p', at('cum', ldu8(['i32.add', 'xh', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+              ['set', 'p', at('cum', ldu8(['i32.add', 'xl', 'a']), 3)], stf('p', add(ldf('p'), 'x'))]],
             ['set', 'a', ['i32.add', 'a', I(1)]]],
           ['set', 'a2', 'a'], ['set', 'gT', ['f64', 0]],
           ['while', ['i32.eq', ldi(at('xs', 'a2', 2)), 's'],
-            ['set', 'x', ldf(at('r', ldi(at('xo', 'a2', 2)), 3))], ['set', 'gT', add('gT', 'x')],
-            ['set', 'p', at('grp', ldu8(['i32.add', 'xh', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
-            ['set', 'p', at('grp', ldu8(['i32.add', 'xl', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a2', 2)), 3))],
+            ['if', ['f64.ne', 'x', ['f64', 0]], [['set', 'gT', add('gT', 'x')],
+              ['set', 'p', at('grp', ldu8(['i32.add', 'xh', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+              ['set', 'p', at('grp', ldu8(['i32.add', 'xl', 'a2']), 3)], stf('p', add(ldf('p'), 'x'))]],
             ['set', 'a2', ['i32.add', 'a2', I(1)]]],
           ['while', ['i32.eq', ldi(at('ts', 'b', 2)), 's'],
             ['set', 'h', ldu8(['i32.add', 'th', 'b'])], ['set', 'l', ldu8(['i32.add', 'tl', 'b'])],
@@ -2156,11 +2232,12 @@ function ENGINE() {
           const reach = (slot) => [
             ['set', 'xi', ldi(at('xo', slot, 2))], ['set', 'x', ldf(at('r', 'xi', 3))], ['set', 'k', ldf(at('kap', 'xi', 3))],
             ['set', 'xa', mul('x', 'k')], ['set', 'xb', mul('x', sub(['f64', 1], 'k'))]];
-          const add3 = (slot, tA, tB, tR, sA, sB, sR) => [
+          // A hand with no reach adds +-0 everywhere, which changes nothing: skipped.
+          const add3 = (slot, tA, tB, tR, sA, sB, sR) => [['if', ['f64.ne', 'x', ['f64', 0]], [
             ['set', sA, add(sA, 'xa')], ['set', sB, add(sB, 'xb')], ['set', sR, add(sR, 'x')],
             ...[[tA, 'xa'], [tB, 'xb'], [tR, 'x']].flatMap(([t, v]) => [
               ['set', 'p', at(t, ldu8(['i32.add', 'xh', slot]), 3)], stf('p', add(ldf('p'), v)),
-              ['set', 'p', at(t, ldu8(['i32.add', 'xl', slot]), 3)], stf('p', add(ldf('p'), v))])];
+              ['set', 'p', at(t, ldu8(['i32.add', 'xl', slot]), 3)], stf('p', add(ldf('p'), v))])]]];
           return [
             ['for', 'j', I(0), 'no', 1, ...reach('j'), ...add3('j', 'lA', 'lB', 'lR', 'ttA', 'ttB', 'ttR')],
             ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cTA', ['f64', 0]], ['set', 'cTB', ['f64', 0]], ['set', 'cTR', ['f64', 0]],
@@ -5890,7 +5967,7 @@ function ENGINE() {
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
     // For tests.
-    _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax, preflopMulti, classIndex: (n) => CLASS_NAMES.indexOf(n), fieldStats, foldAtSize, computeStats },
+    _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax, preflopMulti, classIndex: (n) => CLASS_NAMES.indexOf(n), fieldStats, foldAtSize, computeStats, sortByValue, sortByScore },
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

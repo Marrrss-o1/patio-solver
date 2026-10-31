@@ -1058,6 +1058,25 @@ test('tracker passes chips committed and behind for side pots', () => {
 // ---------------------------------------------------------------------------
 // WebAssembly kernels: the same numbers as the JS loops
 // ---------------------------------------------------------------------------
+test('sorts: the radix and packed sorts give the stable comparator order', () => {
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+  const pools = [[0, -0, 0.5, 0.25, 1, -1, Infinity, -Infinity, 1e-300, -1e-300, 3.5, 0.1 + 0.2, 0.3], [0, 1, 2]];
+  for (let trial = 0; trial < 300; trial++) {
+    const n = 1 + Math.floor(rnd() * 1326);
+    const score = new Float64Array(1326), pool = pools[trial % 2];
+    for (let k = 0; k < 1326; k++) score[k] = trial % 3 === 2 ? rnd() * 2 - 1 : pool[Math.floor(rnd() * pool.length)];
+    const list = [];
+    for (let k = 0; k < 1326 && list.length < n; k++) if (rnd() < 0.8) list.push(k);
+    const want = list.slice().sort((a, b) => score[a] - score[b]);
+    assert.deepStrictEqual(Array.from(E._pf.sortByValue(list, score)), want);
+    const ints = Int32Array.from(score, (x) => (isFinite(x) ? Math.floor(Math.abs(x) * 1e6) : 7) % (1 << 24));
+    assert.deepStrictEqual(Array.from(E._pf.sortByScore(list, ints)), list.slice().sort((a, b) => ints[a] - ints[b]));
+  }
+  const nan = new Float64Array([0.5, NaN, 0.1]);
+  assert.deepStrictEqual(Array.from(E._pf.sortByValue([0, 1, 2], nan)), [0, 1, 2].sort((a, b) => nan[a] - nan[b]));
+});
+
 test('kernels: river, preflop, turn and flop solves give bit-identical results with and without WebAssembly', () => {
   if (!E.kernelsActive()) { console.log('     (no WebAssembly SIMD here, JS loops only)'); return; }
   const spots = [

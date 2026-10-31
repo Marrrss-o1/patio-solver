@@ -27,6 +27,9 @@ function blank() {
     // Facing a bet by its size (bet / pot before it): small <45%, medium 45-85%, large >85%.
     vs: { small: { fold: 0, call: 0, raise: 0 }, medium: { fold: 0, call: 0, raise: 0 }, large: { fold: 0, call: 0, raise: 0 } },
     betPct: [], raiseRatio: [], cbetOpp: 0, cbet: 0, xrOpp: 0, xr: 0, donkOpp: 0, donk: 0,
+    // Sizing: preflop re-raises (facing a raise) and raises after the flop as min-raises / all-ins / other (with
+    // their to / current-bet ratio), bets after the flop as min-bets (one big blind) or log(fraction of the pot).
+    rrN: 0, rrMin: 0, rrShove: 0, praN: 0, praMin: 0, praShove: 0, praOther: [], betN: 0, minBetN: 0, betLog: [], betLogPot: [],
     sawFlop: 0, wtsd: 0, showdowns: 0,
     // Shown hands: strength (percentile vs all hands, no draws) on each street they acted.
     shows: [],
@@ -79,10 +82,17 @@ function addLog(prof, h, bb, opts) {
   const seen = {};
   let raises = 0, lastTo = bb, pfRaiser = null, opener = null;
   const preDone = {};
+  // Sizing of a raise facing a bet: min-raise (adds no more than the last raise did), all-in, or other.
+  const sizing = (e, cur, inc) => (e.stack != null && e.amt >= e.stack - 1e-9 ? 'shove' : e.to - cur <= inc + 1e-9 ? 'min' : 'other');
+  let curPre = bb, incPre = bb;
   for (const e of h.log) {
     if (e.st !== 'pre') break;
     if (e.act === 'sb' || e.act === 'bb') continue;
     const t = (e.who !== heroName || opts.includeHero) ? prof[e.who] : null;
+    if ((e.act === 'raise' || e.act === '3bet') && e.to > curPre) {
+      if (t && curPre > bb && e.facing > 0) { const k = sizing(e, curPre, incPre); t.rrN++; if (k === 'min') t.rrMin++; else if (k === 'shove') t.rrShove++; }
+      incPre = Math.max(incPre, e.to - curPre); curPre = e.to;
+    }
     const first = !preDone[e.who];
     preDone[e.who] = true;
     if (t && first) t.pfLogHands++;
@@ -114,11 +124,22 @@ function addLog(prof, h, bb, opts) {
   }
   // Postflop: sizes, facing-size reactions, c-bets, check-raises, donks.
   const checked = {};
-  let street = null, betMade = false, flopBet = false;
+  let street = null, betMade = false, flopBet = false, cur = 0, inc = bb;
   for (const e of h.log) {
     if (e.st === 'pre') continue;
-    if (e.st !== street) { street = e.st; betMade = false; for (const k of Object.keys(checked)) delete checked[k]; }
+    if (e.st !== street) { street = e.st; betMade = false; cur = 0; inc = bb; for (const k of Object.keys(checked)) delete checked[k]; }
     const t = (e.who !== heroName || opts.includeHero) ? prof[e.who] : null;
+    if ((e.act === 'bet' || e.act === 'raise') && e.to > cur) {
+      if (t && cur === 0) {
+        t.betN++;
+        if (e.to <= bb + 1e-9) t.minBetN++;
+        else if (e.potPct > 0) { const y = Math.log(Math.min(BET_CAP, e.potPct / 100)); t.betLog.push(y); t.betLogPot.push(Math.log(Math.max(1, e.pot / bb))); }
+      } else if (t && e.facing > 0) {
+        const k = sizing(e, cur, inc); t.praN++;
+        if (k === 'min') t.praMin++; else if (k === 'shove') t.praShove++; else t.praOther.push(r2(e.to / cur));
+      }
+      inc = Math.max(inc, e.to - cur); cur = e.to;
+    }
     if (t) {
       if ((e.act === 'bet') && e.potPct != null) t.betPct.push(Math.min(BET_CAP, e.potPct / 100));
       if (e.act === 'raise' && e.facing > 0) t.raiseRatio.push(r2(e.to / Math.max(1, e.to - e.amt + e.facing)));
@@ -174,6 +195,21 @@ function summarize(t) {
   s.sdRiverBet = mean(rb); s.sdRiverBetN = rb.length;
   s.sdRiverCall = mean(rc); s.sdRiverCallN = rc.length;
   s.sdBluffShare = bets.length ? bets.filter((x) => x < 0.45).length / bets.length : null; s.sdBetsN = bets.length;
+  s.rrMinShare = ratio(t.rrMin, t.rrN); s.rrShoveShare = ratio(t.rrShove, t.rrN); s.rrN = t.rrN;
+  s.raiseMinShare = ratio(t.praMin, t.praN); s.raiseShoveShare = ratio(t.praShove, t.praN); s.raiseN = t.praN; s.raiseOtherRatio = mean(t.praOther);
+  s.minBetShare = ratio(t.minBetN, t.betN); s.betN = t.betN;
+  const bl = t.betLog, bm = mean(bl);
+  s.betLogSd = bl.length > 2 ? Math.sqrt(bl.reduce((a, x) => a + (x - bm) ** 2, 0) / (bl.length - 1)) : null; s.betLogN = bl.length;
+  // Bet size against pot size (log fraction of the pot on log pot in big blinds): friends bet about pot in small
+  // pots and a fifth of it in big ones (slope about -0.5); the spread left over is betSizeResid.
+  s.betSizeSlope = null; s.betSizeResid = null;
+  const xs = t.betLogPot;
+  if (xs.length > 5 && xs.length === bl.length) {
+    const mx = mean(xs);
+    let sxy = 0, sxx = 0, syy = 0;
+    for (let i = 0; i < xs.length; i++) { sxy += (xs[i] - mx) * (bl[i] - bm); sxx += (xs[i] - mx) ** 2; syy += (bl[i] - bm) ** 2; }
+    if (sxx > 0) { s.betSizeSlope = sxy / sxx; s.betSizeResid = Math.sqrt(Math.max(0, syy - (sxy * sxy) / sxx) / (xs.length - 2)); }
+  }
   return s;
 }
 

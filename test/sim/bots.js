@@ -145,6 +145,7 @@ const HOME_DEFAULT = {
   openBB: 4.4,       // open size in big blinds (plus one per limper)
   openShove: 0,      // share of their open-raises that are all-in instead
   rrMin: 0.5,        // share of re-raises that are min-raises (min-raise wars); the rest ~2.2x
+  rrShove: 0,        // share of re-raises that are all-in (before rrMin splits the rest)
   // Postflop, per street [flop, turn, river]; thresholds are made-hand percentiles vs all hands
   val: [0.78, 0.8, 0.8],      // value-bet threshold when checked to
   bluff: [0.12, 0.1, 0.12],   // bets with nothing (heads-up; divided by opponents)
@@ -161,12 +162,18 @@ const HOME_DEFAULT = {
   sizeTell: 0.6,              // bigger bets with stronger hands (log-size per strength)
   minBet: 0.15,               // share of bets that are one big blind
   raiseX: 2.2,                // postflop raise to this multiple of the bet
+  raiseMin: 0,                // share of postflop raises that are min-raises
+  raiseShove: 0,              // share of postflop raises that are all-in
+  sizeSd: 0.3,                // spread of bet sizes (log scale) around their usual size
+  potSlope: 0,                // log bet size per log pot size (friends: about -0.5, pot-size bets in small pots, small ones in big)
   cbet: 1.8,                  // bluff multiplier on the flop as the preflop raiser
   mw: 0.035,                  // thresholds rise this much per extra opponent
   w: 0.05,                    // softness of the betting thresholds
   wc: 0.05,                   // softness of calling: larger = calls with weaker hands and folds some better ones
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
+// With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
+const SIZES_WIDE = [0.08, 0.12, 0.18, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2];
 
 function homeBot(params) {
   const P = Object.assign({}, HOME_DEFAULT, params || {});
@@ -215,7 +222,11 @@ function homeBot(params) {
           const big = Math.round(v.cur * 2.3);
           const shove = minTo >= 0.4 * allinTo || big >= 0.45 * allinTo;
           if (shove) out.push({ t: 'raise', to: allinTo, p: pRR });
-          else { out.push({ t: 'raise', to: minTo, p: pRR * P.rrMin }); out.push({ t: 'raise', to: big, p: pRR * (1 - P.rrMin) }); }
+          else {
+            const sh = P.rrShove || 0;
+            if (sh > 0) out.push({ t: 'raise', to: allinTo, p: pRR * sh });
+            out.push({ t: 'raise', to: minTo, p: pRR * (1 - sh) * P.rrMin }); out.push({ t: 'raise', to: big, p: pRR * (1 - sh) * (1 - P.rrMin) });
+          }
         }
         out.push({ t: 'call', p: pCont - (v.raises < 8 ? pRR : 0) });
         out.push({ t: 'fold', p: 1 - pCont });
@@ -235,11 +246,12 @@ function homeBot(params) {
         else if (air) pb = P.bluff[si] * (si === 0 && v.pfAgg === v.seat ? P.cbet : 1) / (1 + k);
         const pBet = clamp(pv + (1 - pv) * pb, 0, 1);
         // Bet size: a min-bet sometimes, otherwise around their usual size, bigger when stronger.
-        const target = Math.log(P.betSize) + P.sizeTell * (hp - 0.7);
-        let ws = SIZES.map((s) => Math.exp(-Math.pow(Math.log(s) - target, 2) / (2 * 0.3 * 0.3)));
+        const target = Math.log(P.betSize) + P.sizeTell * (hp - 0.7) + (P.potSlope ? P.potSlope * (Math.log(Math.max(1, pot / bb)) - Math.log(12)) : 0);
+        const sd = P.sizeSd, grid = sd > 0.45 || P.potSlope ? SIZES_WIDE : SIZES;
+        let ws = grid.map((s) => Math.exp(-Math.pow(Math.log(s) - target, 2) / (2 * sd * sd)));
         const tw = ws.reduce((a, b) => a + b, 0); ws = ws.map((x) => x / tw);
         const out = [{ t: 'raise', to: bb, p: pBet * P.minBet }];
-        SIZES.forEach((s, i) => out.push({ t: 'raise', to: Math.max(bb, Math.round(s * pot)), p: pBet * (1 - P.minBet) * ws[i] }));
+        grid.forEach((s, i) => out.push({ t: 'raise', to: Math.max(bb, Math.round(s * pot)), p: pBet * (1 - P.minBet) * ws[i] }));
         out.push({ t: 'check', p: 1 - pBet });
         return out;
       }
@@ -252,11 +264,13 @@ function homeBot(params) {
       const pRb = v.raises < 3 ? P.bluffRaise * (strongDraw ? 2 : air ? 1 : 0.5) : 0;
       const pRaise = pRv + (1 - pCont) * pRb;
       const to = Math.round(v.cur * P.raiseX);
-      return [
-        { t: 'raise', to: to >= 0.6 * allinTo ? allinTo : to, p: pRaise },
-        { t: 'call', p: pCont - pRv },
-        { t: 'fold', p: (1 - pCont) * (1 - pRb) },
-      ];
+      const out = [{ t: 'call', p: pCont - pRv }, { t: 'fold', p: (1 - pCont) * (1 - pRb) }];
+      // Raise sizes: min-raises, all-ins and bigger raises in the friends' mix (the old bots: always raiseX).
+      const mn = P.raiseMin || 0, sh = P.raiseShove || 0, minTo = v.cur + v.lastRaise;
+      if (mn > 0) out.push({ t: 'raise', to: minTo >= 0.6 * allinTo ? allinTo : minTo, p: pRaise * mn });
+      if (sh > 0) out.push({ t: 'raise', to: allinTo, p: pRaise * sh });
+      out.unshift({ t: 'raise', to: to >= 0.6 * allinTo ? allinTo : to, p: pRaise * (1 - mn - sh) });
+      return out;
     },
   };
 }

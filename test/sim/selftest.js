@@ -1,5 +1,6 @@
 // Checks the simulator itself: hand logs identical to the real tracker's, chips conserved, side pots,
-// AIVAT corrections with zero mean, and results that do not depend on the number of workers.
+// AIVAT corrections with zero mean, results that do not depend on the number of workers, and tuning knobs that
+// still match the engine.
 //   node test/sim/selftest.js
 'use strict';
 const assert = require('assert');
@@ -82,5 +83,18 @@ for (const n of [2, 4]) {
   const a = JSON.stringify([0, 1, 2, 3].map((b) => playBlock(cfg, b).deals));
   const b = JSON.stringify([3, 1, 0, 2].map((x) => playBlock(cfg, x)).sort((x, y) => x.block - y.block).map((x) => x.deals));
   ok(a === b, 'results depend on block order');
+}
+// 5. Tuning knobs (knobs.js): every edit still matches the engine, and each knob at its default value leaves the
+//    engine's numbers as they are (same text, or a multiply by 1).
+{
+  const fs = require('fs');
+  const { KNOBS, applyKnobs } = require('./knobs.js');
+  const code = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'engine.js'), 'utf8');
+  for (const [k, knob] of Object.entries(KNOBS)) {
+    const out = applyKnobs(code, { [k]: knob.def });
+    ok(out === code || out.replace(/ \* 1,/g, ',') === code, `knob ${k} at its default changes the engine`);
+  }
+  let threw = false; try { applyKnobs(code, { nope: 1 }); } catch (e) { threw = true; }
+  ok(threw, 'unknown knob accepted');
 }
 console.log(`sim selftest: ${checks} checks passed (${path.basename(__filename)})`);
