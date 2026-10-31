@@ -151,7 +151,8 @@ const HOME_DEFAULT = {
   semi: 0.45,                 // bets a strong draw (8+ outs) when checked to
   slow: 0.25,                 // checks a monster (98th percentile+) instead of betting
   call: [0.5, 0.55, 0.6],     // continue threshold facing a half-pot bet
-  callSlope: 0.12,            // threshold rise per 1x pot of bet size
+  callSlope: 0.12,            // threshold rise per 1x pot of bet size, up to sizeCap (fitted, pooled, to folds by size)
+  sizeCap: 0.65,              // bets above this share of the pot fold no more often (real friends: flat from ~2/3 pot)
   drawCall: 0.85,             // continues a strong draw facing up to a pot-size bet
   raise: [0.9, 0.92, 0.93],   // raise threshold facing a bet
   raiseProb: 0.55,            // raises this often above the threshold
@@ -243,7 +244,7 @@ function homeBot(params) {
         return out;
       }
       const f = toCall / Math.max(1, pot - toCall);
-      const tc = P.call[si] + P.callSlope * (Math.min(f, 2) - 0.5) + P.mw * k + (v.raises >= 2 ? 0.06 : 0);
+      const tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + P.mw * k + (v.raises >= 2 ? 0.06 : 0);
       let pCont = sig((hp - tc) / P.wc);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);
       else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? P.drawCall / 2 : 0.1);
