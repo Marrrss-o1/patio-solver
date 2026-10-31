@@ -303,7 +303,7 @@
       raise: { mu: { all: 0.19, flop: 0.21, turn: 0.14, river: 0.244, other: 0.19 }, tau: 0.35, tauC: 0.3 },
       rates: {
         threeBet: [0.165, 10], callBig: [0.51, 6], foldAfterAgg: [0.351, 8], foldCbet: [0.348, 5], wtsd: [0.277, 5],
-        f3bet: [0.133, 5], fourBet: [0.5, 5], limp: [0.572, 6],
+        f3bet: [0.133, 5], fourBet: [0.5, 5], limp: [0.572, 6], limpFold: [0.52, 6],
       },
       // Response to a single open raise by its size (raise-to <= 2.5bb, <= 3.5bb, more):
       // continue (call or 3-bet) and 3-bet, as shares of their chances to respond.
@@ -370,7 +370,7 @@
     TABLE_PRIORS[k] = { vpip: p.vpip.mu.all, pfr: p.vpip.mu.all * p.pfr.mu.all, af: p.af, betFreq: p.bet.mu.all, foldToBet: ftb, raiseFreq: (1 - ftb) * p.raise.mu.all };
   }
 
-  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, aggVsN: 0, aggVsFold: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0, limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0 };
+  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, aggVsN: 0, aggVsFold: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0, limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0, limpFaceN: 0, limpFold: 0 };
   const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
@@ -635,6 +635,8 @@
     stats.fourBet = clamp(betaRate(t.pf4bet, t.f3betOpp, R.fourBet[0], R.fourBet[1]), 0.15, 0.95);
     stats.foldTo3bet = betaRate(t.f3bet, t.f3betOpp, R.f3bet[0], R.f3bet[1]);
     stats.limp = betaRate(t.limp, t.limpOpp, R.limp[0], R.limp[1]);
+    // Folding to a raise after limping (varies a lot: 29% to 86% among the friends).
+    stats.limpFold = betaRate(t.limpFold, t.limpFaceN, R.limpFold ? R.limpFold[0] : 0.5, R.limpFold ? R.limpFold[1] : 6);
     // How often they call (or re-raise) a big preflop raise or shove. Home-game players call
     // shoves much wider than the bet-size math says, so the prior follows their looseness.
     const cbPrior = clamp(R.callBig[0] * Math.sqrt(vpip / Math.max(0.05, prior.vpip.mu.all)), 0.18, 0.6);
@@ -1095,7 +1097,7 @@
     return w;
   }
 
-  const WAR_MIX = 1;
+  const WAR_MIX = 2.2;
   function preflopRange(stats, action, sizePre) {
     const cw = new Float64Array(169);
     let raiseWidth = 1; // re-raising range width, for the floor below
@@ -1113,12 +1115,15 @@
       else if (action === '5bet') w = Math.max(0.015, w * fb * fb);
       cw.set(topClassWeights(w));
       raiseWidth = w;
-      // Raise wars (4-bets and 5-bets) are half premiums, half ordinary hands: of 9 hands shown
-      // from them in the logs, 4 were AA-JJ and 5 were K4s, Q9o, KTo, QJo and A8o. So the
-      // narrow range gets the same mass again spread over the hands they play.
+      // Raise wars (4-bets and 5-bets) mix premiums with ordinary hands: of 9 hands shown from
+      // them in the logs, 4 were AA-JJ and 5 were K4s, Q9o, KTo, QJo and A8o, nearly all from the
+      // players who raise a lot of what they play. So the narrow range gets up to the same mass
+      // again spread over the hands they play, scaled by how aggressive their preflop play is
+      // (PFR / VPIP): a passive player's raise war is mostly premiums.
       if (action === '4bet' || action === '5bet') {
         const v = Math.max(0.05, stats.vpip), ord = topClassWeights(v);
-        for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + WAR_MIX * (w / v) * ord[i]);
+        const mix = clamp(WAR_MIX * stats.pfr / v, 0.1, 1);
+        for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + mix * (w / v) * ord[i]);
       }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
@@ -1317,7 +1322,10 @@
     // Big bets are seldom made at random: on bets and raises the noise shrinks as the size grows.
     const aggr = action === 'bet' || action === 'raise';
     const noise = aggr && stats.rangeNoiseAgg != null ? stats.rangeNoiseAgg : stats.rangeNoise;
-    const eps = noise > 0 ? Math.min(0.9, noise * (aggr && size > 0 ? clamp(0.6 / size, 0.4, 1.3) : 1)) : 0;
+    let eps = noise > 0 ? Math.min(0.9, noise * (aggr && size > 0 ? clamp(0.6 / size, 0.4, 1.3) : 1)) : 0;
+    // Turn and river raises are seldom random, even small ones: 8 of 10 shown river raises in the
+    // logs were strong hands. A quarter of the noise, and no extra for a small raise.
+    if (action === 'raise' && st.street >= 4) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
     if (eps > 0) {
       let sw = 0, sp = 0;
       for (let k = 0; k < NUM_COMBOS; k++) if (W[k] > 0) { sw += W[k]; sp += W[k] * P[k]; }
@@ -1519,7 +1527,8 @@
         return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
       const raised = PRE_RAISED.test(opp.actions.pre || '');
-      const base = raised ? 0.55 : 0.5;
+      // Callers (mostly limpers) continue at their learned rate against a raise.
+      const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const floor = big * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
       return { cont: clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };

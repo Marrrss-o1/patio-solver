@@ -56,6 +56,8 @@
       // Limping (calling the big blind first in), folding to a 3-bet after raising.
       // Re-raising again (4-bet or more) after raising and facing a re-raise; opportunities are f3betOpp.
       limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0,
+      // Limpers facing a raise: how often they fold.
+      limpFaceN: 0, limpFold: 0,
       // Donk bets (leading the flop into the preflop raiser) and check-raises (any street after the flop).
       donkOpp: 0, donk: 0, xrOpp: 0, xr: 0,
       // Pots won after a showdown and without one (from stack changes between hands).
@@ -526,7 +528,8 @@
         p.ms.push({ st: key, act: kind, ms: last.ms });
       }
       if (h.street === 0) {
-        if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') t.limp++; }
+        if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') { t.limp++; p.limped = true; } }
+        else if (p.limped && !p.limpFaced && h.preRaises >= 1 && facing > 0) { p.limpFaced = true; t.limpFaceN++; if (kind === 'fold') t.limpFold++; }
         if (h.preRaises >= 2 && facing > 0 && !p.faced3bet && p.seq.pre.slice(0, -1).some((k) => k === 'raise' || k === '3bet')) {
           p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++; else if (kind === 'raise' || kind === '3bet') t.pf4bet++;
         }

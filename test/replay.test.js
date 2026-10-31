@@ -410,6 +410,28 @@ test('reads: players who re-raised preflop fold less after the flop', () => {
   assert.ok(E.predictAction(flat, Object.assign({ reraised: true }, d)).fold < E.predictAction(flat, d).fold);
 });
 
+test('reads: limpers facing a raise are counted, and their fold rate is learned', () => {
+  const t = new T({ players: {} });
+  const snap = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' },
+    { id: 3, authUserId: 'W', name: 'Wes', stack: 200, posType: 's3', playState: 'playing' }] };
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's3' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 3, actionType: 'call', makeBetValue: 2 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 9 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'fold', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 3, actionType: 'fold', makeBetValue: 0 }],
+  ]) t.handle(ev, data, snap);
+  const w = t.db.players.W.tally;
+  assert.deepStrictEqual([w.limp, w.limpFaceN, w.limpFold], [1, 1, 1]);
+  const folder = E.computeStats(Object.assign(T.blankTally(), { limpFaceN: 12, limpFold: 11 }), 'typical');
+  const sticky = E.computeStats(Object.assign(T.blankTally(), { limpFaceN: 12, limpFold: 2 }), 'typical');
+  assert.ok(folder.limpFold > 0.65 && sticky.limpFold < 0.35, folder.limpFold + ' ' + sticky.limpFold);
+});
+
 test('reads: range noise keeps unusual lines possible, and is learned from showdowns', () => {
   const board = C('6d As Qc');
   const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
