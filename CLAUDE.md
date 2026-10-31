@@ -78,6 +78,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `amt` added, `to`, `pot` before it, `facing`, `stack` before it, `potPct` for bets/raises, blinds as `sb`/`bb`),
   each player's starting `stack`, `advice` (pot, price, equity, hand, top 5 options with EVs, reads, hero's actual
   action in `did` and `followed`), and `net`/`heroNet`/`heroNetBB`, filled in from the next hand's starting stacks.
+- Preflop shoves and big raises (8+ bb): opponents continue at least at `stats.callBig` (tally `pfBigOpp`/`pfBigCall`,
+  prior 0.75 x VPIP, clamped 0.18-0.45). The old size math had them folding 85%+ to a shove, so it shoved 9-5 at 25bb.
+  Players already in the pot (limpers, raisers) get a higher floor. Hand log players carry `fit` and `accuracy`
+  (`accuracySummary` in tracker.js); advice `reads` carry trust, accuracy, strengthBias and callBig.
+- Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
+  (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state] }`), for the newest 100 hands (60 on the
+  userscript, whose localStorage is shared with the game; `save` drops raw first when full). Both hooks forward all
+  `game:`/`player:game:`/`admin:game:` events and `game_log` chat for this; the tracker ignores unknown ones.
+  Replay a raw hand by feeding `d` back through `handle`.
+- Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
+  changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
+  `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
 - Showdown reads only see hands that were shown, so they over-sample hands that got called. Bluffs that won
   uncontested are invisible unless the player shows voluntarily.
 - Tally format (tracker.js `blankTally`): flat counts plus `st` (per street), `vs` (reaction by facing-bet size),
