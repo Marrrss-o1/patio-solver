@@ -229,6 +229,36 @@ test('showdown hand: hero c-bet is counted as hero being the preflop raiser', ()
   assert.strictEqual(x.input.opponents[0].pfAggressor, false);
 });
 
+test('hand log: shown hands carry how well the read fit, and running accuracy', () => {
+  const t = new T({ players: {} });
+  t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
+  for (const m of sd) {
+    if (m.ev === 'hook:attached') { t.snap = m.snap; continue; }
+    t.handle(m.ev, m.data, m.snap);
+  }
+  const v = t.db.history[0].players.find((p) => !p.hero);
+  assert.ok(v.fit && v.fit.top >= 0 && v.fit.top <= 1, JSON.stringify(v.fit));
+  assert.strictEqual(v.accuracy.n, 1);
+});
+
+test('preflop: big raises faced and called are counted', () => {
+  const snap = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 100, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 100, posType: 's2', playState: 'playing' }] };
+  const t = new T({ players: {} });
+  t.snap = snap;
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 29 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 28 }],
+  ]) t.handle(ev, data, snap);
+  const tally = t.db.players.V.tally;
+  assert.strictEqual(tally.pfBigOpp, 1);
+  assert.strictEqual(tally.pfBigCall, 1);
+});
+
 test('old saved reads get the new fields', () => {
   const db = { players: { V: { name: 'Vic', tally: { pfFold: 3, pfCall: 2, pfRaise: 1, check: 4, bet: 2, call: 1, raise: 0, fold: 3 } } } };
   const t = replay(sd, db).t.db.players.V.tally;
@@ -283,6 +313,53 @@ test('engine: 3-bet range follows the observed 3-bet rate', () => {
   const loose = E.computeStats(tallyWith({ pf3betOpp: 30, pf3bet: 9 }), 'typical');
   const width = (st) => E.preflopRange(st, '3bet').reduce((a, b) => a + b, 0);
   assert.ok(width(loose) > 2 * width(tight));
+});
+
+test('more tendencies: check-raise, think time, pots won without showdown, raw events', () => {
+  const mk = (h, v) => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: h, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: v, posType: 's2', playState: 'playing' }] });
+  const t = new T({ players: {} });
+  const snap = mk(100, 100);
+  t.snap = snap;
+  const evs = [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'call', makeBetValue: 1 }],
+    ['game:player_turn_started', { playerID: 2 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['game:stage_began', { stageType: 'flop' }],
+    ['game:cards_deal_to_stack', [{ emitData: { stackID: 'community_stack', cardData: { uniqueID: 1, suite: 'spades', value: '4' } } }]],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 4 }],
+    ['game:some_new_event', { x: 1 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'raise', makeBetValue: 12 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'fold', makeBetValue: 0 }],
+    ['game:stage_began', { stageType: 'showdown' }],
+    ['game:game_ended', {}],
+  ];
+  for (const [ev, data] of evs) t.handle(ev, data, snap);
+  t.handle('game:stage_began', { stageType: 'set_blinds' }, mk(94, 106));
+  const tally = t.db.players.V.tally;
+  assert.ok(Math.abs(tally.xrOpp - 0.99) < 1e-9 && Math.abs(tally.xr - 0.99) < 1e-9, `xr ${tally.xr}/${tally.xrOpp}`);
+  assert.ok(Math.abs(tally.wonNoSD - 0.99) < 1e-9, 'won without showdown ' + tally.wonNoSD);
+  assert.ok(tally.tt.check.n > 0.9, 'think time counted');
+  const e = t.db.history[0];
+  assert.deepStrictEqual(e.net, { Hero: -6, Vic: 6 });
+  assert.ok(e.raw.some((x) => x.ev === 'game:some_new_event'), 'unknown events are recorded raw');
+  assert.ok(e.raw[0].ev === 'game:stage_began' && e.raw[0].s.length === 2, 'hand starts with the set_blinds snapshot');
+  assert.ok(e.log.find((x) => x.who === 'Vic' && x.act === 'check').ms != null);
+});
+
+test('preflop: no 25bb shove with 9-5 offsuit, but aces still shove', () => {
+  const spot = (h, bb, tally) => E.analyzeSync({ hero: C(h), board: [], pot: 3, toCall: 1, stack: bb * 2, bigBlind: 2, mix: false, seed: 1,
+    heroPosition: 'blinds', inPosition: false, opponents: [{ name: 'V', tally: tally || {}, actions: { pre: 'pending' } }], iterations: 3000 });
+  for (const bb of [20, 25]) assert.notStrictEqual(spot('9d 5c', bb).best.kind, 'allin', bb + 'bb');
+  assert.strictEqual(spot('Ah As', 25).best.kind, 'allin');
+  const caller = E.computeStats(tallyWith({ pfBigOpp: 20, pfBigCall: 16 }), 'typical');
+  const folder = E.computeStats(tallyWith({ pfBigOpp: 20, pfBigCall: 2 }), 'typical');
+  assert.ok(caller.callBig > folder.callBig + 0.3, `${caller.callBig} vs ${folder.callBig}`);
 });
 
 test('engine: a known bluffer is read as bluffing more often', () => {

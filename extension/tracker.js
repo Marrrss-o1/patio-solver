@@ -23,6 +23,8 @@
   }
   const MAX_SHOWS = 40;
   const MAX_HISTORY = 150;
+  // Raw events: kept for the newest RAW_KEEP hands only (about 10 KB a hand).
+  const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
   // Each hand a player is dealt into shrinks their older counts by 1%, so the last
   // hundred or so hands carry most of the weight and reads follow players who change.
   const DECAY = 0.99;
@@ -41,6 +43,16 @@
       pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0,
       // Preflop re-raising: times they faced an open, and how often they 3-bet it.
       pf3betOpp: 0, pf3bet: 0,
+      // Facing a big preflop raise or shove (8+ big blinds to them): times faced, and how often they called or re-raised.
+      pfBigOpp: 0, pfBigCall: 0,
+      // Limping (calling the big blind first in), folding to a 3-bet after raising.
+      limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0,
+      // Donk bets (leading the flop into the preflop raiser) and check-raises (any street after the flop).
+      donkOpp: 0, donk: 0, xrOpp: 0, xr: 0,
+      // Pots won after a showdown and without one (from stack changes between hands).
+      wonSD: 0, wonNoSD: 0,
+      // Think time per action kind: count and total seconds (capped at 60 per action).
+      tt: { check: { n: 0, sum: 0 }, bet: { n: 0, sum: 0 }, call: { n: 0, sum: 0 }, raise: { n: 0, sum: 0 }, fold: { n: 0, sum: 0 } },
       // Continuation bets: preflop raiser's first flop decision, and how others react to it.
       cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0,
       // Per-street action counts (the flat counts above are all streets together).
@@ -61,9 +73,19 @@
     const b = blankTally();
     for (const k of Object.keys(b)) {
       if (t[k] == null) t[k] = b[k];
-      else if (k === 'st' || k === 'vs' || k === 'pos') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
+      else if (k === 'st' || k === 'vs' || k === 'pos' || k === 'tt') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
     }
     return t;
+  }
+  // Read accuracy over a player's shown hands. A fit's `top` is the share of our predicted
+  // range that ranked above the hand they showed (low = we expected hands like it); `hits` counts
+  // shown hands that sat in the likelier half of our range, so a calibrated read hits about half.
+  function accuracySummary(t) {
+    const fits = (t.shows || []).map((x) => x && x.fit).filter((f) => f && f.top != null);
+    if (!fits.length) return null;
+    const hits = fits.filter((f) => f.top < 0.5).length;
+    const avg = (k) => Math.round((fits.reduce((a, f) => a + (f[k] || 0), 0) / fits.length) * 100) / 100;
+    return { n: fits.length, hits, hitRate: Math.round((hits / fits.length) * 100) / 100, avgTop: avg('top'), avgLr: avg('lr') };
   }
   function sizeBucket(f) {
     return f < 0.45 ? 'small' : f < 0.85 ? 'medium' : 'large';
@@ -113,20 +135,23 @@
           stageBet: 0, total: 0, folded: false, allin: false,
           seq: { pre: [], flop: [], turn: [], river: [] },
           pfCat: null, acted: false, faced3: false, cbetSeen: false,
-          agg: [], sizes: {}, shown: [], start: +p.stack || 0,
+          agg: [], sizes: {}, shown: [], start: +p.stack || 0, ms: [],
         };
       }
       this.hand = {
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
         currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
-        finished: false, log: [],
+        finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
       };
+      this.pendingRaw = null;
       this.emit('hand', this.hand);
     }
 
     handle(ev, data, snap) {
       if (snap) this.snap = snap;
+      if (ev === 'game:stage_began' && data && data.stageType === 'set_blinds') this.rawStart = Date.now();
+      this.recordRaw(ev, data, snap);
       const h = this.hand;
       switch (ev) {
         case 'game:stage_began': {
@@ -201,6 +226,7 @@
           this.onAction(data);
           break;
         case 'game:player_turn_started':
+          if (h) h.turnAt[data.playerID] = Date.now();
           if (h && !h.finished) this.emit('turn', { playerID: data.playerID, isHero: data.playerID === this.heroId() });
           break;
         case 'game:player_turn_ended':
@@ -250,11 +276,18 @@
 
       const isHero = p.id === this.heroId();
       const r = isHero ? null : this.record(p.auth, p.name);
+      if (r) this.extraStats(p, r.tally, kind, facing, key);
       if (street === 0) {
         if (r && !p.faced3 && h.preRaises === 1 && kind !== 'check') {
           p.faced3 = true;
           r.tally.pf3betOpp++;
           if (kind === '3bet') r.tally.pf3bet++;
+        }
+        const bb = h.bigBlind || 0;
+        if (r && bb > 0 && p.stageBet - added + facing >= 8 * bb && facing > 0 && !p.facedBig && kind !== 'check') {
+          p.facedBig = true;
+          r.tally.pfBigOpp++;
+          if (kind !== 'fold') r.tally.pfBigCall++;
         }
         if (kind === 'raise' || kind === '3bet') { h.preRaises++; h.pfRaiser = p.id; }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
@@ -329,15 +362,18 @@
         pot: Object.values(h.players).reduce((a, p) => a + p.total, 0),
         advice: (h.advice || []).slice(),
         log: h.log.slice(),
+        raw: h.raw,
         players: Object.values(h.players).map((p) => ({
           name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded, stack: p.start,
-          put: p.total, actions: p.seq, shown: p.shown,
+          put: p.total, actions: p.seq, shown: p.shown, fit: p.fit, accuracy: p.accuracy,
         })),
       };
       h.logEntry = entry;
       const list = this.db.history || (this.db.history = []);
       list.push(entry);
       if (list.length > MAX_HISTORY) list.splice(0, list.length - MAX_HISTORY);
+      const keep = this.rawKeep != null ? this.rawKeep : RAW_KEEP;
+      for (let i = 0; i < list.length - keep; i++) delete list[i].raw;
     }
 
     // Every action with its amount, the pot before it, what the player faced and their stack,
@@ -352,6 +388,7 @@
         pot: r2(potBefore), facing: r2(facing),
       };
       if (isHero) e.hero = true;
+      if (h.turnAt[p.id]) { e.ms = Date.now() - h.turnAt[p.id]; delete h.turnAt[p.id]; }
       if (snapP && snapP.stack != null) e.stack = r2(+snapP.stack);
       if (potBefore > 0 && (kind === 'bet' || kind === 'raise' || kind === '3bet')) e.potPct = Math.round(100 * Math.max(0, added - facing) / (potBefore + facing));
       if (p.allin) e.allin = true;
@@ -362,6 +399,60 @@
       adv.did = kind + (added > 0 ? ' ' + r2(added) : '');
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind) adv.followed = group(adv.kind) === group(kind) || (adv.kind === 'allin' && kind === 'call');
+    }
+
+    // More tendencies, counted before this action updates the hand state:
+    // limps, fold to 3-bet, donk bets, check-raises, and how long they take for each kind of action.
+    extraStats(p, t, kind, facing, key) {
+      const h = this.hand;
+      const last = h.log[h.log.length - 1];
+      if (last && last.ms != null && last.who === p.name) {
+        const tt = t.tt[kind === '3bet' ? 'raise' : kind];
+        if (tt) { tt.n++; tt.sum += Math.min(60, last.ms / 1000); }
+        p.ms.push({ st: key, act: kind, ms: last.ms });
+      }
+      if (h.street === 0) {
+        if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') t.limp++; }
+        if (h.preRaises >= 2 && facing > 0 && !p.faced3bet && p.seq.pre.slice(0, -1).some((k) => k === 'raise' || k === '3bet')) {
+          p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++;
+        }
+        return;
+      }
+      if (h.street === 3 && h.pfRaiser != null && h.pfRaiser !== p.id && !h.flopBet && !p.donkSeen) {
+        const raiser = h.players[h.pfRaiser];
+        if (raiser && !raiser.folded && raiser.seq.flop.length === 0) { p.donkSeen = true; t.donkOpp++; if (kind === 'bet') t.donk++; }
+      }
+      const seqSt = p.seq[key] || [];
+      if (facing > 0 && seqSt.slice(0, -1).includes('check') && !(p.xrSeen || (p.xrSeen = {}))[key]) {
+        p.xrSeen[key] = true; t.xrOpp++; if (kind === 'raise') t.xr++;
+      }
+    }
+
+    // Raw recorder: every game event of the hand with its time and the stacks, so any stat can be
+    // computed later and real hands can be replayed through new solver versions. Snapshots are kept
+    // only where stacks matter, and very large payloads are cut, to fit phone storage.
+    recordRaw(ev, data, snap) {
+      if (ev === 'hook:attached' || ev === 'hook:snapshot') return;
+      const isNewHand = ev === 'game:stage_began' && data && data.stageType === 'set_blinds';
+      const h = this.hand;
+      let list;
+      if (isNewHand) list = this.pendingRaw = [];
+      else if (h) list = h.raw;
+      else return;
+      let d = null;
+      try {
+        const txt = JSON.stringify(data === undefined ? null : data);
+        d = txt && txt.length > RAW_MAX_EVENT ? { cut: txt.length } : JSON.parse(txt);
+      } catch (e) { d = { unserializable: true }; }
+      const t0 = isNewHand ? this.rawStart : h.t0;
+      const rec = { t: Date.now() - (t0 || Date.now()), ev, d };
+      if (snap && (isNewHand || ev === 'game:player_turn_started' || ev === 'game:game_ended' || ev === 'game:stage_began')) {
+        rec.s = (snap.players || []).map((x) => [x.id, x.name, x.stack, x.posType, x.playState]);
+        if (isNewHand) rec.bb = snap.bigBlind;
+      }
+      // Past the cap, keep only the events the tracker itself uses, so chatty extras can't push them out.
+      if (list.length >= RAW_MAX_EVENTS && !/^(game:(stage_began|dealer_updated|small_blind_paid|big_blind_paid|cards?_dealt?_to_|update_card_data|player_turn|game_ended)|player:game:action_taken)/.test(ev)) return;
+      list.push(rec);
     }
 
     // Stacks only update after the pot is paid, so each hand's result is filled in from the
@@ -375,6 +466,12 @@
         if (now && now.stack != null) net[p.name] = Math.round((+now.stack - p.start) * 100) / 100;
       }
       prev.logEntry.net = net;
+      const live = Object.values(prev.players).filter((p) => !p.folded).length;
+      for (const p of Object.values(prev.players)) {
+        if (p.id === this.heroId() || !(net[p.name] > 0)) continue;
+        const r = this.record(p.auth, p.name);
+        if (r) { if (live >= 2) r.tally.wonSD++; else r.tally.wonNoSD++; }
+      }
       const hero = Object.values(prev.players).find((p) => p.id === this.heroId());
       if (hero && net[hero.name] != null) {
         prev.logEntry.heroNet = net[hero.name];
@@ -401,7 +498,14 @@
         if (r.mix) a.mix = r.mix.map((m) => m.label + ' ' + Math.round(m.freq * 100) + '%');
         if (r.solver) a.riverSolve = true;
         if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
-        if (r.opponents) a.reads = r.opponents.map((o) => ({ name: o.name, type: o.type && o.type.label, hands: Math.round(o.stats.hands || 0), bluff: o.bluffChance != null ? r2(o.bluffChance) : undefined }));
+        if (r.opponents) a.reads = r.opponents.map((o) => ({
+          name: o.name, type: o.type && o.type.label, hands: Math.round(o.stats.hands || 0),
+          bluff: o.bluffChance != null ? r2(o.bluffChance) : undefined,
+          trust: o.stats.exploitWeight != null ? r2(o.stats.exploitWeight) : undefined,
+          accuracy: o.stats.accuracy ? { n: o.stats.accuracy.n, hits: o.stats.accuracy.hits, vsGuess: r2(o.stats.accuracy.vsGuess) } : undefined,
+          strengthBias: o.stats.strengthBias ? r2(o.stats.strengthBias) : undefined,
+          callBig: o.stats.callBig != null ? r2(o.stats.callBig) : undefined,
+        }));
       }
       (h.advice || (h.advice = [])).push(a);
     }
@@ -448,11 +552,18 @@
       if (actions.pre === 'pending') actions.pre = 'call';
       const show = {
         cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
-        actions, sizes: Object.assign({}, p.sizes), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
+        actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
       };
       // How well the range we would have put them on matches what they showed.
       if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
       r.tally.shows.push(show);
+      // Hand log: how well this read fit, and the player's running accuracy.
+      if (show.fit) {
+        p.fit = show.fit;
+        p.accuracy = accuracySummary(r.tally);
+        const lp = h.logEntry && h.logEntry.players.find((x) => x.name === p.name && !x.hero);
+        if (lp) { lp.fit = p.fit; lp.accuracy = p.accuracy; }
+      }
       if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
     }
@@ -559,6 +670,7 @@
   }
 
   PatioTracker.blankTally = blankTally;
+  PatioTracker.accuracySummary = accuracySummary;
   PatioTracker.upgradeTally = upgradeTally;
   PatioTracker.cardStr = cardStr;
   if (typeof module !== 'undefined' && module.exports) module.exports = PatioTracker;

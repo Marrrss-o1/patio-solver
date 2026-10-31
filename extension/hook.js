@@ -23,6 +23,13 @@
     'admin:game:game_stopped',
   ]);
 
+  // Other table events are forwarded only so the hand log's raw recorder can keep them
+  // (the tracker ignores them). Lobby-wide traffic is skipped.
+  function recordOnly(ev, data) {
+    if (ev === 'chat_message') return !!(data && data.msgType === 'game_log');
+    return /^(game:|player:game:|admin:game:)/.test(ev);
+  }
+
   function snapshot() {
     const gm = window.GameManager;
     const st = (gm && gm.state) || {};
@@ -60,7 +67,7 @@
     if (!sock || sock === hooked || typeof sock.onAny !== 'function') return;
     hooked = sock;
     sock.onAny((ev, data) => {
-      if (WANTED.has(ev)) post(ev, data);
+      if (WANTED.has(ev) || recordOnly(ev, data)) post(ev, data);
     });
     post('hook:attached', null);
   }

@@ -210,7 +210,7 @@
     loose: { vpip: 0.40, pfr: 0.13, af: 1.4, betFreq: 0.34, foldToBet: 0.36, raiseFreq: 0.08 },
   };
 
-  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0 };
+  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0 };
   const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
@@ -311,6 +311,11 @@
 
     // Preflop 3-bet and flop c-bet frequencies.
     stats.threeBet = (t.pf3bet + 10 * clamp(pr.pfr * 0.45, 0.04, 0.1)) / (t.pf3betOpp + 10);
+    // How often they call (or re-raise) a big preflop raise or shove, as a share of all their hands.
+    // Home-game players call shoves much wider than the bet-size math says, so the prior follows
+    // their looseness rather than pot odds.
+    stats.callBig = (t.pfBigCall + 6 * clamp(0.75 * stats.vpip, 0.18, 0.45)) / (t.pfBigOpp + 6);
+    stats.raw.callBig = t.pfBigOpp ? t.pfBigCall / t.pfBigOpp : null;
     stats.cbet = (t.cbet + 5 * clamp(pr.betFreq + 0.22, 0.4, 0.75)) / (t.cbetOpp + 5);
     stats.foldToCbet = (t.foldCbet + 5 * stats.foldToBet) / (t.vsCbet + 5);
     stats.wtsd = (t.wtsd + 5 * 0.3) / (t.sawFlop + 5);
@@ -869,13 +874,20 @@
   function continueRule(opp, ctx, mdf, kind) {
     const s = opp.stats;
     if (ctx.street === 0) {
+      // Big raises and shoves (8+ big blinds) get called at least at the player's callBig rate.
+      const big = clamp((kind.amount / Math.max(1e-9, ctx.bigBlind) - 4) / 4, 0, 1);
+      const callBig = s.callBig != null ? s.callBig : 0.25;
       if (opp.pending) {
         const sizeFactor = Math.min(1, (6 * ctx.bigBlind) / Math.max(ctx.bigBlind, kind.amount));
-        const cont = s.vpip * 0.7 * (mdf / 0.375) * Math.sqrt(sizeFactor);
-        return { cont: clamp(Math.min(s.vpip, cont), 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
+        let cont = s.vpip * 0.7 * (mdf / 0.375) * Math.sqrt(sizeFactor);
+        cont = Math.max(Math.min(s.vpip, cont), big * callBig);
+        return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
-      const base = opp.actions.pre === 'raise' || opp.actions.pre === '3bet' ? 0.55 : 0.5;
-      return { cont: clamp(base * (mdf / 0.5), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
+      const raised = opp.actions.pre === 'raise' || opp.actions.pre === '3bet';
+      const base = raised ? 0.55 : 0.5;
+      // Shares of the range they already continued with: limpers and raisers are part-committed.
+      const floor = big * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
+      return { cont: clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
     let fold = foldAtSize(s, f, ctx.street);
@@ -1409,7 +1421,8 @@
         }
         let rule;
         if (i === bigBlindSeat) {
-          const cont = clamp(o.stats.vpip * 1.6 * Math.sqrt((2.5 * bigBlind) / sc.amount), 0.05, 0.9);
+          const big = clamp((sc.amount / bigBlind - 4) / 4, 0, 1);
+          const cont = clamp(Math.max(o.stats.vpip * 1.6 * Math.sqrt((2.5 * bigBlind) / sc.amount), big * (o.stats.callBig != null ? o.stats.callBig : 0.25)), 0.05, 0.9);
           rule = { cont, nut: 0.965, reraise: clamp(o.stats.pfr * 0.4, 0.02, 0.12) / Math.max(cont, 0.05), add: sc.amount - bigBlind };
         } else {
           const mdf = o.pending ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);

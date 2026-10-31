@@ -36,7 +36,19 @@ function slim(r) {
   // ---------- storage ----------
   var DB_KEY = 'patioSolverDb', UI_KEY = 'patioSolverUi';
   function load(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
-  function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage full or blocked */ } }
+  // The page's localStorage is shared with the game, so if it fills up, raw hand events are
+  // dropped (oldest first) before the reads are ever lost.
+  function save(k, v) {
+    for (var tries = 0; tries < 6; tries++) {
+      try { localStorage.setItem(k, JSON.stringify(v)); return; } catch (e) {
+        var hist = v && v.history;
+        if (!hist) return;
+        var withRaw = hist.filter(function (x) { return x.raw; });
+        if (!withRaw.length) return;
+        withRaw.slice(0, Math.ceil(withRaw.length / 2)).forEach(function (x) { delete x.raw; });
+      }
+    }
+  }
 
   // ---------- solver in a background worker ----------
   var worker = null, pending = {}, nextId = 1;
@@ -69,6 +81,7 @@ function slim(r) {
   var narrow = Math.min(W.innerWidth, W.screen ? W.screen.width : 9999) < 640;
   var ui = Object.assign({ tableStyle: 'typical', x: null, y: null, expanded: !narrow, showOptions: !narrow }, load(UI_KEY) || {});
   var tracker = new PatioTracker(load(DB_KEY) || { players: {} });
+  tracker.rawKeep = 60; // phone storage is shared with the game; export the hand log after each session
   tracker.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle); };
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
@@ -339,7 +352,10 @@ function slim(r) {
     var gm = W.GameManager, sock = gm && gm.socket;
     if (!sock || sock === hooked || typeof sock.onAny !== 'function') return;
     hooked = sock;
-    sock.onAny(function (ev, data) { if (WANTED[ev]) onEvent(ev, data); });
+    // Other table events go to the tracker only for the hand log's raw recorder.
+    sock.onAny(function (ev, data) {
+      if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
+    });
     tracker.snap = snapshot();
     if (tracker.snap.tableType && tracker.snap.tableType !== 'private') { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; }
     else if (!tracker.hand) status = 'Connected. Advice starts next hand.';
