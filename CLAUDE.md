@@ -279,6 +279,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of the smallest within noise (+19 ± 14 alone, but 1.5x-pot overbets went from 4% to 9% of postflop bets, some
   with weak hands: the winner's curse of an argmax over noisy sizes); exploit-weight scaling (already at its 0.95
   cap for regulars).
+- Size reads: table first, then the player (#37). Each size bucket's fold rate is the size curve
+  (`modelFold(stats.foldToBet, anchor)`), moved in log-odds by how the rest of the table answers that size compared
+  with the curve (`prior.poolRest` from `pooledPrior`: pool counts minus the player, `TABLE_SIZE_K` 20 pseudo-counts),
+  then by the player's own folds (`SIZE_K` 64 pseudo-counts, was 4). On three logs a friend's answer to one size
+  compared with the others was noise: facing-bet log-loss 0.894 -> 0.883 (table average alone 0.886). k 64 without the
+  table step lost -34 ± 16 on the #36 bots (they call small bets more than the curve says). predictAction's raise
+  share divides by the fold rate raiseFreq was built from (multiway raises predicted 12%, real 9%, now 10%). Sim
+  +48.3 ± 14.6 vs v1.7.2 (2,000 deals 4-handed). Tried and dropped: linking families (bet effect -> raise prior,
+  VPIP -> fold), more shrinkage on vsOpen / 3-bet / foldAfterAgg (all under 0.003 log-loss); EV - 1 SE size
+  tie-break -6.2 ± 12.7.
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
@@ -287,6 +297,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   product of heads-up reads (`fieldStats(list, base, foldList)`). Against the old bots, which over-folded multiway
   the same way as the model (two fold together 38%), this lost -27 ± 20; against the refit bots (#36: 53% / 53% /
   63%, two together 31%) it gained +32.8 ± 21.2 (1,000 deals 4-handed; weak hands +30 ± 10, SB +33 ± 13).
+  Open lead: after someone has called, the logs fold 54% where the multiway read says 47% (37 spots; no caller yet:
+  52% vs 57%, 93 spots, before #39's heads-up first answers).
 - Simulator results (`test/sim/run.js`: duplicate deals, luck-corrected bb/100 ± SE; the old `sim.js`/`sim-multi.js`
   figures were much noisier and are dropped). 4-handed vs friend bots, 150bb: solver 225 ± 32 vs the simple baseline
   bot 97 ± 26 (+128 ± 35, 1,000 deals, v1.4.0). Multiway preflop solver on vs off: +39 ± 18 (2,000 deals; the
