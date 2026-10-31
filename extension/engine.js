@@ -4693,7 +4693,7 @@
      * reads exploit. Off-tree lines, table sizes without a blueprint and stack depths far from
      * the trained one keep the old advice.
      */
-    function blueprintBlend(ranked) {
+    function blueprintBlend(ranked, engineBest) {
       if (input.blueprint === false || !Array.isArray(input.history) || !ranked.length) return null;
       const nSeats = Array.isArray(input.seats) && input.seats.length ? input.seats.length : opps.length + 1;
       const own = input.blueprintObj ? [].concat(input.blueprintObj).find((b) => b.players === nSeats) : null;
@@ -4738,7 +4738,9 @@
         if (j >= 0) prior[j] += a.p;
       }
       let pt = 0;
-      for (let i = 0; i < opts.length; i++) { prior[i] += 0.01; pt += prior[i]; }
+      // The floor caps how far the blueprint can overrule the EVs: at most tau x ln(1 / floor).
+      const floor = K.floor != null ? K.floor : 0.01;
+      for (let i = 0; i < opts.length; i++) { prior[i] += floor; pt += prior[i]; }
       for (let i = 0; i < opts.length; i++) prior[i] /= pt;
       const potNow = pot + toCall;
       const seMax = Math.max(0, ...opts.map((o) => o.se || 0));
@@ -4765,7 +4767,7 @@
       const runnerUp = rankedOut.find((a) => a !== best) || null;
       return {
         used: true, ranked: rankedOut, best, runnerUp, margin: runnerUp ? best.ev - runnerUp.ev : Infinity, close: !!mix, mix,
-        info: { used: true, visits: adv.visits, tau, depth, street: adv.street, bucket: adv.bucket,
+        info: { used: true, visits: adv.visits, tau, depth, street: adv.street, bucket: adv.bucket, changed: engineBest ? !(engineBest.kind === best.kind && Math.abs((engineBest.amount || 0) - (best.amount || 0)) < 1e-9) : null,
           actions: adv.actions.map((a) => ({ kind: a.kind, amount: a.add, p: Math.round(a.p * 1000) / 1000 })) },
       };
     }
@@ -4837,7 +4839,7 @@
     }
 
     function finish(ranked, best, runnerUp, margin, close, mix) {
-      const bpOut = blueprintBlend(ranked);
+      const bpOut = blueprintBlend(ranked, best);
       if (bpOut && bpOut.used) ({ ranked, best, runnerUp, margin, close, mix } = bpOut);
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
       const base = scenarios.find((s) => s.kind !== 'fold');
