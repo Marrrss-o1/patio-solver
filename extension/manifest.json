@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Patio Solver Overlay",
+  "version": "1.0.0",
+  "description": "Reads your Poker Patio private lobby as you play and shows solver advice when it's your turn.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://pokerpatio.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pokerpatio.com/mp*"
+      ],
+      "js": [
+        "hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://pokerpatio.com/mp*"
+      ],
+      "js": [
+        "engine.js",
+        "tracker.js",
+        "overlay.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "128": "icon128.png"
+  }
+}

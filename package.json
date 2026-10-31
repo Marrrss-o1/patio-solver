@@ -1,0 +1,15 @@
+{
+  "name": "patio-solver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Live solver overlay for Poker Patio private lobbies: Chrome extension + iPhone userscript.",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node test/replay.test.js",
+    "test:extension": "node test/harness-extension.js test/fixtures/real-hand.json",
+    "test:mobile": "node test/harness-mobile.js test/fixtures/real-hand.json"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  }
+}
