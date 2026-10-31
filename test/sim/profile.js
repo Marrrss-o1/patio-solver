@@ -30,6 +30,8 @@ function blank() {
     // Sizing: preflop re-raises (facing a raise) and raises after the flop as min-raises / all-ins / other (with
     // their to / current-bet ratio), bets after the flop as min-bets (one big blind) or log(fraction of the pot).
     rrN: 0, rrMin: 0, rrShove: 0, praN: 0, praMin: 0, praShove: 0, praOther: [], betN: 0, minBetN: 0, betLog: [], betLogPot: [],
+    // After the flop, raised after betting or raising on the same street: fold / re-raise (once per street).
+    vsRaiseN: 0, vsRaiseFold: 0, vsRaiseRe: 0,
     sawFlop: 0, wtsd: 0, showdowns: 0,
     // Shown hands: strength (percentile vs all hands, no draws) on each street they acted.
     shows: [],
@@ -125,10 +127,16 @@ function addLog(prof, h, bb, opts) {
   // Postflop: sizes, facing-size reactions, c-bets, check-raises, donks.
   const checked = {};
   let street = null, betMade = false, flopBet = false, cur = 0, inc = bb;
+  const aggr = {}, faced = {};
   for (const e of h.log) {
     if (e.st === 'pre') continue;
-    if (e.st !== street) { street = e.st; betMade = false; cur = 0; inc = bb; for (const k of Object.keys(checked)) delete checked[k]; }
+    if (e.st !== street) { street = e.st; betMade = false; cur = 0; inc = bb; for (const o of [checked, aggr, faced]) for (const k of Object.keys(o)) delete o[k]; }
     const t = (e.who !== heroName || opts.includeHero) ? prof[e.who] : null;
+    if (t && aggr[e.who] && e.facing > 0 && !faced[e.who] && (e.act === 'fold' || e.act === 'call' || e.act === 'raise')) {
+      faced[e.who] = true; t.vsRaiseN++;
+      if (e.act === 'fold') t.vsRaiseFold++; else if (e.act === 'raise') t.vsRaiseRe++;
+    }
+    if (e.act === 'bet' || e.act === 'raise') aggr[e.who] = true;
     if ((e.act === 'bet' || e.act === 'raise') && e.to > cur) {
       if (t && cur === 0) {
         t.betN++;
@@ -198,6 +206,7 @@ function summarize(t) {
   s.rrMinShare = ratio(t.rrMin, t.rrN); s.rrShoveShare = ratio(t.rrShove, t.rrN); s.rrN = t.rrN;
   s.raiseMinShare = ratio(t.praMin, t.praN); s.raiseShoveShare = ratio(t.praShove, t.praN); s.raiseN = t.praN; s.raiseOtherRatio = mean(t.praOther);
   s.minBetShare = ratio(t.minBetN, t.betN); s.betN = t.betN;
+  s.vsRaiseFold = ratio(t.vsRaiseFold, t.vsRaiseN); s.vsRaiseRe = ratio(t.vsRaiseRe, t.vsRaiseN); s.vsRaiseN = t.vsRaiseN;
   const bl = t.betLog, bm = mean(bl);
   s.betLogSd = bl.length > 2 ? Math.sqrt(bl.reduce((a, x) => a + (x - bm) ** 2, 0) / (bl.length - 1)) : null; s.betLogN = bl.length;
   // Bet size against pot size (log fraction of the pot on log pot in big blinds): friends bet about pot in small

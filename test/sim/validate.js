@@ -80,6 +80,7 @@ STATS.push(
   ['postRaiseMin', B, (t) => [t.praMin, t.praN], 'pooled'], ['postRaiseAllin', B, (t) => [t.praShove, t.praN], 'pooled'],
   ['postRaiseOtherSize', C, (t) => t.praOther, 'pooled'], ['minBet', B, (t) => [t.minBetN, t.betN], 'pooled'],
   ['betSizeLog', C, (t) => t.betLog],
+  ['raisedFold', B, (t) => [t.vsRaiseFold, t.vsRaiseN]], ['raisedReraise', B, (t) => [t.vsRaiseRe, t.vsRaiseN], 'pooled'],
   ['shownBetsWeak', B, (t) => { const b = t.shows.flatMap((x) => ['flop', 'turn', 'river'].filter((s) => /bet|raise/.test(x.line[s] || '')).map((s) => x[s])); return [b.filter((v) => v < 0.45).length, b.length]; }],
 );
 const meanOf = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;

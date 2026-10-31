@@ -7,7 +7,8 @@
 //   node test/sim/tune.js --arms <same JSON or a .json file> --set friends4 --report    # table from what's saved
 //
 // An arm is { patch: knobs.js edits, opts: extra solver input }. The first arm is the baseline. --prune Z stops an arm
-// after a stage once it is more than Z standard errors below the baseline. Results: test/out/tune-<set>.json.
+// after a stage once it is more than Z standard errors below the baseline; --keep 10,5 keeps only the 10 best after
+// the first stage, the 5 best after the second. Results: test/out/tune-<set>.json.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -24,8 +25,11 @@ if (!names.length) throw new Error('--arms: no arms');
 const set = String(args.set || 'main');
 const stages = String(args.stages || '400,800,1600').split(',').map(Number);
 const prune = args.prune != null ? +args.prune : null;
+// --keep 10,5,3: after stage i keep only the keep[i] arms with the best difference so far (successive halving; a
+// setting that doesn't beat the baseline isn't worth adopting anyway). The baseline always stays.
+const keep = args.keep ? String(args.keep).split(',').map(Number) : [];
 // run.js options passed through to every arm (everything except tune.js's own).
-const OWN = new Set(['arms', 'set', 'stages', 'prune', 'report', 'hands', 'tag', 'a-patch', 'a-opts', 'b-patch', 'b-opts', 'quiet']);
+const OWN = new Set(['arms', 'set', 'stages', 'prune', 'keep', 'report', 'hands', 'tag', 'a-patch', 'a-opts', 'b-patch', 'b-opts', 'quiet']);
 const pass = [];
 for (let i = 0; i < argv.length; i++) {
   if (!argv[i].startsWith('--')) continue;
@@ -87,7 +91,7 @@ function report(live) {
 
 if (args.report) { report(); process.exit(0); }
 const live = new Set(names);
-for (const hands of stages) {
+for (const [si, hands] of stages.entries()) {
   for (const nm of names) {
     if (!live.has(nm)) continue;
     const t0 = Date.now();
@@ -97,4 +101,8 @@ for (const hands of stages) {
   }
   const rows = report(live);
   if (prune != null) for (const r of rows) if (r.diff && r.diff.aivatBB100 + prune * r.diff.aivatSE100 < 0) live.delete(r.arm);
+  if (keep[si] != null) {
+    const alive = rows.filter((r) => r.diff && live.has(r.arm)).sort((a, b) => b.diff.aivatBB100 - a.diff.aivatBB100);
+    for (const r of alive.slice(keep[si])) live.delete(r.arm);
+  }
 }

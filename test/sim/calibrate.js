@@ -110,8 +110,10 @@ const SIZING = [
   ['minBetShare', 'minBet', 0.1, 8, 0.9, 0, 0.5],
   ['betSizeSlope', 'potSlope', -0.3, 8, 0.8, -1.2, 0.3],
   ['betSizeResid', 'sizeSd', 0.6, 8, 0.8, 0.1, 1.2],
+  // Raised after betting on the same street: friends re-raise 3 of 21 (the bots, before this was fitted, 26%).
+  ['vsRaiseRe', 'reRaise', 0.2, 8, 3, 0.1, 1.5],
 ];
-const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN' };
+const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN' };
 const SIZING_T = {};
 for (const [k, , prior, K] of SIZING) SIZING_T[k] = shrink(pool[k], pool[sizingN[k]], prior, K);
 // River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
