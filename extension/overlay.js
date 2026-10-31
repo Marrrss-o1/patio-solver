@@ -197,7 +197,7 @@
       if (p.id === heroId) continue;
       const r = tracker.db.players[p.auth];
       const tally = Object.assign(PatioTracker.blankTally(), r ? r.tally : {});
-      const st = PokerEngine.computeStats(tally, ui.tableStyle);
+      const st = PokerEngine.computeStats(tally, ui.tableStyle, tracker.poolTally());
       const ty = PokerEngine.classifyPlayer(st);
       out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: ty.label, tip: '', hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
     }
@@ -295,7 +295,9 @@
     if (saved) ui = Object.assign(ui, saved);
     const db = (await store.get(DB_KEY)) || { players: {} };
     tracker = new PatioTracker(db);
-    tracker.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle);
+    tracker.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally());
+    tracker.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => tracker.poolTally());
+    tracker.fitVersion = PokerEngine.FIT_VERSION;
     tracker.on((type) => {
       if (type === 'save') store.set(DB_KEY, tracker.db);
       if (type === 'hand') { advice = null; thinking = false; reqId++; status = 'New hand. Waiting for your turn…'; render(); }
