@@ -46,15 +46,20 @@ and 7.6 bb corrected; heads-up vs the old typical bot, duplicate alone cuts the 
 about 3.5x and the correction another 1.6x, so about 6x in all. For A/B runs the pairing adds to that.
 
 `node test/sim/diff.js test/out/sim-<tag>.json` splits an A/B difference by hero's position and starting hand.
+`node test/sim/diff.js <file>:A <file>:B` does the same for variants from two runs of the same deals (same players,
+bots, seed and block size), so a third arm can be added later without replaying the first two.
 
 ## Bots
 
-* `friends`: bots fitted to the friends in Marwin's hand logs (`profiles.json`, ids f1..f7, most hands first; the
+* `friends`: bots fitted to the friends in Marwin's hand logs (`profiles.json`, ids f1..f11, most hands first; the
   names are kept out of this public repo). Each block of deals seats a different lineup. `home:f3` seats one profile,
   `home:pool` the pooled average friend, `home:hero` a bot fitted to Marwin's own play (used during calibration).
   They limp a lot, open 3-5bb, 3-bet with min-raises (raise wars), bet small and min-bet, and call with any pair or
   draw. Fitted per friend, shrunk toward the pool by sample size: VPIP, PFR, fold and 3-bet vs an open, continue vs
-  8bb+ to call, open size, bet size, and bet / fold-to-bet / raise per street (average miss ~1.3 points). Pooled
+  8bb+ to call, open size, share of opens that are all-in, bet size, and bet / fold-to-bet / raise per street
+  (average miss ~1.2 points over 278 hands from three exports, deduplicated by time stamp). Opens of 12bb or more
+  count as shove-opens (one friend opens all-in about a fifth of the time), so they don't set the open size or
+  count as facing an open; each bet's size is capped at 2x pot so a few huge bets don't set the mean. Pooled
   over all friends (too few showdowns each), how strong river callers are at showdown sets how loosely they call
   (they call with weaker hands than a strict threshold would, and fold some better ones). WTSD and the share of weak
   hands among shown bets come out close without being fitted.
@@ -68,5 +73,7 @@ Stacks default to 150bb with friend bots (like the real lobby) and 100bb otherwi
 All cores by default (`--workers`). Results depend only on `--seed` and `--block`, not on the number of workers.
 The solver costs ~0.2-0.3 s per decision at sim settings (`--iters 3000`, `--river-iters 120`, preflop solver at its
 phone default), so 4 cores play about 6 hands/s: 2,000 deals 4-handed (8,000 hands) take ~20 minutes, an A/B twice
-that. The old flags PF=0, PFIT=n, TURN=1, TURNIT=n work as environment variables (they apply to both variants;
+that. With `--tag name`, every finished block is appended to `test/out/sim-name.blocks.jsonl`; starting the same
+command again (same settings, solver commit and profiles) skips those blocks, so a run cut off by a container
+restart loses at most one block per worker. The old flags PF=0, PFIT=n, TURN=1, TURNIT=n work as environment variables (they apply to both variants;
 `--a-opts`/`--b-opts` override).
