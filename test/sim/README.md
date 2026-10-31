@@ -69,7 +69,9 @@ bots, seed and block size), so a third arm can be added later without replaying 
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
   a change does not only exploit the bots. It costs a solve per decision in every solver seat, and its decisions
   get no luck correction (its strategy isn't known in closed form), so expect more noise. Each A/B variant plays
-  against its own copy, since the copies learn from hero's play.
+  against its own copy, since the copies learn from hero's play. With solver opponents the warm-up puts the solver
+  (variant A's code) in hero's seat too, so the copies' reads of hero come from solver-like play; with a simple
+  player there instead, self-play came out about +70 bb/100 for hero, because the copies read hero wrong.
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 
