@@ -31,15 +31,21 @@ hero's win rate against the whole table.
    later, 2,000 sampled boards preflop; bets not yet called are assumed called). Each correction has zero mean, so
    the corrected result is unbiased (selftest checks it); it strips out who hit the river and whether a bot happened
    to bluff this time. Hero's own decisions are not corrected (the solver's strategy isn't known in closed form).
-   All-in hands become all-in equity automatically.
+   All-in hands become all-in equity automatically. A board card's correction is scaled by
+   `1 + 0.8 * min(stack behind / pot, 1.5)` (`--future`, `--cap`), because a card that changes who is ahead also
+   changes how much more money goes in; the scale is fixed before the card falls, so the mean stays zero. That
+   cut the remaining variance by about 20% in bot-vs-bot tuning runs. (A hole-card control variate was tried on top
+   and did not help: duplicate deals already cancel that luck.)
 3. **Paired A/B on the same deals.** Both variants play the same deals with the same bot random numbers (bots draw
    from a hash of deal, seat and decision number), and the difference is taken deal by deal.
 4. **Warm reads** (`--warm 300`). Each block of deals starts with 300 hands watched with a simple player in hero's
    seat, so the solver has reads like Marwin's instead of learning from scratch. Both variants get the same hands.
 
-Measured on 20,000 deals of a fast bot hero 4-handed vs friends: per-deal spread 11.3 bb raw (already duplicate),
-7.8 bb corrected. Heads-up vs the old typical bot: duplicate alone cuts the needed hands about 3.5x, the correction
-another 1.6x.
+Measured with a fast bot in hero's seat: 4-handed vs friends the per-deal spread is 11.3 bb raw (already duplicate)
+and 7.6 bb corrected; heads-up vs the old typical bot, duplicate alone cuts the hands needed for a given precision
+about 3.5x and the correction another 1.6x, so about 6x in all. For A/B runs the pairing adds to that.
+
+`node test/sim/diff.js test/out/sim-<tag>.json` splits an A/B difference by hero's position and starting hand.
 
 ## Bots
 
@@ -48,8 +54,10 @@ another 1.6x.
   `home:pool` the pooled average friend, `home:hero` a bot fitted to Marwin's own play (used during calibration).
   They limp a lot, open 3-5bb, 3-bet with min-raises (raise wars), bet small and min-bet, and call with any pair or
   draw. Fitted per friend, shrunk toward the pool by sample size: VPIP, PFR, fold and 3-bet vs an open, continue vs
-  8bb+ to call, open size, bet size, and bet / fold-to-bet / raise per street. Average miss ~1.4 points; WTSD and
-  the share of weak hands among shown bets come out close without being fitted.
+  8bb+ to call, open size, bet size, and bet / fold-to-bet / raise per street (average miss ~1.3 points). Pooled
+  over all friends (too few showdowns each), how strong river callers are at showdown sets how loosely they call
+  (they call with weaker hands than a strict threshold would, and fold some better ones). WTSD and the share of weak
+  hands among shown bets come out close without being fitted.
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 

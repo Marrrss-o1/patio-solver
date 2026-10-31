@@ -160,7 +160,8 @@ const HOME_DEFAULT = {
   raiseX: 2.2,                // postflop raise to this multiple of the bet
   cbet: 1.8,                  // bluff multiplier on the flop as the preflop raiser
   mw: 0.035,                  // thresholds rise this much per extra opponent
-  w: 0.05,                    // softness of every threshold
+  w: 0.05,                    // softness of the betting thresholds
+  wc: 0.05,                   // softness of calling: larger = calls with weaker hands and folds some better ones
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 
@@ -235,7 +236,7 @@ function homeBot(params) {
       }
       const f = toCall / Math.max(1, pot - toCall);
       const tc = P.call[si] + P.callSlope * (Math.min(f, 2) - 0.5) + P.mw * k + (v.raises >= 2 ? 0.06 : 0);
-      let pCont = sig((hp - tc) / P.w);
+      let pCont = sig((hp - tc) / P.wc);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);
       else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? P.drawCall / 2 : 0.1);
       const pRv = v.raises < 4 ? Math.min(pCont, P.raiseProb * sig((hp - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;

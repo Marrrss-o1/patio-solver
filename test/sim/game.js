@@ -84,6 +84,8 @@ class ValueFn {
     this.g = g; this.hero = hero;
     this.pending = opts.pending || 'call';
     this.pfSamples = opts.pfSamples || 2000;
+    this.future = opts.future != null ? opts.future : 0.8;
+    this.cap = opts.cap != null ? opts.cap : 1.5;
     this.cache = new Map();
     this.buf = new Int32Array(7);
     this.out = new Float64Array(g.n);
@@ -252,7 +254,15 @@ function playHand(cfg) {
       g.street = nb;
       g.potAtStreet = g.put.reduce((a, b) => a + b, 0);
       ev('game:cards_deal_to_stack', add.map((c) => ({ emitData: { stackID: 'community_stack', cardData: cardData(c, uidN++) } })));
-      if (heroLive) corr.chance += vf.value(nb, stateNow()) - vBefore;
+      if (heroLive) {
+        // A card that moves hero's equity also moves the money still to go in: scale the change by
+        // 1 + future * min(stack behind / pot, cap). The scale is fixed before the card falls, so the
+        // correction still has zero mean. (future 0.8, cap 1.5: tuned on bot-vs-bot runs, ~20% less variance.)
+        const dv = vf.value(nb, stateNow()) - vBefore;
+        let eff = 0; for (let i = 0; i < n; i++) if (i !== hero && !g.folded[i]) eff = Math.max(eff, Math.min(g.stack[i], g.stack[hero]));
+        corr.chance += dv * (1 + vf.future * Math.min(eff / Math.max(1, g.potAtStreet), vf.cap));
+        if (cfg.parts) (corr.parts || (corr.parts = [])).push([Math.round(dv * 1000) / 1000, g.potAtStreet, eff, nb]);
+      }
     } else ev('game:stage_began', { stageType: name });
     if (live().length < 2) break;
     const canAct = live().filter((i) => g.stack[i] > 0);
@@ -339,7 +349,7 @@ function playHand(cfg) {
     }
   }
   ev('game:game_ended', {});
-  const res = { net: nets[hero], nets, chance: corr.chance, action: corr.action, adj: nets[hero] - corr.chance - corr.action, showdown: lv.length >= 2 };
+  const res = { net: nets[hero], nets, chance: corr.chance, action: corr.action, adj: nets[hero] - corr.chance - corr.action, showdown: lv.length >= 2, parts: corr.parts || [] };
   if (log) {
     res.entry = {
       board: g.board.map(E.cardToString), bigBlind: bb, hero: g.hands[hero].map(E.cardToString), log,

@@ -20,11 +20,6 @@
    "riverFold": 0.682,
    "riverRaise": 0.11
   },
-  "real": {
-   "wtsd": 0.158,
-   "sdBluffShare": 0.15,
-   "limp": null
-  },
   "simulated": {
    "vpip": 0.675,
    "pfr": 0.104,
@@ -32,19 +27,21 @@
    "vsOpen3b": 0.208,
    "callBig": 0.537,
    "openSize": 4.19,
-   "betPct": 0.462,
+   "betPct": 0.458,
    "flopBet": 0.249,
-   "flopFold": 0.532,
-   "flopRaise": 0.07,
-   "turnBet": 0.317,
-   "turnFold": 0.558,
-   "turnRaise": 0.053,
-   "riverBet": 0.388,
-   "riverFold": 0.666,
-   "riverRaise": 0.122,
-   "wtsd": 0.262,
-   "sdBluffShare": 0.099,
-   "limp": 0.831
+   "flopFold": 0.539,
+   "flopRaise": 0.068,
+   "turnBet": 0.321,
+   "turnFold": 0.528,
+   "turnRaise": 0.05,
+   "riverBet": 0.398,
+   "riverFold": 0.655,
+   "riverRaise": 0.126,
+   "wtsd": 0.258,
+   "sdBluffShare": 0.11,
+   "limp": 0.831,
+   "sdRiverCall": 0.754,
+   "sdRiverBet": 0.79
   },
   "params": {
    "vpip": 0.97,
@@ -59,8 +56,8 @@
    "rrMin": 0.5,
    "val": [
     0.786,
-    0.797,
-    0.674
+    0.79,
+    0.666
    ],
    "bluff": [
     0.12,
@@ -70,26 +67,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.573,
-    0.769,
-    0.747
+    0.568,
+    0.774,
+    0.73
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.867,
-    0.952,
-    0.859
+    0.866,
+    0.949,
+    0.839
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.426,
+   "betSize": 0.428,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.158,
+   "sdBluffShare": 0.15,
+   "limp": null,
+   "sdRiverCall": 0.699,
+   "sdRiverCallN": 4,
+   "sdRiverBet": 0.739,
+   "sdRiverBetN": 7
   }
  },
  "f2": {
@@ -113,11 +120,6 @@
    "riverFold": 0.667,
    "riverRaise": 0.128
   },
-  "real": {
-   "wtsd": 0.324,
-   "sdBluffShare": 0.081,
-   "limp": null
-  },
   "simulated": {
    "vpip": 0.568,
    "pfr": 0.221,
@@ -125,19 +127,21 @@
    "vsOpen3b": 0.189,
    "callBig": 0.433,
    "openSize": 4.219,
-   "betPct": 0.453,
+   "betPct": 0.454,
    "flopBet": 0.266,
-   "flopFold": 0.435,
-   "flopRaise": 0.15,
-   "turnBet": 0.28,
-   "turnFold": 0.317,
-   "turnRaise": 0.137,
-   "riverBet": 0.517,
-   "riverFold": 0.689,
-   "riverRaise": 0.099,
-   "wtsd": 0.289,
-   "sdBluffShare": 0.079,
-   "limp": 0.435
+   "flopFold": 0.429,
+   "flopRaise": 0.148,
+   "turnBet": 0.277,
+   "turnFold": 0.307,
+   "turnRaise": 0.134,
+   "riverBet": 0.523,
+   "riverFold": 0.69,
+   "riverRaise": 0.106,
+   "wtsd": 0.291,
+   "sdBluffShare": 0.103,
+   "limp": 0.435,
+   "sdRiverCall": 0.709,
+   "sdRiverBet": 0.761
   },
   "params": {
    "vpip": 0.696,
@@ -152,8 +156,8 @@
    "rrMin": 0.5,
    "val": [
     0.806,
-    0.806,
-    0.561
+    0.803,
+    0.548
    ],
    "bluff": [
     0.12,
@@ -163,26 +167,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.523,
-    0.566,
-    0.721
+    0.511,
+    0.518,
+    0.711
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.721,
-    0.819,
-    0.802
+    0.72,
+    0.811,
+    0.794
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.441,
+   "betSize": 0.44,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.324,
+   "sdBluffShare": 0.081,
+   "limp": null,
+   "sdRiverCall": null,
+   "sdRiverCallN": 0,
+   "sdRiverBet": 0.836,
+   "sdRiverBetN": 16
   }
  },
  "f3": {
@@ -206,11 +220,6 @@
    "riverFold": 0.575,
    "riverRaise": 0.102
   },
-  "real": {
-   "wtsd": 0.25,
-   "sdBluffShare": 0.167,
-   "limp": null
-  },
   "simulated": {
    "vpip": 0.684,
    "pfr": 0.139,
@@ -218,19 +227,21 @@
    "vsOpen3b": 0.218,
    "callBig": 0.473,
    "openSize": 4.041,
-   "betPct": 0.461,
+   "betPct": 0.463,
    "flopBet": 0.158,
-   "flopFold": 0.618,
+   "flopFold": 0.615,
    "flopRaise": 0.089,
-   "turnBet": 0.26,
-   "turnFold": 0.514,
-   "turnRaise": 0.042,
-   "riverBet": 0.351,
-   "riverFold": 0.592,
-   "riverRaise": 0.096,
-   "wtsd": 0.276,
-   "sdBluffShare": 0.129,
-   "limp": 0.767
+   "turnBet": 0.261,
+   "turnFold": 0.518,
+   "turnRaise": 0.044,
+   "riverBet": 0.355,
+   "riverFold": 0.584,
+   "riverRaise": 0.104,
+   "wtsd": 0.275,
+   "sdBluffShare": 0.143,
+   "limp": 0.767,
+   "sdRiverCall": 0.701,
+   "sdRiverBet": 0.807
   },
   "params": {
    "vpip": 0.927,
@@ -245,8 +256,8 @@
    "rrMin": 0.5,
    "val": [
     0.896,
-    0.854,
-    0.716
+    0.848,
+    0.704
    ],
    "bluff": [
     0.12,
@@ -256,26 +267,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.732,
-    0.813,
-    0.64
+    0.746,
+    0.793,
+    0.607
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.889,
-    0.959,
-    0.866
+    0.887,
+    0.954,
+    0.85
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.431,
+   "betSize": 0.432,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.25,
+   "sdBluffShare": 0.167,
+   "limp": null,
+   "sdRiverCall": 0.626,
+   "sdRiverCallN": 4,
+   "sdRiverBet": 0.796,
+   "sdRiverBetN": 2
   }
  },
  "f4": {
@@ -299,11 +320,6 @@
    "riverFold": 0.584,
    "riverRaise": 0.062
   },
-  "real": {
-   "wtsd": 0.4,
-   "sdBluffShare": 0.167,
-   "limp": null
-  },
   "simulated": {
    "vpip": 0.684,
    "pfr": 0.091,
@@ -311,19 +327,21 @@
    "vsOpen3b": 0.202,
    "callBig": 0.46,
    "openSize": 4.37,
-   "betPct": 0.468,
+   "betPct": 0.471,
    "flopBet": 0.19,
-   "flopFold": 0.404,
-   "flopRaise": 0.114,
+   "flopFold": 0.401,
+   "flopRaise": 0.115,
    "turnBet": 0.301,
-   "turnFold": 0.301,
-   "turnRaise": 0.089,
-   "riverBet": 0.396,
-   "riverFold": 0.557,
-   "riverRaise": 0.065,
-   "wtsd": 0.335,
-   "sdBluffShare": 0.082,
-   "limp": 0.87
+   "turnFold": 0.307,
+   "turnRaise": 0.096,
+   "riverBet": 0.406,
+   "riverFold": 0.556,
+   "riverRaise": 0.058,
+   "wtsd": 0.334,
+   "sdBluffShare": 0.109,
+   "limp": 0.87,
+   "sdRiverCall": 0.719,
+   "sdRiverBet": 0.782
   },
   "params": {
    "vpip": 0.97,
@@ -338,8 +356,8 @@
    "rrMin": 0.5,
    "val": [
     0.863,
-    0.782,
-    0.644
+    0.78,
+    0.634
    ],
    "bluff": [
     0.12,
@@ -349,26 +367,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.492,
-    0.535,
-    0.645
+    0.48,
+    0.482,
+    0.626
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.815,
-    0.826,
-    0.924
+    0.814,
+    0.822,
+    0.92
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.43,
+   "betSize": 0.431,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.4,
+   "sdBluffShare": 0.167,
+   "limp": null,
+   "sdRiverCall": 0.714,
+   "sdRiverCallN": 4,
+   "sdRiverBet": 0.791,
+   "sdRiverBetN": 4
   }
  },
  "f5": {
@@ -392,11 +420,6 @@
    "riverFold": 0.631,
    "riverRaise": 0.07
   },
-  "real": {
-   "wtsd": 0.417,
-   "sdBluffShare": 0.077,
-   "limp": 0.429
-  },
   "simulated": {
    "vpip": 0.652,
    "pfr": 0.293,
@@ -406,17 +429,19 @@
    "openSize": 4.967,
    "betPct": 0.352,
    "flopBet": 0.263,
-   "flopFold": 0.406,
-   "flopRaise": 0.131,
-   "turnBet": 0.24,
-   "turnFold": 0.407,
-   "turnRaise": 0.098,
-   "riverBet": 0.462,
-   "riverFold": 0.62,
-   "riverRaise": 0.075,
-   "wtsd": 0.315,
-   "sdBluffShare": 0.096,
-   "limp": 0.432
+   "flopFold": 0.401,
+   "flopRaise": 0.133,
+   "turnBet": 0.244,
+   "turnFold": 0.405,
+   "turnRaise": 0.097,
+   "riverBet": 0.461,
+   "riverFold": 0.617,
+   "riverRaise": 0.073,
+   "wtsd": 0.313,
+   "sdBluffShare": 0.091,
+   "limp": 0.432,
+   "sdRiverCall": 0.71,
+   "sdRiverBet": 0.785
   },
   "params": {
    "vpip": 0.728,
@@ -431,8 +456,8 @@
    "rrMin": 0.5,
    "val": [
     0.786,
-    0.845,
-    0.593
+    0.844,
+    0.585
    ],
    "bluff": [
     0.12,
@@ -442,16 +467,16 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.476,
-    0.627,
-    0.687
+    0.465,
+    0.598,
+    0.676
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.784,
-    0.849,
-    0.916
+    0.783,
+    0.845,
+    0.905
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
@@ -461,7 +486,17 @@
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.417,
+   "sdBluffShare": 0.077,
+   "limp": 0.429,
+   "sdRiverCall": 0.744,
+   "sdRiverCallN": 2,
+   "sdRiverBet": 0.835,
+   "sdRiverBetN": 6
   }
  },
  "f6": {
@@ -485,11 +520,6 @@
    "riverFold": 0.612,
    "riverRaise": 0.124
   },
-  "real": {
-   "wtsd": 0.417,
-   "sdBluffShare": 0,
-   "limp": 0.571
-  },
   "simulated": {
    "vpip": 0.533,
    "pfr": 0.073,
@@ -497,19 +527,21 @@
    "vsOpen3b": 0.147,
    "callBig": 0.402,
    "openSize": 4.154,
-   "betPct": 0.588,
+   "betPct": 0.59,
    "flopBet": 0.186,
-   "flopFold": 0.443,
-   "flopRaise": 0.117,
-   "turnBet": 0.302,
-   "turnFold": 0.403,
-   "turnRaise": 0.064,
+   "flopFold": 0.436,
+   "flopRaise": 0.112,
+   "turnBet": 0.29,
+   "turnFold": 0.413,
+   "turnRaise": 0.068,
    "riverBet": 0.419,
    "riverFold": 0.644,
-   "riverRaise": 0.111,
-   "wtsd": 0.287,
-   "sdBluffShare": 0.095,
-   "limp": 0.632
+   "riverRaise": 0.109,
+   "wtsd": 0.279,
+   "sdBluffShare": 0.133,
+   "limp": 0.632,
+   "sdRiverCall": 0.715,
+   "sdRiverBet": 0.771
   },
   "params": {
    "vpip": 0.676,
@@ -524,8 +556,8 @@
    "rrMin": 0.5,
    "val": [
     0.874,
-    0.805,
-    0.64
+    0.798,
+    0.629
    ],
    "bluff": [
     0.12,
@@ -535,26 +567,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.546,
-    0.614,
-    0.684
+    0.544,
+    0.563,
+    0.66
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.806,
-    0.902,
-    0.824
+    0.803,
+    0.898,
+    0.807
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.591,
+   "betSize": 0.594,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.417,
+   "sdBluffShare": 0,
+   "limp": 0.571,
+   "sdRiverCall": 0.744,
+   "sdRiverCallN": 1,
+   "sdRiverBet": 0.878,
+   "sdRiverBetN": 2
   }
  },
  "f7": {
@@ -578,11 +620,6 @@
    "riverFold": 0.667,
    "riverRaise": 0.09
   },
-  "real": {
-   "wtsd": 0.333,
-   "sdBluffShare": 0,
-   "limp": 0.5
-  },
   "simulated": {
    "vpip": 0.619,
    "pfr": 0.166,
@@ -590,19 +627,21 @@
    "vsOpen3b": 0.118,
    "callBig": 0.485,
    "openSize": 3.934,
-   "betPct": 0.48,
+   "betPct": 0.482,
    "flopBet": 0.308,
-   "flopFold": 0.433,
-   "flopRaise": 0.121,
-   "turnBet": 0.226,
-   "turnFold": 0.365,
-   "turnRaise": 0.063,
-   "riverBet": 0.456,
-   "riverFold": 0.674,
-   "riverRaise": 0.08,
-   "wtsd": 0.286,
-   "sdBluffShare": 0.072,
-   "limp": 0.612
+   "flopFold": 0.443,
+   "flopRaise": 0.12,
+   "turnBet": 0.23,
+   "turnFold": 0.377,
+   "turnRaise": 0.071,
+   "riverBet": 0.442,
+   "riverFold": 0.686,
+   "riverRaise": 0.082,
+   "wtsd": 0.28,
+   "sdBluffShare": 0.091,
+   "limp": 0.612,
+   "sdRiverCall": 0.748,
+   "sdRiverBet": 0.78
   },
   "params": {
    "vpip": 0.804,
@@ -617,8 +656,8 @@
    "rrMin": 0.5,
    "val": [
     0.754,
-    0.852,
-    0.632
+    0.85,
+    0.619
    ],
    "bluff": [
     0.12,
@@ -628,26 +667,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.527,
-    0.598,
-    0.726
+    0.515,
+    0.561,
+    0.708
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.802,
-    0.903,
-    0.878
+    0.798,
+    0.902,
+    0.872
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.443,
+   "betSize": 0.444,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.333,
+   "sdBluffShare": 0,
+   "limp": 0.5,
+   "sdRiverCall": null,
+   "sdRiverCallN": 0,
+   "sdRiverBet": 0.747,
+   "sdRiverBetN": 1
   }
  },
  "pool": {
@@ -671,11 +720,6 @@
    "riverFold": 0.634,
    "riverRaise": 0.099
   },
-  "real": {
-   "wtsd": 0.275,
-   "sdBluffShare": 0.11,
-   "limp": 0.5
-  },
   "simulated": {
    "vpip": 0.655,
    "pfr": 0.164,
@@ -683,19 +727,21 @@
    "vsOpen3b": 0.207,
    "callBig": 0.479,
    "openSize": 4.286,
-   "betPct": 0.459,
+   "betPct": 0.458,
    "flopBet": 0.223,
-   "flopFold": 0.465,
-   "flopRaise": 0.104,
-   "turnBet": 0.282,
-   "turnFold": 0.428,
+   "flopFold": 0.472,
+   "flopRaise": 0.105,
+   "turnBet": 0.284,
+   "turnFold": 0.429,
    "turnRaise": 0.077,
-   "riverBet": 0.435,
-   "riverFold": 0.629,
-   "riverRaise": 0.087,
-   "wtsd": 0.293,
-   "sdBluffShare": 0.071,
-   "limp": 0.662
+   "riverBet": 0.434,
+   "riverFold": 0.63,
+   "riverRaise": 0.084,
+   "wtsd": 0.291,
+   "sdBluffShare": 0.098,
+   "limp": 0.662,
+   "sdRiverCall": 0.704,
+   "sdRiverBet": 0.772
   },
   "params": {
    "vpip": 0.815,
@@ -710,8 +756,8 @@
    "rrMin": 0.5,
    "val": [
     0.815,
-    0.811,
-    0.631
+    0.808,
+    0.617
    ],
    "bluff": [
     0.12,
@@ -721,26 +767,36 @@
    "semi": 0.45,
    "slow": 0.25,
    "call": [
-    0.556,
-    0.658,
-    0.69
+    0.553,
+    0.62,
+    0.677
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
     0.807,
-    0.878,
-    0.869
+    0.873,
+    0.853
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.432,
+   "betSize": 0.433,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.127
+  },
+  "real": {
+   "wtsd": 0.275,
+   "sdBluffShare": 0.11,
+   "limp": 0.5,
+   "sdRiverCall": 0.692,
+   "sdRiverCallN": 15,
+   "sdRiverBet": 0.811,
+   "sdRiverBetN": 38
   }
  },
  "hero": {
@@ -764,11 +820,6 @@
    "riverFold": 0.589,
    "riverRaise": 0.042
   },
-  "real": {
-   "wtsd": 0.229,
-   "sdBluffShare": null,
-   "limp": 0.25
-  },
   "simulated": {
    "vpip": 0.513,
    "pfr": 0.146,
@@ -779,16 +830,18 @@
    "betPct": 0.521,
    "flopBet": 0.509,
    "flopFold": 0.424,
-   "flopRaise": 0.129,
+   "flopRaise": 0.127,
    "turnBet": 0.523,
-   "turnFold": 0.469,
-   "turnRaise": 0.143,
-   "riverBet": 0.423,
-   "riverFold": 0.559,
+   "turnFold": 0.471,
+   "turnRaise": 0.146,
+   "riverBet": 0.42,
+   "riverFold": 0.557,
    "riverRaise": 0.047,
-   "wtsd": 0.309,
+   "wtsd": 0.302,
    "sdBluffShare": null,
-   "limp": 0.504
+   "limp": 0.504,
+   "sdRiverCall": null,
+   "sdRiverBet": null
   },
   "params": {
    "vpip": 0.642,
@@ -804,7 +857,7 @@
    "val": [
     0.558,
     0.582,
-    0.639
+    0.643
    ],
    "bluff": [
     0.12,
@@ -816,24 +869,34 @@
    "call": [
     0.543,
     0.687,
-    0.642
+    0.632
    ],
    "callSlope": 0.12,
    "drawCall": 0.85,
    "raise": [
-    0.821,
-    0.822,
+    0.819,
+    0.823,
     0.968
    ],
    "raiseProb": 0.55,
    "bluffRaise": 0.04,
-   "betSize": 0.509,
+   "betSize": 0.508,
    "sizeTell": 0.6,
    "minBet": 0.15,
    "raiseX": 2.2,
    "cbet": 1.8,
    "mw": 0.035,
-   "w": 0.05
+   "w": 0.05,
+   "wc": 0.05
+  },
+  "real": {
+   "wtsd": 0.229,
+   "sdBluffShare": null,
+   "limp": 0.25,
+   "sdRiverCall": null,
+   "sdRiverCallN": 0,
+   "sdRiverBet": null,
+   "sdRiverBetN": 0
   }
  }
 }

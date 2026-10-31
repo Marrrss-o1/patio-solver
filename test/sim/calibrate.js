@@ -74,6 +74,9 @@ if (heroName && heroTallies[heroName.name]) {
   targets.hero = targetsFor(real.__hero);
 }
 
+// River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
+const SD_CALL = pool.sdRiverCall == null ? null : (pool.sdRiverCallN * pool.sdRiverCall + 10 * 0.76) / (pool.sdRiverCallN + 10);
+
 // ---------- parameters ----------
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const params = {};
@@ -153,7 +156,14 @@ for (let round = 1; round <= ROUNDS; round++) {
       if (mode !== 'ratio') { err += Math.abs(t[k] - x); cnt++; }
     }
   }
-  process.stderr.write(`round ${round}: mean abs error ${(err / cnt * 100).toFixed(2)} points\n`);
+  // Pool-wide: how strong river callers are at showdown sets everyone's calling softness (too few showdowns per friend).
+  const simCall = Object.keys(m).filter((id) => id !== 'hero').map((id) => [m[id].sdRiverCall, m[id].sdRiverCallN]).filter((x) => x[0] != null);
+  const sc = simCall.reduce((a, x) => a + x[0] * x[1], 0) / Math.max(1, simCall.reduce((a, x) => a + x[1], 0));
+  if (SD_CALL != null && simCall.length) {
+    const wc = Math.max(0.03, Math.min(0.25, params[ids[0]].wc * Math.exp(6 * damp * (sc - SD_CALL))));
+    for (const id of ids) if (id !== 'hero') params[id].wc = wc;
+  }
+  process.stderr.write(`round ${round}: mean abs error ${(err / cnt * 100).toFixed(2)} points, river callers at showdown ${sc.toFixed(3)} (real ${SD_CALL})\n`);
 }
 
 // ---------- write ----------
@@ -171,9 +181,10 @@ for (const id of ids) {
   const meas = {};
   const tgt = {};
   for (const [k] of STATS) { tgt[k] = r3(targets[id][k]); meas[k] = last[id] ? r3(statVal(last[id], k)) : null; }
-  if (last[id]) { meas.wtsd = r3(last[id].wtsd); meas.sdBluffShare = r3(last[id].sdBluffShare); meas.limp = r3(last[id].limp); }
+  if (last[id]) { meas.wtsd = r3(last[id].wtsd); meas.sdBluffShare = r3(last[id].sdBluffShare); meas.limp = r3(last[id].limp); meas.sdRiverCall = r3(last[id].sdRiverCall); meas.sdRiverBet = r3(last[id].sdRiverBet); }
   const src = id === 'pool' ? pool : id === 'hero' ? real.__hero : real[names[ids.indexOf(id)]];
-  out[id] = { style: style(targets[id]), hands: src.hands, target: tgt, real: { wtsd: r3(src.wtsd), sdBluffShare: r3(src.sdBluffShare), limp: r3(src.limp) }, simulated: meas, params: rp };
+  out[id] = { style: style(targets[id]), hands: src.hands, target: tgt, simulated: meas, params: rp,
+    real: { wtsd: r3(src.wtsd), sdBluffShare: r3(src.sdBluffShare), limp: r3(src.limp), sdRiverCall: r3(src.sdRiverCall), sdRiverCallN: src.sdRiverCallN, sdRiverBet: r3(src.sdRiverBet), sdRiverBetN: src.sdRiverBetN } };
 }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n');
 if (NAMES_OUT) fs.writeFileSync(NAMES_OUT, JSON.stringify(Object.fromEntries(names.map((n, i) => [ids[i], n])), null, 1));

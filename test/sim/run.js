@@ -38,6 +38,13 @@ const { Worker, isMainThread, parentPort, workerData } = require('worker_threads
 const { playHand, keyed, shuffled } = require('./game.js');
 const bots = require('./bots.js');
 const { solverAgent, envSolverOpts } = require('./agents.js');
+const E0 = require('../../src/engine.js');
+const ORDER = {}; E0.PREFLOP_ORDER.forEach((nm, i) => { ORDER[nm] = i; });
+// Preflop-order rank of a starting hand (0 = AA).
+function classRank(h) {
+  const R = '23456789TJQKA', a = Math.max(h[0] >> 2, h[1] >> 2), b = Math.min(h[0] >> 2, h[1] >> 2);
+  return ORDER[a === b ? R[a] + R[b] : R[a] + R[b] + ((h[0] & 3) === (h[1] & 3) ? 's' : 'o')];
+}
 
 const ROOT = path.join(__dirname, '..', '..');
 const NAMES = ['Hero', 'Ann', 'Ben', 'Cat', 'Dan', 'Eve'];
@@ -85,12 +92,12 @@ function buildConfig(args) {
   return {
     n, bots: botsSpec, bb, sb: bb / 2, stack: Math.round(+(args.stack || (home ? 150 : 100)) * bb),
     hands: +(args.hands || 1000), seed: +(args.seed || 1), dup: args.dup !== '0',
-    aivat: args.aivat === 'off' ? null : { pending: args.aivat && args.aivat !== true ? args.aivat : 'call', pfSamples: +(args['pf-samples'] || 2000) },
+    aivat: args.aivat === 'off' ? null : { pending: args.aivat && args.aivat !== true ? args.aivat : 'call', pfSamples: +(args['pf-samples'] || 2000), future: args.future != null ? +args.future : 0.8, cap: args.cap != null ? +args.cap : 1.5 },
     warm: args.warm != null ? +args.warm : 300, block: +(args.block || 100),
     workers: Math.max(1, +(args.workers || os.cpus().length)),
     iters: +(args.iters || 3000), riverIters: +(args['river-iters'] || 120),
     tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(),
-    allValues: !!args['all-values'],
+    diag: !!args.diag, parts: !!args.parts,
   };
 }
 
@@ -152,13 +159,20 @@ function playBlock(cfg, block) {
     cfg.variants.forEach((v, vi) => {
       const hero = heroes[vi];
       const r = { net: 0, adj: 0, chance: 0, action: 0 };
-      if (cfg.allValues) r.adjBy = {};
+      r.rots = [];
       for (let rot = 0; rot < rots; rot++) {
         const dl = deal(d, rot, 1);
+        const diag = cfg.diag ? [] : null;
+        if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSeats), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
-          aivat: cfg.aivat, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null }, dl));
+          aivat: cfg.aivat, parts: cfg.parts, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null }, dl));
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;
         r.chance += res.chance / rots / cfg.bb; r.action += res.action / rots / cfg.bb;
+        // Per rotation: hero's hand (preflop-order rank), position (0 = button, 1 = next seat, ...), corrected result.
+        const rot3 = [classRank(dl.hands[0]), (n - dl.btn) % n, Math.round(res.adj / cfg.bb * 1000) / 1000, Math.round(res.net / cfg.bb * 1000) / 1000];
+        if (diag) rot3.push(diag);
+        if (cfg.parts) rot3.push(res.parts);
+        r.rots.push(rot3);
       }
       for (const k of ['net', 'adj', 'chance', 'action']) r[k] = Math.round(r[k] * 1000) / 1000;
       rec[v.name] = r;
