@@ -31,6 +31,15 @@ for (const n of [2, 3, 4, 5]) {
   });
 }
 
+test('tree: a cut tree (exported streets only) keeps the same strategy offsets', () => {
+  const cfg = Object.assign({}, CONFIGS[4], { exportStreets: 2 });
+  const full = BP.buildTree(cfg), cut = BP.buildTree(cfg, { cut: true });
+  assert.ok(cut.cut && cut.nodes.length < full.nodes.length / 3);
+  assert.strictEqual(cut.xtotal, full.xtotal);
+  const sig = (t) => t.nodes.filter((n) => n.off >= 0).map((n) => [n.player, n.street, n.nacts, n.off, n.add.join(',')].join(':'));
+  assert.deepStrictEqual(sig(cut), sig(full));
+});
+
 test('tree: 3-handed root is the button with fold, limp, two opens and all-in', () => {
   const root = BP.buildTree(CONFIGS[3]).nodes[0];
   assert.strictEqual(root.player, 0);

@@ -127,9 +127,14 @@
     for (let s = 1; s < 4; s++) order.push(n === 2 ? [1, 0] : [n - 2, n - 1].concat(Array.from({ length: n - 2 }, (_, i) => i)));
     return order;
   }
-  function buildTree(cfg) {
+  // A child on a street the file does not hold, when the tree is built with { cut: true }.
+  const BEYOND = 1 << 30;
+  // opts.cut: stop at the first street the file does not export (5-handed has 1.5M nodes, too many
+  // to build in a browser just to skip them; node ids then differ from the trainer's, offsets do not).
+  function buildTree(cfg, opts) {
     const N = cfg.players || 2, S = cfg.stack, sizes = parseSizes(cfg.sizes), ORDER = actionOrder(N);
     const exportStreets = cfg.exportStreets != null ? cfg.exportStreets : 4;
+    const cut = !!(opts && opts.cut) && exportStreets < 4;
     const nodes = [], terms = [];
     let total = 0, xtotal = 0, xinfo = 0;
     function newTerm(st) { terms.push({ commit: st.commit.slice(), live: st.folded.map((f) => !f) }); return -terms.length; }
@@ -192,7 +197,7 @@
             if (st.street === 3 || canAct <= 1) ch = newTerm(s2);
             else {
               const s3 = { street: st.street + 1, bet: new Array(N).fill(0), commit: s2.commit.slice(), folded: s2.folded.slice(), acted: new Array(N).fill(0), raises: 0, lastRaise: 0 };
-              ch = build(s3, nextActor(s3, ORDER[s3.street][N - 1]));
+              ch = cut && s3.street >= exportStreets ? BEYOND : build(s3, nextActor(s3, ORDER[s3.street][N - 1]));
             }
           }
         }
@@ -210,7 +215,7 @@
       mix(nd.player); mix(nd.street); mix(nd.nacts);
       for (let a = 0; a < nd.nacts; a++) { mix(nd.kind[a].charCodeAt(0)); mix(nd.add[a]); mix(nd.child[a]); }
     }
-    return { nodes, terms, total, xtotal, infosets: xinfo, hash: h >>> 0, players: N };
+    return { nodes, terms, total: cut ? null : total, xtotal, infosets: xinfo, hash: cut ? null : h >>> 0, players: N, cut };
   }
 
   // ---- loading ----
@@ -225,8 +230,8 @@
     for (let i = 0; i < head.flopBoards; i++) flopKeys[i] = dv.getInt32(off + 4 * i, true);
     off += 4 * head.flopBoards;
     const flopTable = u8.subarray(off, off + head.flopBoards * NUM_COMBOS); off += head.flopBoards * NUM_COMBOS;
-    const tree = buildTree(head);
-    if (tree.nodes.length !== head.nodes || tree.total !== head.total || tree.hash !== head.treeHash) throw new Error('blueprint tree mismatch');
+    const tree = buildTree(head, { cut: true });
+    if (!tree.cut && (tree.nodes.length !== head.nodes || tree.total !== head.total || tree.hash !== head.treeHash)) throw new Error('blueprint tree mismatch');
     const xt = head.exportTotal != null ? head.exportTotal : head.total;
     if (xt !== tree.xtotal) throw new Error('blueprint size mismatch');
     const strat = u8.subarray(off, off + xt); off += xt;
@@ -351,6 +356,7 @@
         const s = SKEY[e.st];
         if (s == null) return { error: 'street' };
         if (s !== street) { street = s; bet.fill(0); }
+        if (nid === BEYOND) { if (anyActor) break; return { error: 'street not in this blueprint' }; }
         if (nid < 0) return { error: 'off tree (hand ended in the tree)' };
         const nd = tree.nodes[nid];
         const seat = map.get(e.who);
@@ -372,7 +378,8 @@
         nid = nd.child[ai];
       }
       const heroSeat = heroName != null ? map.get(heroName) : null;
-      if (anyActor) return { node: nid >= 0 ? tree.nodes[nid] : null, heroSeat, bet, commit, street, path };
+      if (anyActor) return { node: nid >= 0 && nid !== BEYOND ? tree.nodes[nid] : null, heroSeat, bet, commit, street, path };
+      if (nid === BEYOND) return { error: 'street not in this blueprint' };
       if (nid < 0) return { error: 'off tree (hand ended in the tree)' };
       const nd = tree.nodes[nid];
       if (heroSeat == null || nd.player !== heroSeat) return { error: 'off tree (not hero to act)' };
