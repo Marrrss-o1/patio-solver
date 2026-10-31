@@ -42,6 +42,8 @@ const STATS = [
   ['callBig', (s) => s.callBig, (s) => s.callBigN, 0.45, 10],
   ['openSize', (s) => s.openSize, (s) => s.unopenedN * (s.openRaise || 0), 4, 6],
   ['openShove', (s) => s.openShove, (s) => s.openShoveN, 0.02, 8],
+  ['limpFold', (s) => s.limpFold, (s) => s.limpFaceN, 0.4, 10],
+  ['vs3bFold', (s) => s.vs3bFold, (s) => s.vs3bN, 0.3, 10],
   ['betPct', (s) => s.betPct, (s) => s.betPctN, 0.5, 8],
 ];
 for (const st of ['flop', 'turn', 'river']) {
@@ -107,6 +109,8 @@ const CTRL = [
   ['callBig', 'callBig', null, 1, 0.6, 0.05, 0.9],
   ['openSize', 'openBB', null, 1, 0.7, 2, 10, 'ratio'],
   ['openShove', 'openShove', null, 1, 0.8, 0, 0.8],
+  ['limpFold', 'limpCont', null, -1, 0.9, 0.1, 1.5],
+  ['vs3bFold', 'cont3b', null, -1, 0.5, -0.3, 0.6],
   ['betPct', 'betSize', null, 1, 0.7, 0.15, 1.2, 'ratio'],
 ];
 ['flop', 'turn', 'river'].forEach((st, i) => {
