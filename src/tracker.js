@@ -413,6 +413,9 @@
       adv.did = kind + (added > 0 ? ' ' + r2(added) : '');
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind) adv.followed = group(adv.kind) === group(kind) || (adv.kind === 'allin' && kind === 'call');
+      // How far hero's bet or raise was from the advised size (1 = as advised; a min-raise against
+      // "raise to 7x" shows as about 0.3). `followed` only checks the kind of action.
+      if (adv.amount > 0 && added > 0 && group(adv.kind) === 'aggr' && group(kind) === 'aggr') adv.sizeRatio = r2(added / adv.amount);
     }
 
     // More tendencies, counted before this action updates the hand state:

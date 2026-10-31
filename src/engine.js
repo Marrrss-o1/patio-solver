@@ -815,7 +815,11 @@
       const slow = clamp(0.5 - 0.1 * stats.af, 0.1, 0.45);
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(slow, 1 - P[k]);
     } else if (action === 'raise') {
-      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * sizeScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
+      // Only flop min-raises get the extra width (K8o and a flush draw at the owner's table). Turn and
+      // river raises stay value-heavy even when small: Tad's turn min-raise was a flush, mkorn's 23%
+      // river raise was AA.
+      const rScale = st.street === 3 ? sizeScale : Math.min(sizeScale, 1.2);
+      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * rScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.02, P[k]);
     } else if (action === 'call') {
       // Calls are ranked with draws counted at twice their one-card gain: home players chase.
