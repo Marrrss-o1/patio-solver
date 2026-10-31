@@ -45,7 +45,7 @@ write('dist/patio-solver.user.js', userscript);
 try {
   const zipPath = path.join(root, 'dist/patio-solver-extension.zip');
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-  execSync(`zip -q -r "${zipPath}" manifest.json hook.js tracker.js overlay.js background.js engine.js icon128.png`, { cwd: path.join(root, 'extension'), stdio: 'ignore' });
+  execSync(`zip -q -r "${zipPath}" manifest.json hook.js tracker.js overlay.js background.js engine.js slim.js offscreen.html offscreen.js solver-worker.js icon128.png`, { cwd: path.join(root, 'extension'), stdio: 'ignore' });
 } catch (e) {
   console.warn('zip not available; skipped dist/patio-solver-extension.zip');
 }

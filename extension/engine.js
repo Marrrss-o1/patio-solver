@@ -189,18 +189,46 @@
     for (let k = 0; k < NUM_COMBOS; k++) COMBO_PREFLOP_STRENGTH[k] = CLASS_STRENGTH[COMBO_CLASS[k]];
   }
 
-  function topClassWeights(frac) {
-    const w = new Float64Array(169);
-    const target = Math.max(0, Math.min(1, frac)) * NUM_COMBOS;
+  // Top `frac` of hands by preflop order, with a soft edge: real players mix in hands around
+  // their cut-off (and the odd hand well outside it), so hands just past the line keep some
+  // weight instead of zero. The total still comes to about `frac` of all combos.
+  const CLASS_ORDER_MID = (() => {
+    const mid = new Float64Array(169);
     let cum = 0;
     for (let i = 0; i < 169; i++) {
       const cls = CLASS_NAMES.indexOf(PREFLOP_ORDER[i]);
       const n = CLASS_COMBO_COUNT[cls];
-      if (cum + n <= target) w[cls] = 1;
-      else if (cum < target) w[cls] = (target - cum) / n;
+      mid[cls] = (cum + n / 2) / NUM_COMBOS;
       cum += n;
-      if (cum >= target) break;
     }
+    return mid;
+  })();
+  function topClassWeights(frac, hard) {
+    const w = new Float64Array(169);
+    const f = Math.max(0, Math.min(1, frac));
+    if (hard || f <= 0 || f >= 1) {
+      const target = f * NUM_COMBOS;
+      let cum = 0;
+      for (let i = 0; i < 169; i++) {
+        const cls = CLASS_NAMES.indexOf(PREFLOP_ORDER[i]);
+        const n = CLASS_COMBO_COUNT[cls];
+        if (cum + n <= target) w[cls] = 1;
+        else if (cum < target) w[cls] = (target - cum) / n;
+        cum += n;
+        if (cum >= target) break;
+      }
+      return w;
+    }
+    const width = Math.max(0.025, 0.3 * f);
+    const total = (shift) => {
+      let t = 0;
+      for (let c = 0; c < 169; c++) t += CLASS_COMBO_COUNT[c] * sigmoid((f + shift - CLASS_ORDER_MID[c]) / width);
+      return t / NUM_COMBOS;
+    };
+    let lo = -1, hi = 1;
+    for (let it = 0; it < 30; it++) { const m = (lo + hi) / 2; if (total(m) < f) lo = m; else hi = m; }
+    const sh = (lo + hi) / 2;
+    for (let c = 0; c < 169; c++) w[c] = sigmoid((f + sh - CLASS_ORDER_MID[c]) / width);
     return w;
   }
 
@@ -210,7 +238,7 @@
     loose: { vpip: 0.40, pfr: 0.13, af: 1.4, betFreq: 0.34, foldToBet: 0.36, raiseFreq: 0.08 },
   };
 
-  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0 };
+  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, aggVsN: 0, aggVsFold: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0 };
   const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
@@ -316,6 +344,10 @@
     // their looseness rather than pot odds.
     stats.callBig = (t.pfBigCall + 6 * clamp(0.75 * stats.vpip, 0.18, 0.45)) / (t.pfBigOpp + 6);
     stats.raw.callBig = t.pfBigOpp ? t.pfBigCall / t.pfBigOpp : null;
+    // Folding to a bet after they already bet or raised this hand: their range is strong by then,
+    // so this is much lower than their overall fold rate.
+    stats.foldAfterAgg = (t.aggVsFold + 8 * clamp(0.4 * stats.foldToBet, 0.08, 0.25)) / (t.aggVsN + 8);
+    stats.raw.foldAfterAgg = t.aggVsN ? t.aggVsFold / t.aggVsN : null;
     stats.cbet = (t.cbet + 5 * clamp(pr.betFreq + 0.22, 0.4, 0.75)) / (t.cbetOpp + 5);
     stats.foldToCbet = (t.foldCbet + 5 * stats.foldToBet) / (t.vsCbet + 5);
     stats.wtsd = (t.wtsd + 5 * 0.3) / (t.sawFlop + 5);
@@ -401,6 +433,20 @@
     // toward zero until there are several showdowns.
     const sqs = fits.filter((f) => f.sq != null);
     stats.strengthBias = clamp(sqs.reduce((a, f) => a + (f.sq - 0.5), 0) / (sqs.length + 4), -0.3, 0.3);
+    // Maximum-likelihood tilt, separately for lines where they bet or raised and lines where they
+    // only checked and called, with a penalty that keeps thin data near no tilt.
+    const fitTilt = (agg) => {
+      const fl = fits.filter((f) => f.tl && f.tl.length === TILTS.length && !!f.agg === agg);
+      if (fl.length < 3) return null;
+      let best = 0, bestV = -Infinity;
+      TILTS.forEach((tau, i) => {
+        const v = fl.reduce((a, f) => a + f.tl[i], 0) - 6 * tau * tau;
+        if (v > bestV) { bestV = v; best = tau; }
+      });
+      return best;
+    };
+    stats.tiltAgg = fitTilt(true);
+    stats.tiltPas = fitTilt(false);
     const trust = clamp(((hits + 2) / (fits.length + 4)) / 0.5, 0.5, 1.1);
     const p = clamp((0.5 + (0.4 * n) / 120) * trust, 0.3, 0.95);
     stats.exploitWeight = p;
@@ -468,6 +514,20 @@
     const k = COMBO_INDEX[hole[0] * 52 + hole[1]];
     // Where the real hand ranked by strength (on the final board) inside our range.
     const sq = rangeQuantiles(W, strengths[board.length].hs)[k];
+    // How likely the shown hand is under the range tilted weaker or stronger by each TILTS step,
+    // so computeStats can pick the tilt that best explains this player's showdowns.
+    const lastN = [5, 4, 3].find((n) => strengths[n] && (show.actions || {})[STREET_KEYS[n]]) || board.length;
+    const qT = rangeQuantiles(W, strengths[lastN].ehs);
+    const tl = TILTS.map((tau) => {
+      let tot = 0, n = 0;
+      for (let j = 0; j < NUM_COMBOS; j++) {
+        if (!(W[j] > 0)) continue;
+        tot += W[j] * Math.exp(8 * tau * (qT[j] - 0.5)); n++;
+      }
+      const wk = W[k] > 0 ? W[k] * Math.exp(8 * tau * (qT[k] - 0.5)) : 0;
+      return n && tot > 0 ? Math.round(Math.log(Math.max(1e-4, (wk * n) / tot)) * 1000) / 1000 : 0;
+    });
+    const agg = ['flop', 'turn', 'river'].some((nm) => { const a = STREET_ACTION_MAP[(show.actions || {})[nm]]; return a === 'bet' || a === 'raise'; });
     let total = 0, above = 0, same = 0, live = 0;
     for (let j = 0; j < NUM_COMBOS; j++) {
       if (!(W[j] >= 0) || board.includes(COMBO_HI[j]) || board.includes(COMBO_LO[j])) continue;
@@ -481,6 +541,7 @@
       top: Math.round(((above + same / 2) / total) * 1000) / 1000,
       lr: Math.round((W[k] / (total / live)) * 100) / 100,
       sq: Math.round(sq * 1000) / 1000,
+      tl, agg,
     };
   }
 
@@ -589,6 +650,9 @@
     } else {
       cw.fill(1);
     }
+    // Nobody's range is airtight: keep a little weight on every hand they could have played.
+    const floor = action === 'call' ? 0.02 : action === 'raise' || action === '3bet' ? 0.008 : 0;
+    if (floor) for (let i = 0; i < 169; i++) cw[i] = Math.max(cw[i], floor);
     return expandClassWeights(cw);
   }
 
@@ -730,6 +794,7 @@
     return out;
   }
 
+  const TILTS = [-0.75, -0.5, -0.3, -0.15, 0, 0.15, 0.3, 0.5, 0.75];
   const STREET_ACTION_MAP = {
     check: 'check', bet: 'bet', call: 'call', raise: 'raise',
     checkcall: 'call', checkraise: 'raise',
@@ -763,7 +828,9 @@
     }
     // Learned correction: if this player's shown hands keep landing below (or above) the
     // middle of the range we predicted, tilt the range weaker (or stronger) to match.
-    const bias = stats.strengthBias || 0;
+    const aggLine = ['flop', 'turn', 'river'].some((n) => { const a = STREET_ACTION_MAP[actions[n]]; return a === 'bet' || a === 'raise'; });
+    const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
+    const bias = learned != null ? learned : stats.strengthBias || 0;
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -981,7 +1048,7 @@
   function makePlan(o, ctx) {
     const { street, dead, current, runouts, seed } = ctx;
     const rng = mulberry32(seed);
-    const N = PLAN_SAMPLES;
+    const N = ctx.samples || PLAN_SAMPLES;
     const streets = street === 3 ? [3, 4, 5] : [4, 5];
     const xs = {};
     for (const s of streets) xs[s] = new Float64Array(N);
@@ -1020,7 +1087,8 @@
       for (let j = 0; j < N; j++) cum[j + 1] = cum[j] + (x[j] >= vCut ? 1 : x[j] < airCut ? pBluff : 0);
       // Fold rate by bet size on a 5%-of-pot grid, so the hot loop does no allocation.
       const grid = new Float64Array(61);
-      for (let g = 0; g <= 60; g++) grid[g] = q(foldAtSize(o.stats, g * 0.05, s));
+      const aggScale = ctx.aggro ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1;
+      for (let g = 0; g <= 60; g++) grid[g] = q(aggScale * foldAtSize(o.stats, g * 0.05, s));
       const callCut = (f) => grid[Math.min(60, Math.round(f * 20))];
       const c0 = lowerBound(x, callCut(HERO_BET));
       // Raises: value raises from the top of their range, plus a few bluff-raises.
@@ -1036,12 +1104,13 @@
         eqVsRaise: (h) => (cumR[N] > 0 ? cumR[lowerBound(x, h)] / cumR[N] : 1),
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
-        foldHero: foldAtSize(o.stats, HERO_BET, s),
+        foldHero: aggScale * foldAtSize(o.stats, HERO_BET, s),
         callCut,
         // Hero value-bets when it beats 55% of the hands that would call.
         valueCut: c0 < N ? x[c0 + Math.floor(0.55 * (N - 1 - c0))] : 2,
         eqVsCall: (h) => (c0 < N ? Math.max(0, lowerBound(x, h) - c0) / (N - c0) : 1),
         eqVsBet: (h) => (cum[N] > 0 ? cum[lowerBound(x, h)] / cum[N] : 1),
+        eqAll: (h) => lowerBound(x, h) / N,
       };
     }
     return plan;
@@ -1156,7 +1225,7 @@
             // They bet inside the tree: value hands continue, bluffs mostly fold.
             pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
           } else {
-            pCont = sigmoid((q - foldAtSize(oppStats, facingFrac, 5)) / 0.04);
+            pCont = sigmoid((q - (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5)) / 0.04);
           }
           const pRaise = sigmoid((q - (1 - clamp(st5.raiseFreq, 0.02, 0.3))) / 0.03);
           const hasRaise = acts.some((a) => a.kind === 'raise');
@@ -1342,6 +1411,8 @@
         : currentAction === 'bet' || currentAction === 'raise' || currentAction === 'checkraise';
       return {
         name: o.name, stats, type: classifyPlayer(stats), actions, pending, aggressor,
+        // They bet or raised on some street after the flop: from here on their range is strong.
+        aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
       };
     });
@@ -1535,7 +1606,7 @@
         const st = Object.assign({}, opps[i].stats, VARIANTS[v]);
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
-          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0 });
+          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine });
       }
       return plans[key];
     }
@@ -1543,11 +1614,11 @@
     // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
     // this decision. Bet the remaining streets with both strategies and return hero's gain.
     // Either side can raise once per street; hero only bluffs the river.
-    function playOut(i, P, heroIn, share, rng, startCur, v) {
+    function playOut(i, P, heroIn, share, rng, startCur, v, from) {
       const plan = planFor(i, v);
       const oc = oppCombo[i];
       let left = stack - heroIn, extra = 0;
-      for (let s = startCur ? street : street + 1; s <= 5; s++) {
+      for (let s = from != null ? from : startCur ? street : street + 1; s <= 5; s++) {
         if (left <= 0) break;
         const t = plan[s];
         const sh = strengthAt(s, heroCombo), so = strengthAt(s, oc);
@@ -1614,46 +1685,104 @@
       return share * P - heroIn - extra;
     }
 
-    // Same idea with two or more opponents left: on each later street the first player
-    // whose plan says bet does so, the others call or fold, and hero calls when its chance
-    // of beating the bettor and every caller beats the price. No raises here.
+    // Two or more opponents left. Each street is a betting round in seat order (hero first
+    // out of position, last in position): the first player whose plan says bet does so, then
+    // everyone else calls, folds or raises (one raise per street). Opponents raise for value
+    // from the top of their range; hero raises with a near-lock and calls when its estimated
+    // chance against every live range beats the price. When hero checked and opponents are
+    // still to act, the current street is played first, so checking isn't a free card.
+    // Once a single opponent is left, the heads-up playout (with river bluffs) takes over.
     const multiAlive = new Uint8Array(opps.length);
-    function playOutMulti(list, P, heroIn, heroScore, rng, v) {
+    const multiState = new Uint8Array(opps.length); // 0 checked/unknown, 1 bet, 2 called, 3 raised
+    const multiPut = new Float64Array(opps.length);
+    const HERO = -1;
+    function heroEq(list, s, sh, v) {
+      let eq = 1;
+      for (const i of list) {
+        if (!multiAlive[i]) continue;
+        const t = planFor(i, v)[s];
+        const st = multiState[i];
+        eq *= st === 3 ? t.eqVsRaise(sh) : st === 1 ? t.eqVsBet(sh) : st === 2 ? t.eqVsCall(sh) : t.eqAll(sh);
+      }
+      return eq;
+    }
+    function playOutMulti(list, P, heroIn, heroScore, rng, v, startCur) {
       let left = stack - heroIn, extra = 0;
       multiAlive.fill(0);
       for (const i of list) multiAlive[i] = 1;
-      for (let s = street + 1; s <= 5; s++) {
+      const aliveCount = () => { let n = 0; for (const i of list) n += multiAlive[i]; return n; };
+      const lastAlive = () => { for (const i of list) if (multiAlive[i]) return i; return -1; };
+      for (let s = startCur ? street : street + 1; s <= 5; s++) {
         if (left <= 0) break;
+        if (aliveCount() === 1) {
+          const i = lastAlive();
+          const share = heroScore > oppScore[i] ? 1 : heroScore === oppScore[i] ? 0.5 : 0;
+          return playOut(i, P, heroIn + extra, share, rng, false, v, s);
+        }
         const sh = strengthAt(s, heroCombo);
-        let bettor = -2, B = 0;
-        const heroValue = () => list.every((i) => !multiAlive[i] || sh >= planFor(i, v)[s].valueCut);
-        const tryOpps = () => {
-          for (const i of list) {
-            if (!multiAlive[i]) continue;
-            const t = planFor(i, v)[s], so = strengthAt(s, oppCombo[i]);
-            if (so >= t.vCut || (so < t.airCut && rng() < t.pBluff)) { bettor = i; B = Math.min(left, roundChips(t.betFrac * P, bigBlind)); return; }
+        multiState.fill(0);
+        // Seat order for this street. On the current street hero has already checked, so only the
+        // opponents still to act can open, and the rest respond after a bet.
+        let order;
+        if (s === street) {
+          order = [];
+          for (const i of list) if (opps[i].pending) order.push(i);
+          order.push(HERO);
+          for (const i of list) if (!opps[i].pending) order.push(i);
+        } else order = inPosition ? list.concat([HERO]) : [HERO].concat(list);
+        const opensFrom = s === street ? order.indexOf(HERO) : order.length; // hero can't open after checking
+        let bettor = -2, B = 0, at = -1;
+        for (let k = 0; k < order.length && bettor === -2; k++) {
+          const a = order[k];
+          if (a === HERO) {
+            if (k >= opensFrom) continue;
+            let value = true;
+            for (const i of list) if (multiAlive[i] && sh < planFor(i, v)[s].valueCut) { value = false; break; }
+            if (value) { bettor = HERO; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); at = k; }
+          } else if (multiAlive[a]) {
+            const t = planFor(a, v)[s], so = strengthAt(s, oppCombo[a]);
+            if (so >= t.vCut || (so < t.airCut && rng() < t.pBluff / Math.max(1, aliveCount() - 1))) {
+              bettor = a; B = Math.min(left, roundChips(t.betFrac * P, bigBlind)); at = k;
+            }
           }
-        };
-        if (!inPosition && heroValue()) { bettor = -1; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); }
-        if (bettor === -2) tryOpps();
-        if (bettor === -2 && inPosition && heroValue()) { bettor = -1; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); }
+        }
         if (bettor === -2) continue;
-        P += B;
-        if (bettor === -1) { extra += B; left -= B; }
-        let eq = bettor >= 0 ? planFor(bettor, v)[s].eqVsBet(sh) : 1;
-        let callers = 0;
-        for (const j of list) {
-          if (!multiAlive[j] || j === bettor) continue;
-          const t = planFor(j, v)[s];
-          if (strengthAt(s, oppCombo[j]) >= t.callCut(B / Math.max(1, P - B))) { P += B; callers++; eq *= t.eqVsCall(sh); }
-          else multiAlive[j] = 0;
+        multiPut.fill(0);
+        let heroPut = 0;
+        const heroAdd = (x) => { P += x; extra += x; left -= x; heroPut += x; };
+        if (bettor === HERO) heroAdd(B); else { multiState[bettor] = 1; multiPut[bettor] = B; P += B; }
+        let raiser = -2, R = 0;
+        // Everyone after the bettor, wrapping round, responds to the bet (or to a raise made
+        // in the meantime). Then anyone who acted before the raiser answers the raise.
+        for (let pass = 0; pass < 2; pass++) {
+          const from = pass === 0 ? at : order.indexOf(raiser);
+          if (pass === 1 && raiser === -2) break;
+          for (let k = 1; k < order.length; k++) {
+            const a = order[(from + k) % order.length];
+            const target = raiser === -2 ? B : R;
+            if (a === HERO) {
+              if (a === raiser || heroPut >= target) continue;
+              const eq = heroEq(list, s, sh, v);
+              if (raiser === -2 && eq >= 0.8 && left > B) {
+                R = Math.min(left + heroPut, roundChips(B + (P + B), bigBlind));
+                raiser = HERO; heroAdd(R - heroPut);
+                continue;
+              }
+              const need = Math.min(left, target - heroPut);
+              if (eq < need / (P + need)) return -heroIn - extra;
+              heroAdd(need);
+            } else if (multiAlive[a] && a !== raiser && multiPut[a] < target) {
+              const t = planFor(a, v)[s], so = strengthAt(s, oppCombo[a]);
+              if (raiser === -2 && so >= t.rCut && left > B) {
+                R = Math.min(left + heroPut, roundChips(B + (P + B), bigBlind));
+                raiser = a; multiState[a] = 3; P += R - multiPut[a]; multiPut[a] = R;
+              } else if (raiser === -2 ? so >= t.callCut(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
+                P += target - multiPut[a]; multiPut[a] = target; if (multiState[a] !== 1) multiState[a] = 2;
+              } else multiAlive[a] = 0;
+            }
+          }
         }
-        if (bettor === -1) {
-          if (!callers) return P - heroIn - extra;
-        } else {
-          if (eq < B / (P + B)) return -heroIn - extra;
-          P += B; extra += B; left -= B;
-        }
+        if (aliveCount() === 0) return P - heroIn - extra;
       }
       let best = heroScore, n = 1, heroBest = true;
       for (const i of list) {
@@ -1740,8 +1869,9 @@
           } else if (lookahead && inCount >= 2 && sc.amount < stack && !sidePots) {
             const list = [];
             for (let i = 0; i < opps.length; i++) if (oppIn[i]) list.push(i);
-            gain = playOutMulti(list, finalPot, sc.amount, hs, rng, 0);
-            for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOutMulti(list, finalPot, sc.amount, hs, rng, v);
+            const startCur = sc.kind === 'check' && list.some((i) => opps[i].pending);
+            gain = playOutMulti(list, finalPot, sc.amount, hs, rng, 0, startCur);
+            for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOutMulti(list, finalPot, sc.amount, hs, rng, v, startCur);
             sc.looked++;
           } else if (sidePots) {
             gain = sidePotWin(sc.amount, hs) * (sc.amount >= stack ? 1 : realize) - sc.amount;
@@ -1784,12 +1914,60 @@
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
+        aggScale: o.aggroLine ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
         pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
       });
       // The Monte Carlo then only feeds the equity readout, so it can be shorter.
       if (solved) target = Math.min(target, 6000);
+    }
+    // Multiway river: solve against the field as one opponent. Its range is the strongest of
+    // the live opponents' hands, sampled jointly from their ranges (so card removal is right),
+    // and it plays like the aggressor if there is one, otherwise like the stickiest caller.
+    // Overcalls from the weaker players are ignored, so value bets come out slightly cautious.
+    if (!solved && street === 5 && opps.length >= 2 && opps.length <= 5 && !sidePots && input.riverSolver !== false && stack > 0) {
+      const W = new Float64Array(NUM_COMBOS);
+      const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
+      const used = new Uint8Array(52);
+      const hsR = strengths[5].hs;
+      let got = 0;
+      for (let it = 0; it < 6000; it++) {
+        used.fill(0);
+        for (const c of dead) used[c] = 1;
+        let best = -1, bestS = -1, ok = true;
+        for (let i = 0; i < opps.length && ok; i++) {
+          let k = -1;
+          for (let tries = 0; tries < 40; tries++) {
+            const cand = sampleCombo(opps[i].sampler, rng());
+            if (!used[COMBO_HI[cand]] && !used[COMBO_LO[cand]]) { k = cand; break; }
+          }
+          if (k < 0) { ok = false; break; }
+          used[COMBO_HI[k]] = used[COMBO_LO[k]] = 1;
+          if (hsR[k] > bestS) { bestS = hsR[k]; best = k; }
+        }
+        if (ok && best >= 0) { W[best]++; got++; }
+      }
+      if (got > 500) {
+        const agg = opps.findIndex((o) => o.aggressor);
+        let pick = agg;
+        if (pick < 0) { pick = 0; for (let i = 1; i < opps.length; i++) if (opps[i].stats.foldToBet < opps[pick].stats.foldToBet) pick = i; }
+        const o = opps[pick];
+        const heroStats = computeStats({}, tableStyle);
+        const heroActs = Object.assign({ pre: 'call', flop: 'call', turn: 'call' }, input.heroActions || {});
+        solved = riverSolve({
+          board, heroCombo, strengths: strengths[5], bigBlind,
+          heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
+          oppW: W,
+          oppStats: Object.assign({}, o.stats, { foldShift: 0 }),
+          p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
+          aggScale: opps.some((x) => x.aggroLine) ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
+          pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+          heroFirst: toCall <= 0 && opps.some((x) => x.pending),
+          iterations: input.riverIterations,
+        });
+        if (solved) { solved.multiway = opps.length; target = Math.min(target, 6000); }
+      }
     }
 
     const robustWeight = lookahead ? 0.35 * (1 - opps.reduce((a, o) => a + o.stats.exploitWeight, 0) / opps.length) : 0;
@@ -1894,7 +2072,32 @@
       };
     }
 
-    return { step, result, target, scenarios };
+    // Parallel runs: workers return their Monte Carlo tallies with partial(), and one final
+    // analysis with input.merge adds them up (and runs the solvers) instead of sampling itself.
+    const ACC = ['n', 'gainSum', 'gainSq', 'foldAll', 'showdowns', 'shareSum', 'wins', 'ties', 'reraised', 'looked'];
+    const ARR = ['vsWins', 'vsTies', 'vsCount', 'oppFolds', 'varSum'];
+    function partial() {
+      return scenarios.map((sc) => {
+        const o = { kind: sc.kind, amount: sc.amount };
+        for (const k of ACC) o[k] = sc[k] || 0;
+        for (const k of ARR) o[k] = sc[k] ? Array.from(sc[k]) : [];
+        return o;
+      });
+    }
+    if (Array.isArray(input.merge)) {
+      for (const part of input.merge) {
+        for (const ps of part) {
+          const sc = scenarios.find((x) => x.kind === ps.kind && Math.abs(x.amount - ps.amount) < 1e-9);
+          if (!sc || sc.kind === 'fold') continue;
+          for (const k of ACC) sc[k] += ps[k] || 0;
+          for (const k of ARR) if (sc[k]) for (let i = 0; i < sc[k].length && i < ps[k].length; i++) sc[k][i] += ps[k][i];
+        }
+        done += part.length ? Math.max(...part.map((x) => x.n || 0)) : 0;
+      }
+      target = 0;
+    }
+
+    return { step, result, partial, target, scenarios };
   }
 
   function roundChips(x, bb) {
@@ -1905,7 +2108,7 @@
   function analyzeSync(input) {
     const a = createAnalysis(input);
     while (a.step(5000) < 1);
-    return a.result();
+    return input.partial ? { partial: a.partial() } : a.result();
   }
 
   const api = {

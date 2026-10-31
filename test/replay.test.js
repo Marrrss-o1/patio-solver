@@ -68,10 +68,10 @@ test('real hand: opponent tally after the hand', () => {
   const { t } = replay(real);
   const tally = t.db.players.V.tally;
   // BB checked preflop (pfFold); bet flop, bet turn, folded to the raise.
-  // The fixture ends with the next hand's set_blinds, which ages counts by 1%.
-  near(tally.pfFold, 0.99);
-  near(tally.bet, 1.98);
-  near(tally.fold, 0.99);
+  // The fixture ends with the next hand's set_blinds, which ages counts by one decay step.
+  near(tally.pfFold, T.DECAY);
+  near(tally.bet, 2 * T.DECAY);
+  near(tally.fold, T.DECAY);
 });
 
 test('hand log: every action with amount, pot, stack, advice match and result', () => {
@@ -262,8 +262,8 @@ test('preflop: big raises faced and called are counted', () => {
 test('old saved reads get the new fields', () => {
   const db = { players: { V: { name: 'Vic', tally: { pfFold: 3, pfCall: 2, pfRaise: 1, check: 4, bet: 2, call: 1, raise: 0, fold: 3 } } } };
   const t = replay(sd, db).t.db.players.V.tally;
-  near(t.pfFold, 3 * 0.99);
-  near(t.pfCall, 2 * 0.99 + 1);
+  near(t.pfFold, 3 * T.DECAY);
+  near(t.pfCall, 2 * T.DECAY + 1);
   assert.strictEqual(t.shows.length, 1);
   assert.strictEqual(t.st.river.bet, 1);
 });
@@ -342,8 +342,8 @@ test('more tendencies: check-raise, think time, pots won without showdown, raw e
   for (const [ev, data] of evs) t.handle(ev, data, snap);
   t.handle('game:stage_began', { stageType: 'set_blinds' }, mk(94, 106));
   const tally = t.db.players.V.tally;
-  assert.ok(Math.abs(tally.xrOpp - 0.99) < 1e-9 && Math.abs(tally.xr - 0.99) < 1e-9, `xr ${tally.xr}/${tally.xrOpp}`);
-  assert.ok(Math.abs(tally.wonNoSD - 0.99) < 1e-9, 'won without showdown ' + tally.wonNoSD);
+  assert.ok(Math.abs(tally.xrOpp - T.DECAY) < 1e-9 && Math.abs(tally.xr - T.DECAY) < 1e-9, `xr ${tally.xr}/${tally.xrOpp}`);
+  assert.ok(Math.abs(tally.wonNoSD - T.DECAY) < 1e-9, 'won without showdown ' + tally.wonNoSD);
   assert.ok(tally.tt.check.n > 0.9, 'think time counted');
   const e = t.db.history[0];
   assert.deepStrictEqual(e.net, { Hero: -6, Vic: 6 });
@@ -360,6 +360,23 @@ test('preflop: no 25bb shove with 9-5 offsuit, but aces still shove', () => {
   const caller = E.computeStats(tallyWith({ pfBigOpp: 20, pfBigCall: 16 }), 'typical');
   const folder = E.computeStats(tallyWith({ pfBigOpp: 20, pfBigCall: 2 }), 'typical');
   assert.ok(caller.callBig > folder.callBig + 0.3, `${caller.callBig} vs ${folder.callBig}`);
+});
+
+test('multiway: the river is solved against the whole field', () => {
+  const r = E.analyzeSync({ hero: C('Ad Kc'), board: C('Kd 8h 2s 3c 7c'), pot: 120, toCall: 0, stack: 800, bigBlind: 10, mix: false, seed: 3, inPosition: true,
+    opponents: [0, 1].map((i) => ({ name: 'V' + i, tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' } })), iterations: 3000, riverIterations: 100 });
+  assert.ok(r.solver, 'river solver ran');
+  assert.ok(['bet', 'raise'].includes(r.best.kind), 'top pair top kicker value-bets into two checked ranges, got ' + r.best.kind);
+});
+
+test('multiway: look-ahead with raises gives sane, ordered bet EVs', () => {
+  const spot = (h) => E.analyzeSync({ hero: C(h), board: C('Kd 8h 4s'), pot: 60, toCall: 0, stack: 1000, bigBlind: 10, mix: false, seed: 5, inPosition: false,
+    opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: tallyWith({ raise: 20 }), actions: { pre: 'call', flop: 'pending' } })), iterations: 3000 });
+  const betEv = (r) => Math.max(...r.ranked.filter((x) => x.kind === 'bet').map((x) => x.ev));
+  const set = spot('8c 8d'), pair = spot('Kh Jc'), air = spot('Ah Qd');
+  for (const r of [set, pair, air]) { assert.ok(r.lookahead); r.ranked.forEach((x) => assert.ok(isFinite(x.ev))); }
+  assert.ok(betEv(set) > betEv(pair) && betEv(pair) > betEv(air));
+  assert.strictEqual(air.best.kind, 'check');
 });
 
 test('engine: a known bluffer is read as bluffing more often', () => {
@@ -539,10 +556,10 @@ test('read accuracy: players who keep showing weaker hands get weaker ranges', (
   assert.ok(avg(weak) < avg(plain) - 0.03, `${avg(weak)} vs ${avg(plain)}`);
 });
 
-test('recency: older counts fade by 1% per hand the player is dealt into', () => {
+test('recency: older counts fade a little each hand the player is dealt into', () => {
   const db = { players: { V: { name: 'Vic', tally: Object.assign(T.blankTally(), { fold: 100 }) } } };
   const t = replay(sd, db).t;
-  near(t.db.players.V.tally.fold, 99);
+  near(t.db.players.V.tally.fold, 100 * T.DECAY);
 });
 
 test('hand log: hands are kept with actions, shown cards and advice', () => {
@@ -568,12 +585,12 @@ const riverSpot = (hero, extra) => Object.assign({
   heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, iterations: 2000, riverIterations: 150,
 }, extra);
 
-test('river solver: runs heads-up on the river only', () => {
+test('river solver: runs on the river only, heads-up and multiway', () => {
   assert.ok(E.analyzeSync(riverSpot('As Kc')).solver);
   assert.strictEqual(E.analyzeSync(riverSpot('As Kc', { board: C('Kd 8h 2s 3c') })).solver, null);
   const multi = riverSpot('As Kc');
   multi.opponents = multi.opponents.concat([{ name: 'W', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'call' } }]);
-  assert.strictEqual(E.analyzeSync(multi).solver, null);
+  assert.ok(E.analyzeSync(multi).solver);
 });
 
 test('river solver: raises the nuts-ish hand, folds the bluff-catcher that cannot win', () => {
