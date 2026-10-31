@@ -1541,7 +1541,8 @@
   // yet, computed the first time a runout is needed. On the flop, a turn card's value is
   // the hand's average river percentile over every river, so draws count.
   function makeRunouts(board) {
-    const rivers = new Map(), turns = new Map();
+    // Cached by card (key as below), in arrays: lookups are on the Monte Carlo's hot path.
+    const rivers = new Array(52 * 52), turns = new Array(52);
     const buf = new Int32Array(7);
     const scores = new Int32Array(NUM_COMBOS);
     const valid = new Int16Array(NUM_COMBOS);
@@ -1566,15 +1567,15 @@
     // River strengths for a 4-card board plus x (y < 0), or a flop plus x and y.
     function river(x, y) {
       const key = y < 0 ? x : Math.min(x, y) * 52 + Math.max(x, y);
-      let a = rivers.get(key);
+      let a = rivers[key];
       if (!a) {
         a = strengthOn(y < 0 ? board.concat([x]) : board.concat([x, y]));
-        rivers.set(key, a);
+        rivers[key] = a;
       }
       return a;
     }
     function turn(t) {
-      let a = turns.get(t);
+      let a = turns[t];
       if (a) return a;
       const sum = new Float64Array(NUM_COMBOS), cnt = new Uint8Array(NUM_COMBOS);
       for (let r = 0; r < 52; r++) {
@@ -1584,7 +1585,7 @@
       }
       a = new Float32Array(NUM_COMBOS).fill(-1);
       for (let k = 0; k < NUM_COMBOS; k++) if (cnt[k]) a[k] = sum[k] / cnt[k];
-      turns.set(t, a);
+      turns[t] = a;
       return a;
     }
     return { river, turn };
@@ -4525,10 +4526,36 @@
     }
     let done = 0;
 
+    // The deal's turn and river strength tables are looked up once per deal (dealNo), and hero's
+    // value in each table is kept in a small array by card(s) (the tables are too big to stay in
+    // cache, and hero's hand is looked up on every deal).
+    let turnDeal = -1, riverDeal = -1, turnTab = null, riverTab = null, turnKey = 0, riverKey = 0;
+    const heroTurn = new Float32Array(52).fill(NaN), heroRiver = new Float32Array(52 * 52).fill(NaN);
+    function dealTables(s) {
+      if (s === 4) {
+        if (turnDeal !== dealNo) { turnKey = cards[5]; turnTab = runouts.turn(turnKey); turnDeal = dealNo; }
+      } else if (riverDeal !== dealNo) {
+        riverKey = street === 3 ? Math.min(cards[5], cards[6]) * 52 + Math.max(cards[5], cards[6]) : cards[6];
+        riverTab = street === 3 ? runouts.river(cards[5], cards[6]) : runouts.river(cards[6], -1);
+        riverDeal = dealNo;
+      }
+    }
     function strengthAt(s, k) {
       if (s === street) return current.ehs[k];
-      if (s === 4) return runouts.turn(cards[5])[k];
-      return street === 3 ? runouts.river(cards[5], cards[6])[k] : runouts.river(cards[6], -1)[k];
+      dealTables(s);
+      return s === 4 ? turnTab[k] : riverTab[k];
+    }
+    function heroStrengthAt(s) {
+      if (s === street) return current.ehs[heroCombo];
+      dealTables(s);
+      if (s === 4) {
+        let x = heroTurn[turnKey];
+        if (x !== x) x = heroTurn[turnKey] = turnTab[heroCombo];
+        return x;
+      }
+      let x = heroRiver[riverKey];
+      if (x !== x) x = heroRiver[riverKey] = riverTab[heroCombo];
+      return x;
     }
 
     // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
@@ -4556,7 +4583,7 @@
       for (let s = from != null ? from : startCur ? street : street + 1; s <= 5; s++) {
         if (left <= 0) break;
         const t = plan[s];
-        const sh = strengthAt(s, heroCombo), so = strengthAt(s, oc);
+        const sh = heroStrengthAt(s), so = strengthAt(s, oc);
         const oppBets = () => so >= t.vCut || (so < t.airCut && rng() < t.pBluff);
         // Opponent bets; hero folds (false), calls, or raises with a monster.
         const heroFaces = () => {
@@ -4642,9 +4669,9 @@
       return eq;
     }
     function playOutMulti(list, P, heroIn, heroScore, rng, v, startCur) {
-      let left = stack - heroIn, extra = 0;
+      let left = stack - heroIn, extra = 0, listMask = 0;
       multiAlive.fill(0);
-      for (const i of list) multiAlive[i] = 1;
+      for (const i of list) { multiAlive[i] = 1; listMask |= 1 << i; }
       const aliveCount = () => { let n = 0; for (const i of list) n += multiAlive[i]; return n; };
       const lastAlive = () => { for (const i of list) if (multiAlive[i]) return i; return -1; };
       for (let s = startCur ? street : street + 1; s <= 5; s++) {
@@ -4654,17 +4681,25 @@
           const share = heroScore > oppScore[i] ? 1 : heroScore === oppScore[i] ? 0.5 : 0;
           return playOut(i, P, heroIn + extra, share, rng, false, v, s, oppLeft[i] - addNow[i] - extra);
         }
-        const sh = strengthAt(s, heroCombo);
+        const sh = heroStrengthAt(s);
         multiState.fill(0);
         // Seat order for this street. On the current street hero has already checked, so only the
         // opponents still to act can open, and the rest respond after a bet.
-        let order;
-        if (s === street) {
+        const okey = 2 * listMask + (s === street ? 1 : 0);
+        let order = orderCache[okey];
+        if (!order) {
           order = [];
-          for (const i of list) if (opps[i].pending) order.push(i);
-          order.push(HERO);
-          for (const i of list) if (!opps[i].pending) order.push(i);
-        } else order = list.filter((i) => heroIPvs[i]).concat([HERO], list.filter((i) => !heroIPvs[i]));
+          if (s === street) {
+            for (const i of list) if (opps[i].pending) order.push(i);
+            order.push(HERO);
+            for (const i of list) if (!opps[i].pending) order.push(i);
+          } else {
+            for (const i of list) if (heroIPvs[i]) order.push(i);
+            order.push(HERO);
+            for (const i of list) if (!heroIPvs[i]) order.push(i);
+          }
+          orderCache[okey] = order;
+        }
         const opensFrom = s === street ? order.indexOf(HERO) : order.length; // hero can't open after checking
         let bettor = -2, B = 0, at = -1;
         for (let k = 0; k < order.length && bettor === -2; k++) {
@@ -4757,21 +4792,34 @@
     // Hero's gain on this deal once oppIn is decided: everyone folds, someone re-raises hero
     // off the hand, or the hand goes on (later streets played out against version v, or a
     // showdown). With `rec` the scenario's tallies are updated too.
+    // The opponents still in (by bit mask), and their seat order per street: built once each.
+    const listCache = [], orderCache = [];
+    function listFor(mask) {
+      let l = listCache[mask];
+      if (!l) { l = []; for (let i = 0; i < opps.length; i++) if (mask & (1 << i)) l.push(i); listCache[mask] = l; }
+      return l;
+    }
+    let dealNo = 0, heroScoreDeal = -1, heroScore7 = 0;
+    const oppScoreDeal = new Int32Array(opps.length).fill(-1), oppScore7 = new Int32Array(opps.length);
     function settle(sc, v, rng, rec, reraisedBy) {
       settledLooked = false;
       let anyIn = 0;
       for (let i = 0; i < opps.length; i++) anyIn |= oppIn[i];
       if (!anyIn) { if (rec) sc.foldAll++; return pot; }
       if (reraisedBy >= 0 && !heroStandsReraise) { if (rec) sc.reraised++; return -sc.amount; }
-      cards[0] = hero[0]; cards[1] = hero[1];
-      const hs = evaluate(cards, 7);
+      // 7-card scores, evaluated once per deal (settle runs again for the opponent versions).
+      if (heroScoreDeal !== dealNo) { cards[0] = hero[0]; cards[1] = hero[1]; heroScore7 = evaluate(cards, 7); heroScoreDeal = dealNo; }
+      const hs = heroScore7;
       let best = hs, nBest = 1, heroBest = true, finalPot = potWin + sc.amount;
       for (let i = 0; i < opps.length; i++) {
         if (!oppIn[i]) continue;
         addNow[i] = Math.min(sc.opp[i].add, oppLeft[i]);
         finalPot += addNow[i];
-        cards[0] = COMBO_HI[oppCombo[i]]; cards[1] = COMBO_LO[oppCombo[i]];
-        const s = evaluate(cards, 7);
+        if (oppScoreDeal[i] !== dealNo) {
+          cards[0] = COMBO_HI[oppCombo[i]]; cards[1] = COMBO_LO[oppCombo[i]];
+          oppScore7[i] = evaluate(cards, 7); oppScoreDeal[i] = dealNo;
+        }
+        const s = oppScore7[i];
         oppScore[i] = s;
         if (s > best) { best = s; nBest = 1; heroBest = false; }
         else if (s === best) nBest++;
@@ -4790,9 +4838,10 @@
         gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v, null, oppLeft[lastIn] - addNow[lastIn]);
         settledLooked = true;
       } else if (lookahead && inCount >= 2 && sc.amount < stack && mwStack != null) {
-        const list = [];
-        for (let i = 0; i < opps.length; i++) if (oppIn[i]) list.push(i);
-        const startCur = sc.kind === 'check' && list.some((i) => opps[i].pending);
+        let mask = 0, anyPending = false;
+        for (let i = 0; i < opps.length; i++) if (oppIn[i]) { mask |= 1 << i; if (opps[i].pending) anyPending = true; }
+        const list = listFor(mask);
+        const startCur = sc.kind === 'check' && anyPending;
         gain = playOutMulti(list, finalPot, sc.amount, hs, rng, v, startCur);
         settledLooked = true;
       } else {
@@ -4844,6 +4893,7 @@
           used[x] = 1;
           cards[i + 2] = x;
         }
+        dealNo++;
         const gain = settle(sc, 0, rng, true, reraisedBy);
         // The robust opponent versions (only used with the look-ahead). Bets meet them on later
         // streets; shoves have none, so there a version that folds more or less changes who
