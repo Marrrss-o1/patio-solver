@@ -302,10 +302,128 @@ test('engine: fold rate follows the bet sizes they actually fold to', () => {
   assert.ok(E.foldAtSize(st, 0.66, 3) < E.foldAtSize(st, 1.2, 3));
 });
 
-test('engine: per-street reads move that street only', () => {
-  const st = E.computeStats(tallyWith({ st: { flop: { check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, turn: { check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, river: { check: 0, bet: 0, call: 0, raise: 0, fold: 40 } } }), 'typical');
+test('engine: per-street reads move that street most, and the others a little', () => {
+  const base = E.computeStats({}, 'typical');
+  const st = E.computeStats(tallyWith({ fold: 76, st: { flop: { check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, turn: { check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, river: { check: 0, bet: 0, call: 0, raise: 0, fold: 40 } } }), 'typical');
+  const moved = (n) => st.byStreet[n].foldToBet - base.byStreet[n].foldToBet;
   assert.ok(st.byStreet[5].foldToBet > st.byStreet[3].foldToBet + 0.2);
-  assert.ok(Math.abs(st.byStreet[3].foldToBet - st.foldToBet) < 1e-9);
+  // Folding every river bet says something about their flop folds too (one fold tendency per
+  // player), but much less than about the river.
+  assert.ok(moved(3) > 0 && moved(5) > 2 * moved(3), `${moved(3)} ${moved(5)}`);
+});
+
+test('reads: a new player starts as the average home player, with street and position effects', () => {
+  const st = E.computeStats({}, 'typical');
+  const H = E.READ_PRIORS.home;
+  assert.ok(Math.abs(st.vpip - H.vpip.mu.all) < 1e-9);
+  assert.ok(st.byPos.late.vpip > st.byPos.blinds.vpip);
+  assert.ok(st.byStreet[5].betFreq > st.byStreet[3].betFreq, 'friends bet the river more often than the flop');
+  // A few hands move the read part of the way; many hands move it close to what they do.
+  const loose = (n) => E.computeStats(Object.assign(T.blankTally(), { pfCall: n, pos: { late: { n, vpip: n, pfr: 0 }, early: { n: 0, vpip: 0, pfr: 0 }, blinds: { n: 0, vpip: 0, pfr: 0 } } }), 'typical');
+  assert.ok(loose(5).vpip > st.vpip && loose(5).vpip < loose(50).vpip && loose(50).vpip > 0.9);
+  // Solid (hero's own range) is the old, tighter typical prior.
+  assert.ok(E.computeStats({}, 'solid').vpip < 0.3);
+});
+
+test('reads: pooled counts from the table move a new player toward this table', () => {
+  const tight = tallyWith({ pfFold: 150, pfCall: 30, pfRaise: 20, pos: { early: { n: 0, vpip: 0, pfr: 0 }, late: { n: 0, vpip: 0, pfr: 0 }, blinds: { n: 0, vpip: 0, pfr: 0 } } });
+  const fresh = E.computeStats({}, 'typical', E.poolTally([tight, tight]));
+  assert.ok(fresh.vpip < E.computeStats({}, 'typical').vpip - 0.1, String(fresh.vpip));
+  // The player's own counts are taken back out of the pool, so they are not counted twice.
+  const self = E.computeStats(tight, 'typical', E.poolTally([tight]));
+  near(self.vpip, E.computeStats(tight, 'typical').vpip);
+});
+
+test('reads: predictAction gives a distribution, and the tracker scores reads on every action', () => {
+  const st = E.computeStats({}, 'typical');
+  for (const d of [{ kind: 'pf', pos: 'late' }, { kind: 'open', n: 3, cbet: true }, { kind: 'face', n: 5, frac: 0.5, aggLine: true }]) {
+    const p = E.predictAction(st, d);
+    const tot = Object.values(p).reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(tot - 1) < 1e-9 && Object.values(p).every((x) => x >= 0), JSON.stringify(p));
+  }
+  const t = new T({ players: {} });
+  t.predictor = E.makePredictor(() => 'typical', () => t.poolTally());
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const pred = t.db.players.V.tally.pred;
+  assert.ok(pred.n >= 4 && pred.read > 0 && pred.pop > 0, JSON.stringify(pred));
+  assert.ok(T.predSummary(t.db.players.V.tally).n >= 4);
+});
+
+test('reads: vsOpen counts the response to a single open by its size', () => {
+  const mk = () => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' }] });
+  const t = new T({ players: {} });
+  const snap = mk();
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 7 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 6 }],
+  ]) t.handle(ev, data, snap);
+  const vo = t.db.players.V.tally.vsOpen;
+  assert.strictEqual(vo.large.call, 1, JSON.stringify(vo));
+  // A limper calling a raise is not a response to an open (they keep most of their limping range).
+  const t3 = new T({ players: {} });
+  const snap3 = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' },
+    { id: 3, authUserId: 'W', name: 'Wes', stack: 200, posType: 's3', playState: 'playing' }] };
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 2 }], ['game:big_blind_paid', { amount: 2, playerId: 3 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'fold', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 1 }],
+    ['player:game:action_taken', { playerID: 3, actionType: 'raise', makeBetValue: 6 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 6 }],
+  ]) t3.handle(ev, data, snap3);
+  const vo3 = t3.db.players.V.tally.vsOpen;
+  assert.strictEqual(vo3.large.call + vo3.medium.call + vo3.small.call, 0, JSON.stringify(vo3));
+  const st = E.computeStats(Object.assign(T.blankTally(), { vsOpen: { small: { fold: 0, call: 0, raise: 0 }, medium: { fold: 0, call: 0, raise: 0 }, large: { fold: 20, call: 0, raise: 0 } } }), 'typical');
+  assert.ok(st.vsOpen.large.cont < 0.2 && st.vsOpen.small.cont > 0.5, JSON.stringify(st.vsOpen));
+});
+
+test('reads: a bet that then calls a raise reads stronger than a plain bet', () => {
+  assert.strictEqual(T.streetAction(['bet', 'call'], 4), 'betcall');
+  assert.strictEqual(T.streetAction(['bet'], 4), 'bet');
+  assert.strictEqual(T.streetAction(['check', 'call'], 4), 'checkcall');
+  const board = C('Ks 9d Kh 6d');
+  const st = E.computeStats(T.blankTally(), 'typical');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board.slice(0, 3)), 4: E.boardStrength(board) };
+  const mean = (W) => { let a = 0, w = 0; for (let k = 0; k < W.length; k++) if (W[k] > 0 && strengths[4].hs[k] >= 0) { a += W[k] * strengths[4].hs[k]; w += W[k]; } return a / w; };
+  const bet = E.buildRange(st, { pre: 'call', flop: 'check', turn: 'bet' }, strengths, board);
+  const betcall = E.buildRange(st, { pre: 'call', flop: 'check', turn: 'betcall' }, strengths, board);
+  assert.ok(mean(betcall) > mean(bet) + 0.03, mean(bet) + ' vs ' + mean(betcall));
+});
+
+test('reads: players who re-raised preflop fold less after the flop', () => {
+  const t = T.blankTally();
+  const flat = E.computeStats(t, 'typical');
+  const rr = E.computeStats(t, 'typical', null, { reraised: true });
+  assert.ok(rr.foldToBet < flat.foldToBet - 0.04, flat.foldToBet + ' vs ' + rr.foldToBet);
+  assert.ok(rr.byStreet[4].foldToBet < flat.byStreet[4].foldToBet && rr.foldBySize.large < flat.foldBySize.large);
+  // The unblended read is left as it is; predictAction applies the same shift by decision.
+  assert.strictEqual(rr.read.foldToBet, flat.read.foldToBet);
+  const d = { kind: 'face', n: 4, frac: 0.5, mw: false };
+  assert.ok(E.predictAction(flat, Object.assign({ reraised: true }, d)).fold < E.predictAction(flat, d).fold);
+});
+
+test('reads: range noise keeps unusual lines possible, and is learned from showdowns', () => {
+  const board = C('6d As Qc');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
+  const weight = (st) => {
+    const W = E.buildRange(st, { pre: 'raise', flop: 'checkraise' }, strengths, board);
+    let tot = 0; for (let k = 0; k < W.length; k++) tot += W[k];
+    return W[E.comboIndex(E.parseCard('Ah'), E.parseCard('5c'))] / tot;
+  };
+  const st = E.computeStats({}, 'typical');
+  assert.ok(weight(st) > 3 * weight(Object.assign({}, st, { rangeNoise: 0, rangeNoiseAgg: 0 })), 'A5 check-raising A-Q-6 stays in the range');
+  // Shows that fit a low noise level better pull this player's noise down.
+  const fit = { top: 0.3, lr: 2, sq: 0.5, tl: E.TILTS.map(() => 0), nl: E.NOISES.map((x) => -8 * x), agg: false, v: E.FIT_VERSION };
+  const shows = Array(15).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit }));
+  assert.ok(E.computeStats(tallyWith({ shows }), 'typical').rangeNoise < st.rangeNoise - 0.1);
 });
 
 test('engine: 3-bet range follows the observed 3-bet rate', () => {
@@ -379,7 +497,8 @@ test('multiway: the river is solved against the whole field', () => {
 });
 
 test('multiway: look-ahead with raises gives sane, ordered bet EVs', () => {
-  const spot = (h) => E.analyzeSync({ hero: C(h), board: C('Kd 8h 4s'), pot: 60, toCall: 0, stack: 1000, bigBlind: 10, mix: false, seed: 5, inPosition: false,
+  // Against solid callers: against the home game's loose limpers A-Q high is not air on K-8-4.
+  const spot = (h) => E.analyzeSync({ hero: C(h), board: C('Kd 8h 4s'), pot: 60, toCall: 0, stack: 1000, bigBlind: 10, mix: false, seed: 5, inPosition: false, tableStyle: 'solid',
     opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: tallyWith({ raise: 20 }), actions: { pre: 'call', flop: 'pending' } })), iterations: 3000 });
   const betEv = (r) => Math.max(...r.ranked.filter((x) => x.kind === 'bet').map((x) => x.ev));
   const set = spot('8c 8d'), pair = spot('Kh Jc'), air = spot('Ah Qd');
@@ -429,16 +548,20 @@ test('lookahead: an open-ended draw can call a pot-size bet on implied odds', ()
   const now = E.analyzeSync(Object.assign({}, spot, { lookahead: false }));
   const ahead = E.analyzeSync(spot);
   const call = (r) => r.ranked.find((s) => s.kind === 'call').ev;
-  assert.ok(call(ahead) > call(now) + 15, `${call(ahead)} vs ${call(now)}`);
+  // 8, not 15: with medium hands in the betting range the draw has a little more equity right
+  // away, and in the home prior fitted on three logs a bettor folds more later in the hand
+  // (foldAfterAgg 0.35, 94 spots), so hitting pays a little less. The lookahead still adds ~9.
+  assert.ok(call(ahead) > call(now) + 8, `${call(ahead)} vs ${call(now)}`);
 });
 
 test('lookahead: real hand flop decision stays sane', () => {
   const x = replay(real).turns[1];
   const r = E.analyzeSync(Object.assign({}, x.input, { iterations: 6000, mix: false, seed: 7 }));
   assert.strictEqual(r.lookahead, true);
-  // Top pair on a monotone board facing a big bet: calling is close, never a clear fold.
+  // Top pair on a monotone board facing a 1.5x pot lead: calling is close, never a clear fold.
+  // (Friends lead the flop only about one time in five, so a big lead reads fairly strong.)
   const call = r.ranked.find((s) => s.kind === 'call');
-  assert.ok(call.ev > -0.05 * r.pot, 'call EV ' + call.ev);
+  assert.ok(call.ev > -0.1 * r.pot, 'call EV ' + call.ev);
   r.ranked.forEach((s) => assert.ok(isFinite(s.ev)));
 });
 
@@ -447,7 +570,7 @@ test('lookahead: real hand flop decision stays sane', () => {
 // ---------------------------------------------------------------------------
 test('mixing: close spots come back as frequencies, and the seed picks one', () => {
   // A flop spot where checking and a small bet come out close.
-  const base = flopSpot('Ah 5c', { board: C('As 9c 4d'), iterations: 3000 });
+  const base = flopSpot('Ah 5c', { board: C('As 9c 4d'), iterations: 3000, tableStyle: 'solid' });
   let mixed = null;
   for (let seed = 1; seed < 40 && !mixed; seed++) {
     const r = E.analyzeSync(Object.assign({}, base, { seed, board: C(['As 9c 4d', 'Kd 8s 3c', '7h 6h 2c', 'Qs Jd 5h'][seed % 4]) }));
@@ -477,7 +600,7 @@ test('no 2x-pot overbets: they lost money at a real table', () => {
 
 test('fold rates rise only gently with bet size', () => {
   const st = E.computeStats({}, 'typical');
-  assert.ok(E.foldAtSize(st, 2, 5) < 0.62, String(E.foldAtSize(st, 2, 5)));
+  assert.ok(E.foldAtSize(st, 2, 5) < st.byStreet[5].foldToBet + 0.18, String(E.foldAtSize(st, 2, 5)));
   assert.ok(E.foldAtSize(st, 2, 5) - E.foldAtSize(st, 0.5, 5) < 0.2);
 });
 
@@ -541,7 +664,7 @@ test('read accuracy: shown hands are scored against the predicted range', () => 
 
 test('read accuracy: ranges that keep missing get less trust', () => {
   const base = { pfFold: 30, pfCall: 20, pfRaise: 10, check: 30, bet: 15, call: 15, fold: 15 };
-  const shows = (top) => Array(10).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit: { top, lr: top < 0.5 ? 2 : 0.2 } }));
+  const shows = (top) => Array(10).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit: { top, lr: top < 0.5 ? 2 : 0.2, v: E.FIT_VERSION } }));
   const good = E.computeStats(Object.assign(T.blankTally(), base, { shows: shows(0.3) }), 'typical');
   const bad = E.computeStats(Object.assign(T.blankTally(), base, { shows: shows(0.9) }), 'typical');
   assert.ok(good.exploitWeight > bad.exploitWeight + 0.1);
@@ -550,7 +673,9 @@ test('read accuracy: ranges that keep missing get less trust', () => {
 
 test('read accuracy: players who keep showing weaker hands get weaker ranges', () => {
   const base = { pfFold: 30, pfCall: 20, pfRaise: 10, check: 30, bet: 15, call: 15, fold: 15 };
-  const shows = (sq) => Array(12).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit: { top: 0.5, lr: 1, sq } }));
+  // Learned from each show's likelihood under weaker and stronger ranges (fit.tl), here
+  // shows that fit the weakest tilt best.
+  const shows = (sq) => Array(12).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit: { top: 0.5, lr: 1, sq, tl: E.TILTS.map((x) => -3 * x), agg: false, v: E.FIT_VERSION } }));
   const weak = E.computeStats(Object.assign(T.blankTally(), base, { shows: shows(0.2) }), 'typical');
   const plain = E.computeStats(Object.assign(T.blankTally(), base), 'typical');
   assert.ok(weak.strengthBias < -0.15);
@@ -623,7 +748,8 @@ test('river solver: checking it down is worth equity x pot (showdown math with b
 test('river solver: calls a known bluffer more often than an honest bettor', () => {
   const callFreq = (shows) => {
     const tally = Object.assign(T.blankTally(), { pfFold: 60, pfCall: 45, pfRaise: 25, check: 60, bet: 36, call: 30, raise: 6, fold: 36, shows });
-    const r = E.analyzeSync(riverSpot('Kh Qh', { opponents: [{ name: 'V', tally, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 1 } }] }));
+    // Solid table: the home game's average player bets the river so often that K-Q calls both.
+    const r = E.analyzeSync(riverSpot('Kh Qh', { tableStyle: 'solid', opponents: [{ name: 'V', tally, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 1 } }] }));
     return r.ranked.filter((s) => s.kind === 'call').reduce((a, s) => a + s.freq, 0);
   };
   const bluffer = callFreq(Array(10).fill(0).map(() => ({ ...bluffShow })));
@@ -684,7 +810,8 @@ test('hero story: a strong-looking line makes opponents fold more', () => {
   const strong = E.analyzeSync(Object.assign({}, base, { heroActions: { pre: 'raise', flop: 'bet', turn: '' } }));
   const weak = E.analyzeSync(Object.assign({}, base, { heroActions: { pre: 'call', flop: 'checkcall', turn: '' } }));
   assert.ok(strong.credibility > weak.credibility);
-  const fold = (r) => r.ranked.find((s) => s.kind === 'bet').foldPct;
+  // Same bet size in both (the best-ranked size can differ).
+  const fold = (r) => r.ranked.find((s) => s.kind === 'bet' && s.amount === 75).foldPct;
   assert.ok(fold(strong) > fold(weak));
 });
 
@@ -720,7 +847,8 @@ const pfSpot = (h, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: []
   iterations: 2000, preflopIterations: 200, opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }], heroActions: { pre: 'pending' } }, extra));
 
 test('preflop solver: heads-up spots are solved range against range', () => {
-  const aa = pfSpot('Ah As'), junk = pfSpot('7c 2d');
+  // A solid opponent: against the home game's passive big blind the solver limps 7-2 for a sliver.
+  const aa = pfSpot('Ah As'), junk = pfSpot('7c 2d', { tableStyle: 'solid' });
   assert.strictEqual(aa.solver.kind, 'preflop');
   assert.notStrictEqual(aa.best.kind, 'fold');
   assert.strictEqual(junk.best.kind, 'fold');
@@ -744,9 +872,33 @@ test('preflop solver: an open with several players behind is solved against the 
   assert.strictEqual(aa.solver.field, 5);
   assert.ok(['raise', 'allin'].includes(aa.best.kind));
   assert.strictEqual(junk.best.kind, 'fold');
-  // Limpers in front: not an open, so the Monte Carlo handles it.
-  const limped = pfSpot('Ks Kd', { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] });
-  assert.strictEqual(limped.solver, null);
+  // Limpers in front: solved against the field too, with multiway equity (or the Monte Carlo if asked).
+  const limpedIn = { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] };
+  const limped = pfSpot('Ks Kd', limpedIn);
+  assert.strictEqual(limped.solver.kind, 'preflop');
+  assert.strictEqual(limped.solver.field, 2);
+  assert.ok(['raise', 'allin'].includes(limped.best.kind));
+  assert.strictEqual(pfSpot('Ks Kd', Object.assign({ preflopMultiway: false }, limpedIn)).solver, null);
+});
+
+test('preflop solver: limped and raised multiway pots use multiway equity', () => {
+  const bb = (h) => pfSpot(h, { pot: 3.5, toCall: 0, inPosition: false, heroActions: {},
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }] });
+  const aa = bb('As Ad'), junk = bb('9c 4d');
+  assert.ok(['raise', 'bet', 'allin'].includes(aa.best.kind));
+  assert.strictEqual(junk.best.kind, 'check');
+  const vsRaise = (h) => pfSpot(h, { pot: 7.5, toCall: 2, inPosition: false, heroActions: {},
+    opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] });
+  const big = vsRaise('As Ad'), weak = vsRaise('9c 4d');
+  assert.strictEqual(big.solver.kind, 'preflop');
+  assert.ok(['raise', 'allin'].includes(big.best.kind));
+  assert.strictEqual(weak.best.kind, 'fold');
+  // Hero's multiway share is below the share against the strongest single hand.
+  const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
+  const m = E._pf.preflopMulti(opps, [], [], (x) => x, 0, 400, 7);
+  const cls = (n) => E.PREFLOP_ORDER.indexOf(n) >= 0 && E._pf.classIndex(n);
+  assert.ok(m.kappa[cls('AA')] < 1 && m.kappa[cls('AA')] > 0.7);
+  assert.ok(m.kappa[cls('72o')] < m.kappa[cls('AA')]);
 });
 
 const turnSpot = (h, extra) => Object.assign({
@@ -775,6 +927,65 @@ test('turn solver: workers\' solves are averaged in the final pass', () => {
   assert.ok(Math.abs(fin.ranked.find((x) => x.kind === 'call').ev - mean) < 1e-9);
 });
 
+test('multiway: the field folds only when every player folds', () => {
+  const a = E._pf.computeStats({}, 'typical'), b = E._pf.computeStats({}, 'loose');
+  const f = E._pf.fieldStats([a, b], a);
+  const want = E._pf.foldAtSize(a, 0.66, 5) * E._pf.foldAtSize(b, 0.66, 5);
+  assert.ok(Math.abs(E._pf.foldAtSize(f, 0.66, 5) - want) < 1e-9);
+  assert.ok(f.betFreq > Math.max(a.betFreq, b.betFreq));
+});
+
+test('turn solver: multiway turns are solved against the field on the computer', () => {
+  const two = (h, extra) => E.analyzeSync(Object.assign({
+    hero: C(h), board: C('Ts 9s 4d 2c'), pot: 30, toCall: 15, stack: 150, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+    iterations: 2000, turnSolver: true, turnIterations: 30, heroActions: { pre: 'call', flop: 'call' },
+    opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true },
+      { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }],
+  }, extra));
+  const weak = two('Ah Td'), set = two('4c 4h');
+  assert.strictEqual(weak.solver.kind, 'turn');
+  assert.strictEqual(weak.solver.field, 2);
+  assert.strictEqual(weak.best.kind, 'fold');
+  assert.notStrictEqual(set.best.kind, 'fold');
+  assert.strictEqual(two('Ah Td', { turnSolver: false }).solver, null);
+});
+
+test('flop solver: computer mode only; heads-up and against the field', () => {
+  const flop = (h, extra) => E.analyzeSync(Object.assign({
+    hero: C(h), board: C('Kh 8h 4c'), pot: 20, toCall: 8, stack: 100, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+    iterations: 2000, flopIterations: 8, heroActions: { pre: 'call' },
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }],
+  }, extra));
+  assert.strictEqual(flop('Ah 5h').solver, null);
+  assert.strictEqual(E.solvableSpot({ board: C('Kh 8h 4c'), opponents: [{}] }), null);
+  assert.strictEqual(E.solvableSpot({ board: C('Kh 8h 4c'), opponents: [{}], flopSolver: true }), 'flop');
+  const draw = flop('Ah 5h', { flopSolver: true }), air = flop('Qc 2d', { flopSolver: true });
+  assert.strictEqual(draw.solver.kind, 'flop');
+  assert.notStrictEqual(draw.best.kind, 'fold');
+  assert.strictEqual(air.best.kind, 'fold');
+  for (const r of [draw, air]) assert.ok(r.ranked.every((x) => isFinite(x.ev)));
+  const field = flop('Ah 5h', { flopSolver: true, pot: 34, opponents: [
+    { name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true },
+    { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call' } }] });
+  assert.strictEqual(field.solver.kind, 'flop');
+  assert.strictEqual(field.solver.field, 2);
+  assert.ok(field.ranked.every((x) => isFinite(x.ev)));
+});
+
+test('river: hands that play a straight-or-better board call, so bluffing into them is no edge', () => {
+  // Marwin's log, hand 93: three passive players, board 8-Q straight, hero 2d7h plays the board.
+  const opps = ['A', 'B', 'C'].map((name) => ({ name, tally: {}, actions: { pre: 'call', flop: 'check', turn: 'check', river: '' } }));
+  const spot = (extra) => E.analyzeSync(Object.assign({ hero: C('2d 7h'), board: C('Jd Qc Tc 9h 8c'), pot: 8, toCall: 0, stack: 300,
+    bigBlind: 2, inPosition: false, mix: false, seed: 1, iterations: 6000, opponents: opps,
+    heroActions: { pre: 'call', flop: 'check', turn: 'check' } }, extra));
+  assert.strictEqual(spot({ riverSolver: false }).best.kind, 'check');
+  assert.strictEqual(spot({ riverSolver: false, opponents: [opps[0]] }).best.kind, 'check');
+  for (const r of [spot({}), spot({ opponents: [opps[0]] })]) {
+    const ev = (k) => Math.max(...r.ranked.filter((a) => a.kind === k).map((a) => a.ev));
+    assert.ok(ev('bet') - ev('check') < 0.25, `bet ${ev('bet')} vs check ${ev('check')}`);
+  }
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
@@ -794,6 +1005,9 @@ test('kernels: river and preflop solves give bit-identical results with and with
       opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] },
     { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60,
       opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) },
+    // Multiway preflop leaves (a raise and a caller in front).
+    { hero: C('9s 8s'), board: [], pot: 75, toCall: 20, stack: 1000, bigBlind: 10, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60,
+      opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] },
   ];
   const json = (x) => JSON.stringify(x, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   for (const sp of spots) {

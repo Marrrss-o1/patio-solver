@@ -14,11 +14,16 @@ function solverAgent(opts = {}) {
   const E = require(path.join(src, 'engine.js'));
   const T = require(path.join(src, 'tracker.js'));
   // Blueprint strategies for engines that support them: BP=<file>[,<file>] (.gz files are gunzipped).
+  // Passed with each solve (input.blueprintObj) where the engine takes that, because A and B on the same src/
+  // share one engine module and setBlueprint() is module-wide; older engines get setBlueprint().
   const bpFiles = (opts.blueprint != null ? opts.blueprint : process.env.BP || '').split(',').filter(Boolean);
+  let bpObj = null;
   if (bpFiles.length && typeof E.setBlueprint === 'function' && fs.existsSync(path.join(src, 'blueprint.js'))) {
     const BPmod = require(path.join(src, 'blueprint.js'));
     const read = (f) => (f.endsWith('.gz') ? zlib.gunzipSync(fs.readFileSync(f)) : fs.readFileSync(f));
-    E.setBlueprint(bpFiles.map((f) => BPmod.load(read(f))));
+    const loaded = bpFiles.map((f) => BPmod.load(read(f)));
+    if (fs.readFileSync(path.join(src, 'engine.js'), 'utf8').includes('input.blueprintObj')) bpObj = loaded;
+    else E.setBlueprint(loaded);
   }
   const tracker = new T(opts.db ? JSON.parse(JSON.stringify(opts.db)) : { players: {} });
   tracker.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
@@ -37,6 +42,7 @@ function solverAgent(opts = {}) {
         iterations: opts.iters || 3000, riverIterations: opts.riverIters || 120,
         seed: Math.floor(keyed(v.rk, v.nAct, 4242) * 4294967296) >>> 0,
       }, extra);
+      if (bpObj) input.blueprintObj = bpObj;
       const res = E.analyzeSync(input);
       stats.ms += Date.now() - t0; stats.decisions++;
       const bump = (k) => { stats.solved[k] = (stats.solved[k] || 0) + 1; };
