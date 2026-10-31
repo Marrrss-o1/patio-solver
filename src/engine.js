@@ -1656,6 +1656,9 @@
 
     // ----- tree -----
     const maxIn = (pl) => (pl === 0 ? stack : Math.max(0, stack - toCall));
+    // Hero's sizes (fractions of the pot). At most 3 bets or 2 raises, so a node has at most 4 actions.
+    const turnBets = (cfg.turnBets || [0.33, 0.66, 1]).slice(0, 3), riverBets = (cfg.riverBets || [0.5, 1]).slice(0, 3);
+    const raiseFracs = (cfg.raiseFracs || [1]).slice(0, 2);
     let nodes = 0;
     function makeNode(n5, card, player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise, fr, oppAgg, q) {
       nodes++;
@@ -1677,14 +1680,16 @@
         const [h2, o2] = after(c);
         add({ kind: c >= left - 1e-9 ? 'allin' : 'call', amount: c, isCall: true }, (frc) => close(h2, o2, frc, oppAgg));
         if (raisesLeft > 0 && left > facing + 1e-9) {
-          const r = Math.min(left, round(facing + (potNow + facing)));
-          const [h3, o3] = after(r);
-          add({ kind: r >= left - 1e-9 ? 'allin' : 'raise', amount: r, frac: (r - facing) / (potNow + facing) },
-            (frc) => makeNode(n5, card, 1 - player, h3, o3, r - facing, raisesLeft - 1, true, true, frc, oppAgg || player === 1, q));
+          for (const rf of (player === 0 ? raiseFracs : [1])) {
+            const r = Math.min(left, round(facing + rf * (potNow + facing)));
+            const [h3, o3] = after(r);
+            add({ kind: r >= left - 1e-9 ? 'allin' : 'raise', amount: r, frac: (r - facing) / (potNow + facing) },
+              (frc) => makeNode(n5, card, 1 - player, h3, o3, r - facing, raisesLeft - 1, true, true, frc, oppAgg || player === 1, q));
+          }
         }
       } else {
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q)));
-        const fracs = player === 0 ? (n5 === 4 ? [0.5, 1] : [0.66]) : [betFrac];
+        const fracs = player === 0 ? (n5 === 4 ? turnBets : riverBets) : [betFrac];
         for (const f of fracs) {
           const b = Math.min(left, round(f * potNow));
           if (b <= 0) continue;
@@ -1962,6 +1967,86 @@
     return cw;
   }
 
+  // Multiway inputs for preflopSolve: K opponents, how many are in at the flop after hero's call
+  // (kCall) or first raise (kRaise(amount)), and kappa per hero class: hero's K-way pot share at
+  // showdown over hero's share against the field's strongest hand (the hand the solver plays
+  // against). Both come from the same sampled boards and opponent hands, so the ratio is steady.
+  function preflopMulti(opps, scenarios, raisesSc, capE, toCall, samples, seed) {
+    const NC = 169, K = opps.length;
+    const rng = mulberry32((seed ^ 0x3c6ef372) >>> 0);
+    const cdfs = opps.map((o) => {
+      const c = new Float64Array(NUM_COMBOS);
+      let t = 0;
+      for (let k = 0; k < NUM_COMBOS; k++) { t += Math.max(0, o.W[k]); c[k] = t; }
+      return t > 0 ? c : null;
+    });
+    const pick = (c) => {
+      const u = rng() * c[NUM_COMBOS - 1];
+      let lo = 0, hi = NUM_COMBOS - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (c[mid] < u) lo = mid + 1; else hi = mid; }
+      return lo;
+    };
+    const byClass = Array.from({ length: NC }, () => []);
+    for (let k = 0; k < NUM_COMBOS; k++) byClass[COMBO_CLASS[k]].push(k);
+    const multi = new Float64Array(NC), vsMax = new Float64Array(NC);
+    const used = new Uint8Array(52), buf = new Int32Array(7), oScore = new Int32Array(K), oHand = new Int32Array(K);
+    let got = 0;
+    for (let it = 0; it < samples * 4 && got < samples; it++) {
+      used.fill(0);
+      let ok = cdfs.every(Boolean);
+      for (let i = 0; i < K && ok; i++) {
+        const k = pick(cdfs[i]);
+        if (used[COMBO_HI[k]] || used[COMBO_LO[k]]) { ok = false; break; }
+        used[COMBO_HI[k]] = used[COMBO_LO[k]] = 1;
+        oHand[i] = k;
+      }
+      if (!ok) continue;
+      for (let j = 0; j < 5; j++) {
+        let c;
+        do { c = Math.floor(rng() * 52); } while (used[c]);
+        used[c] = 2;
+        buf[j] = c;
+      }
+      let best = -1, top = 0;
+      for (let i = 0; i < K; i++) {
+        buf[5] = COMBO_HI[oHand[i]]; buf[6] = COMBO_LO[oHand[i]];
+        oScore[i] = evaluate(buf, 7);
+        if (oScore[i] > best) best = oScore[i];
+        if (CLASS_STRENGTH[COMBO_CLASS[oHand[i]]] > CLASS_STRENGTH[COMBO_CLASS[oHand[top]]]) top = i;
+      }
+      let ties = 0;
+      for (let i = 0; i < K; i++) if (oScore[i] === best) ties++;
+      got++;
+      for (let a = 0; a < NC; a++) {
+        const list = byClass[a];
+        let k = -1;
+        for (let t = 0, start = Math.floor(rng() * list.length); t < list.length; t++) {
+          const x = list[(start + t) % list.length];
+          if (!used[COMBO_HI[x]] && !used[COMBO_LO[x]]) { k = x; break; }
+        }
+        if (k < 0) continue;
+        buf[5] = COMBO_HI[k]; buf[6] = COMBO_LO[k];
+        const h = evaluate(buf, 7);
+        multi[a] += h > best ? 1 : h === best ? 1 / (ties + 1) : 0;
+        vsMax[a] += h > oScore[top] ? 1 : h === oScore[top] ? 0.5 : 0;
+      }
+    }
+    if (got < 20) return null;
+    const kappa = new Float64Array(NC);
+    for (let a = 0; a < NC; a++) kappa[a] = clamp((multi[a] + 0.5) / (vsMax[a] + 0.5), 0.15, 1.05);
+    const passive = scenarios.find((s) => s.kind !== 'fold' && s.amount <= toCall + 1e-9);
+    let kCall = 0;
+    opps.forEach((o, i) => { kCall += o.pending && passive ? clamp(passive.opp[i].cont, 0, 1) : 1; });
+    const kRaise = (amt) => {
+      const sc = raisesSc.find((s) => Math.abs(capE(s.amount) - amt) < 1e-9);
+      if (!sc) return 1;
+      let sum = 0, none = 1;
+      for (const r of sc.opp) { const c = clamp(r.cont, 0, 1); sum += c; none *= 1 - c; }
+      return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
+    };
+    return { K, kappa, kCall: Math.max(1, kCall), kRaise, samples: got };
+  }
+
   function preflopSolve(cfg) {
     const { heroW, oppW, heroClass, pot: P0, toCall, stack: E, bigBlind, heroIP, rootActs, option, p } = cfg;
     const NC = 169;
@@ -2021,11 +2106,28 @@
     }
 
     let terminals = 0;
-    function leaf(h, o) {
+    // Multiway (cfg.multi): the field is one player whose hand is its strongest one. At a leaf
+    // where k of the K opponents are in, the field's chips count k times and hero's share is
+    // scaled by kappa^((k - 1) / (K - 1)) (kappa = hero's K-way equity over the equity against
+    // the field's strongest hand).
+    const multi = cfg.multi && cfg.multi.K > 1 ? cfg.multi : null;
+    const kapCache = {};
+    function kapFor(k) {
+      if (!multi || k <= 1 + 1e-6) return null;
+      const key = Math.round(k * 20);
+      if (kapCache[key]) return kapCache[key];
+      const e = Math.min(1, (k - 1) / (multi.K - 1)), out = new Float64Array(NC);
+      for (let a = 0; a < NC; a++) out[a] = Math.pow(multi.kappa[a], e);
+      return (kapCache[key] = out);
+    }
+    function leaf(h, o, k) {
       terminals++;
+      const m = multi && k > 1 ? k : 1;
       const allIn = h >= E - 1e-9 || o >= oMax - 1e-9;
-      const potF = P0 + h + o;
-      return allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF) };
+      const potF = P0 + h + m * o;
+      const n = allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF) };
+      if (m > 1) { n.m = m; n.kap = kapFor(k); }
+      return n;
     }
     function node(player, hIn, oIn, raises, lo, hi, vRaised, depth) {
       const potNow = P0 + hIn + oIn;
@@ -2060,6 +2162,9 @@
         }
       }
       const shortStack = !isRoot && raiseAmts.length === 1;
+      // Players in at a leaf below this node: all of them after hero's call or check (or the
+      // option checked back), the expected callers after hero's first raise, one deeper.
+      const kLeaf = !multi ? 1 : depth === 0 ? multi.kCall : depth === 1 && player === 1 ? (facing > 0 ? multi.kRaise(hIn) : multi.kCall) : 1;
       const childRange = (kind) => {
         if (player === 0) return [lo, hi];
         const span = hi - lo, foldEdge = lo + (1 - cont) * span, raiseEdge = hi - Math.min(raise, cont) * span;
@@ -2073,10 +2178,10 @@
         const callKind = c >= maxAdd - 1e-9 ? 'allin' : 'call';
         const callLeaf = isRoot && option && c < maxAdd - 1e-9
           ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1); }
-          : () => leaf(h2, o2);
+          : () => leaf(h2, o2, kLeaf);
         add({ kind: callKind, amount: c, isCall: true }, callLeaf);
       } else {
-        add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn));
+        add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn, kLeaf));
       }
       for (const amt of raiseAmts) {
         const [h3, o3] = put(amt);
@@ -2107,8 +2212,10 @@
         mass(trav === 0 ? rO : rH, v, trav === 0 ? heroGain : P0 - heroGain);
         return v;
       }
-      const potF = P0 + n.hIn + n.oIn;
+      const oChips = n.m ? n.m * n.oIn : n.oIn;
+      const potF = P0 + n.hIn + oChips;
       const X = n.term === 'show' ? MEQ : n.S;
+      if (n.kap) return multiTerminal(n, trav, rH, rO, v, potF, oChips, X);
       if (trav === 0) {
         classMass(rO, tot, 1);
         // Only the opponent's classes that still reach this leaf.
@@ -2155,6 +2262,30 @@
           for (let b = 0; b < NC; b++) acc[b] += ph * X[row + b];
         }
         for (let b = 0; b < NC; b++) v[b] = potF * (tot[b] - acc[b]) - n.oIn * tot[b];
+      }
+      return v;
+    }
+    // A multiway leaf: hero's share of each pair is scaled by kap[hero class].
+    function multiTerminal(n, trav, rH, rO, v, potF, oChips, X) {
+      const kap = n.kap;
+      if (trav === 0) {
+        classMass(rO, tot, 1);
+        for (let a = 0; a < NC; a++) {
+          let s2 = 0;
+          const row = a * NC;
+          for (let b = 0; b < NC; b++) if (rO[b] > 0) s2 += X[row + b] * rO[b];
+          v[a] = potF * kap[a] * s2 - n.hIn * tot[a];
+        }
+      } else {
+        classMass(rH, tot, 1);
+        acc.fill(0);
+        for (let a = 0; a < NC; a++) {
+          const ph = rH[a] * kap[a];
+          if (!(ph > 0)) continue;
+          const row = a * NC;
+          for (let b = 0; b < NC; b++) acc[b] += ph * X[row + b];
+        }
+        for (let b = 0; b < NC; b++) v[b] = potF * (tot[b] - acc[b]) - oChips * tot[b];
       }
       return v;
     }
@@ -2804,6 +2935,7 @@
         pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending, heroIP: inPosition,
         iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
+        turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises,
       });
       if (ts) { solved = Object.assign(ts, { kind: 'turn' }); target = Math.min(target, 6000); }
     }
@@ -2858,7 +2990,11 @@
     // Preflop: solve hero's range against the opponent's (or, for an open with several
     // players still to act, against the field) instead of the Monte Carlo's one-decision model.
     const fieldOpen = opps.length >= 2 && opps.length <= 8 && opps.every((o) => o.pending) && toCall > 0 && toCall <= bigBlind + 1e-9;
-    if (!solved && street === 0 && input.preflopSolver !== false && stack > 0 && (opps.length === 1 || fieldOpen)) {
+    // Other multiway spots (limpers, a raise with callers, players behind) are solved against
+    // the field too, with multiway equity (preflopMulti); input.preflopMultiway === false keeps
+    // them on the Monte Carlo.
+    const fieldOther = opps.length >= 2 && opps.length <= 8 && !fieldOpen && input.preflopMultiway !== false;
+    if (!solved && street === 0 && input.preflopSolver !== false && stack > 0 && (opps.length === 1 || fieldOpen || fieldOther)) {
       const E = isFinite(stack) ? stack : 100 * bigBlind + pot;
       const field = opps.length > 1;
       const heroPre = (input.heroActions && input.heroActions.pre) || 'pending';
@@ -2883,20 +3019,22 @@
         });
         return { cont: 1 - fold, raise: 1 - noRaise };
       };
-      let deep = opps[0];
-      for (const o of opps) if (o.stats.vpip > deep.stats.vpip) deep = o;
+      let deep = opps.find((o) => o.aggressor) || opps[0];
+      if (!deep.aggressor) for (const o of opps) if (o.stats.vpip > deep.stats.vpip) deep = o;
       // Raise wars: any re-raise label ('3bet', '4bet', ...) leaves two more raises in the tree.
-      const vPre = opps[0].actions.pre || 'pending';
-      const reraised = (x) => /bet/.test(x);
-      const vRaised = /bet|raise/.test(vPre);
-      const raises = /bet|raise/.test(heroPre) || reraised(vPre) ? 2 : !field && vRaised ? 3 : 4;
+      const pres = opps.map((o) => o.actions.pre || 'pending');
+      const reraised = pres.some((x) => /bet/.test(x));
+      const vRaised = pres.some((x) => /bet|raise/.test(x));
+      const raises = /bet|raise/.test(heroPre) || reraised ? 2 : (!field || fieldOther) && vRaised ? 3 : 4;
+      const pendingOpps = opps.filter((o) => o.pending);
+      const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed) : null;
       const pf = preflopSolve({
         heroW: heroCw, oppW: oppCw, heroClass: hc, pot, toCall, stack: E, bigBlind, heroIP: inPosition,
         rootActs: raisesSc.map((s) => ({ amount: capE(s.amount) })),
-        option: !field && opps[0].pending && toCall > 0,
-        isoShare: 1 - opps.reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
-        rootResp, deepStats: deep.stats, villainRaised: !field && vRaised,
-        raises, noLimp: field,
+        option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
+        isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
+        rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
+        raises, noLimp: fieldOpen, multi,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });
@@ -2909,7 +3047,7 @@
           else sc = raisesSc.find((s) => Math.abs(capE(s.amount) - a.amount) < 1e-9);
           return sc ? Object.assign({}, a, { kind: sc.kind, amount: sc.amount, label: sc.label, sizeLabel: sc.sizeLabel || '' }) : a;
         });
-        solved = Object.assign(pf, { kind: 'preflop', field: field ? opps.length : 0 });
+        solved = Object.assign(pf, { kind: 'preflop', field: field ? opps.length : 0, multiway: multi ? opps.length : 0 });
         target = Math.min(target, 6000);
       }
     }
@@ -2967,7 +3105,8 @@
       const acts = solved.actions.map((a) => ({
         kind: a.kind, amount: a.amount, ev: a.ev, se: 0, freq: a.freq,
         label: a.label || (a.kind === 'allin' ? (a.amount <= toCall + 1e-9 ? 'Call all-in' : 'All-in') : name[a.kind]),
-        sizeLabel: a.sizeLabel != null ? a.sizeLabel : a.frac && a.kind !== 'allin' ? (a.kind === 'raise' ? 'pot-size raise' : Math.round(a.frac * 100) + '% pot') : '',
+        sizeLabel: a.sizeLabel != null ? a.sizeLabel : a.frac && a.kind !== 'allin'
+          ? (a.kind === 'raise' ? (a.frac < 0.8 ? 'small raise' : a.frac > 1.25 ? 'big raise' : 'pot-size raise') : Math.round(a.frac * 100) + '% pot') : '',
       }));
       const ranked = acts.slice().sort((a, b) => b.freq - a.freq || b.ev - a.ev);
       let best = ranked[0];
@@ -3098,7 +3237,7 @@
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     createAnalysis, analyzeSync, solvableSpot, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // For tests.
-    _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax },
+    _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax, preflopMulti, classIndex: (n) => CLASS_NAMES.indexOf(n) },
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

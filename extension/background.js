@@ -37,7 +37,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   (async () => {
     try {
       if (await ensureOffscreen()) {
-        const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input });
+        const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input, quick: !!msg.quick });
         if (r && r.ok) { reply(r); return; }
       }
       reply(runHere(msg.input));

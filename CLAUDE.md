@@ -17,10 +17,14 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
-                         share with `partial: true` (and, heads-up on the turn, its own turn solve for TURN_MS with
-                         its own river-card samples); one final analysis with `merge` adds the tallies, averages the
+                         share with `partial: true` (and, heads-up on the turn, its own turn solve for `turnMs`:
+                         30% of the time left on the game's clock, 2.5-8 s, 6 s if unknown; the clock is 23 s), with
+                         its own river-card samples; one final analysis with `merge` adds the tallies, averages the
                          turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
-                         phone's (24x MC, 8x plan samples, 8x river and preflop iterations).
+                         phone's (24x MC, 8x plan samples, 8x river and preflop iterations). One more worker answers
+                         `quick` requests with the phone's budget: the overlay shows that within ~1 s ("Quick read")
+                         and replaces it with the full solve; if hero acts first, the quick one is logged
+                         (`advice.quick`). The tracker's `turn` event carries `timeLeftMs` for this.
   slim.js                Shrinks a result for the overlay (used by background and workers).
   engine.js, tracker.js  COPIES of src/ written by the build. Edit src/, then run the build.
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
@@ -38,7 +42,11 @@ node scripts/preflop-equity.js   # rebuilds the preflop equity table in src/engi
 npm test                 # node replay tests: real recorded hand + synthetic 3-handed hand
 npm run test:extension   # loads the real extension in Chromium on a fake pokerpatio page, replays a hand
 npm run test:mobile      # runs the userscript on an iPhone-sized fake table, replays a hand
-npm run sim              # heads-up simulator: solver (through the real tracker) vs bots; see test/sim.js for args
+node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals, AIVAT luck correction, paired A/B
+                         # (--a-opts/--b-opts JSON or --a-ref/--b-ref), bots fitted to Marwin's friends. Read
+                         # test/sim/README.md. Read aivatBB100 ± aivatSE100 (diff.* for A/B).
+node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
+npm run sim              # old heads-up simulator (kept for continuity); see test/sim.js for args
 node test/sim-multi.js <hands> <solver|baseline> <3-6 players> <station|typical|maniac|mixed> <seed>
                          # multiway simulator; DUP=1 (default) replays each deal from every seat, DIAG=1 logs decisions
                          # both sims: PF=0 (preflop solver off), PFIT=n, TURN=1 (turn solver on, TURNIT=n), TAG=name;
@@ -82,11 +90,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   preflop solver's first response. Without it the old size-blind rule (VPIP-based) is used.
   Limpers plus players behind, or a raise plus players behind, still use the Monte Carlo.
 - Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
-  one Discounted CFR. Turn: hero 50/100% pot, opponent their size, one raise; each line that reaches the river gets
-  a river subgame per card (built lazily; OOP first, hero 66%, one raise); each iteration samples 6 river cards
+  one Discounted CFR. Turn: hero 33/66/100% pot, opponent their size, one raise; each line that reaches the river gets
+  a river subgame per card (built lazily; OOP first, hero 50/100%, one raise); each iteration samples 6 river cards
   (`turnRiverSamples`), the final pass uses all 48. Hero and opponent hands are indexed separately and pruned
   (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
-  line. ~15-30 ms per iteration; each offscreen worker solves for 4 s and the results are averaged.
+  line. Sizes are `turnBets`/`turnRiverBets`/`turnRaises` in the input (at most 3 bets or 2 raises, so a node has
+  at most 4 actions). ~25-45 ms per iteration in the cloud sandbox; each offscreen worker solves for `turnMs` and
+  the results are averaged.
 - Hero's story: with `heroActions`, the engine builds hero's range as a typical player's. If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%). The river solver
   models hero's range directly, so it does not take the shift.

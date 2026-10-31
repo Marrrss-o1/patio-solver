@@ -744,9 +744,33 @@ test('preflop solver: an open with several players behind is solved against the 
   assert.strictEqual(aa.solver.field, 5);
   assert.ok(['raise', 'allin'].includes(aa.best.kind));
   assert.strictEqual(junk.best.kind, 'fold');
-  // Limpers in front: not an open, so the Monte Carlo handles it.
-  const limped = pfSpot('Ks Kd', { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] });
-  assert.strictEqual(limped.solver, null);
+  // Limpers in front: solved against the field too, with multiway equity (or the Monte Carlo if asked).
+  const limpedIn = { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] };
+  const limped = pfSpot('Ks Kd', limpedIn);
+  assert.strictEqual(limped.solver.kind, 'preflop');
+  assert.strictEqual(limped.solver.field, 2);
+  assert.ok(['raise', 'allin'].includes(limped.best.kind));
+  assert.strictEqual(pfSpot('Ks Kd', Object.assign({ preflopMultiway: false }, limpedIn)).solver, null);
+});
+
+test('preflop solver: limped and raised multiway pots use multiway equity', () => {
+  const bb = (h) => pfSpot(h, { pot: 3.5, toCall: 0, inPosition: false, heroActions: {},
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }] });
+  const aa = bb('As Ad'), junk = bb('9c 4d');
+  assert.ok(['raise', 'bet', 'allin'].includes(aa.best.kind));
+  assert.strictEqual(junk.best.kind, 'check');
+  const vsRaise = (h) => pfSpot(h, { pot: 7.5, toCall: 2, inPosition: false, heroActions: {},
+    opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] });
+  const big = vsRaise('As Ad'), weak = vsRaise('9c 4d');
+  assert.strictEqual(big.solver.kind, 'preflop');
+  assert.ok(['raise', 'allin'].includes(big.best.kind));
+  assert.strictEqual(weak.best.kind, 'fold');
+  // Hero's multiway share is below the share against the strongest single hand.
+  const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
+  const m = E._pf.preflopMulti(opps, [], [], (x) => x, 0, 400, 7);
+  const cls = (n) => E.PREFLOP_ORDER.indexOf(n) >= 0 && E._pf.classIndex(n);
+  assert.ok(m.kappa[cls('AA')] < 1 && m.kappa[cls('AA')] > 0.7);
+  assert.ok(m.kappa[cls('72o')] < m.kappa[cls('AA')]);
 });
 
 const turnSpot = (h, extra) => Object.assign({
