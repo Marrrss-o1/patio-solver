@@ -278,6 +278,7 @@
         case 'game:game_ended':
         case 'admin:game:game_stopped':
           this.finishHand();
+          if (ev === 'game:game_ended' && h) this.settleFromPayout(h, data);
           break;
         default:
           break;
@@ -584,8 +585,39 @@
       list.push(rec);
     }
 
-    // Stacks only update after the pot is paid, so each hand's result is filled in from the
-    // next hand's starting stacks (rebuys between hands would show up as winnings).
+    // Each hand's result: what the server paid each player at game_ended (winnersInfo: won
+    // plus uncalled bets handed back) minus what they put in. Without a usable payout it is
+    // filled in from the next hand's starting stacks instead (settleLog), where rebuys show up
+    // as winnings and a player who busted and left has no result: in Marwin's log that dropped
+    // his own -60bb hand from the hand log's results.
+    settleFromPayout(h, data) {
+      if (!h.logEntry || h.logEntry.net) return;
+      const gr = data && data.endPopupData && data.endPopupData.gameResults;
+      const info = gr && gr.winnersInfo;
+      if (!info || typeof info !== 'object' || !Object.keys(info).length) return;
+      const list = Object.values(h.players);
+      const won = {};
+      let paid = 0;
+      for (const [auth, w] of Object.entries(info)) {
+        const pd = (w && w.playerData) || {};
+        const p = list.find((x) => x.auth === (pd.authUserId || auth)) || list.find((x) => pd.posType && x.pos === pd.posType);
+        if (!p) return; // a winner this hand doesn't know
+        const x = (+w.wonAmount || 0) + (+w.refundUncalledBetsAmount || 0);
+        won[p.id] = (won[p.id] || 0) + x;
+        paid += x;
+      }
+      // The payout has to account for every chip put in (less any rake), or the tracker missed
+      // something: then the stacks decide.
+      const rake = (gr.sidePotsWithWinners || []).reduce((a, sp) => a + (+(sp && sp.potRake) || 0), 0);
+      const put = list.reduce((a, p) => a + p.total, 0);
+      if (Math.abs(paid + rake - put) > 0.01) return;
+      const net = {};
+      for (const p of list) net[p.name] = Math.round(((won[p.id] || 0) - p.total) * 100) / 100;
+      this.applyNet(h, net);
+    }
+
+    // Stacks only update after the pot is paid, so without a payout (settleFromPayout) each
+    // hand's result is filled in from the next hand's starting stacks.
     settleLog(s) {
       const prev = this.hand;
       if (!prev || !prev.logEntry || prev.logEntry.net) return;
@@ -594,6 +626,10 @@
         const now = s.players.find((x) => x.id === p.id);
         if (now && now.stack != null) net[p.name] = Math.round((+now.stack - p.start) * 100) / 100;
       }
+      this.applyNet(prev, net);
+    }
+
+    applyNet(prev, net) {
       prev.logEntry.net = net;
       const live = Object.values(prev.players).filter((p) => !p.folded).length;
       for (const p of Object.values(prev.players)) {

@@ -1309,6 +1309,44 @@ test('solver EVs: an option hero never takes is valued with good play after it (
   assert.ok(bb.ranked.find((s) => s.kind === 'check').ev >= 0);
 });
 
+test('hand log: results come from the payout, so a bust and a rebuy is a loss (and a player who left still has one)', () => {
+  const mk = (heroStack, players) => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 10, players: players || [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: heroStack, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 300, posType: 's5', playState: 'playing' },
+    { id: 3, authUserId: 'W', name: 'Wes', stack: 50, posType: 's7', playState: 'playing' }] });
+  const play = (ended) => {
+    const t = new T({ players: {} });
+    const s = mk(100);
+    for (const [ev, data] of [
+      ['game:stage_began', { stageType: 'set_blinds' }],
+      ['game:dealer_updated', { dealerSeatPos: 's7', smallBlindSeatPos: 's1', bigBlindSeatPos: 's5', underTheGunSeatPos: 's7' }],
+      ['game:small_blind_paid', { amount: 5, playerId: 1 }], ['game:big_blind_paid', { amount: 10, playerId: 2 }],
+      ['game:stage_began', { stageType: 'pre_flop' }],
+      ['player:game:action_taken', { playerID: 3, actionType: 'call', makeBetValue: 10 }],
+      ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 95 }],
+      ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 90 }],
+      ['player:game:player_play_state_changed', { newPlayState: 'folded', userId: 'W' }],
+      ['player:game:action_taken', { playerID: 3, actionType: 'fold', makeBetValue: 0 }],
+      ['game:stage_began', { stageType: 'flop' }], ['game:stage_began', { stageType: 'turn' }], ['game:stage_began', { stageType: 'river' }],
+      ['game:stage_began', { stageType: 'showdown' }],
+      ['game:game_ended', ended],
+    ]) t.handle(ev, data, s);
+    // Hero busted and buys back in for 200; Wes has left.
+    t.handle('game:stage_began', { stageType: 'set_blinds' }, mk(200, mk(200).players.slice(0, 2)));
+    return t.db.history[0];
+  };
+  const paid = (won) => ({ endPopupData: { gameResults: {
+    winnersInfo: { V: { playerData: { authUserId: 'V', posType: 's5' }, wonAmount: won, refundUncalledBetsAmount: 0 } },
+    sidePotsWithWinners: [{ isMainPot: true, potAmount: won, potRake: 0, netPotAmount: won }] } } });
+  const e = play(paid(210));
+  assert.deepStrictEqual(e.net, { Hero: -100, Vic: 110, Wes: -10 });
+  assert.strictEqual(e.heroNet, -100);
+  assert.strictEqual(e.heroNetBB, -10);
+  // A payout that doesn't account for the chips in the pot (or none at all): the stacks decide.
+  assert.deepStrictEqual(play(paid(150)).net, { Hero: 100, Vic: 0 });
+  assert.deepStrictEqual(play({}).net, { Hero: 100, Vic: 0 });
+});
+
 test('blinds: a big blind posted short (all-in for less) does not change the big blind', () => {
   // Ann (s3) is the big blind with 4 chips left; the table's big blind is 10.
   const msgs = [];
