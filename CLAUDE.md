@@ -75,11 +75,19 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 
 ## Known gaps / ideas
 
-- **Verified heads-up only in a live lobby.** Multiway logic is covered by a synthetic 3-handed test, but the
-  assumption that seats run clockwise in ascending number (s1 → s10) has not been confirmed live. If position
-  looks wrong in a real 4+ player game, that is the first suspect (`solverInput` in tracker.js).
+- Seat order (verified on Marwin's live 3-5 handed tables): seats run in ascending number, except `s3_v2`, which
+  sits between s9 and s10 (seatKey 9.5). `seatOrder()` pins SB, BB and UTG from `game:dealer_updated`
+  (`h.sbPos/bbPos/utgPos`); 111 of 111 logged hands match the server's action order.
+- Chip accounting: inputs `heroBet`, `opponents[].bet` and `opponents[].heroIP` (hero acts after them). `potWin` (in
+  the result) is the pot minus the part of a bigger bet hero can't match (`uncalledChips`); potOdds and every solver
+  use it. Opponents with stack 0 can't fold; `realize` isn't applied when nobody can bet any more; calls and raises
+  charge only what each opponent still owes on the street; `playOut` takes a `room` cap for the opponent's chips.
 - Side pots: modelled at showdown when the tracker passes `heroCommitted` and each opponent's `committed`/`stack`
-  (`sidePotWin` in engine.js). The multiway lookahead skips spots with a short stack and falls back to that.
+  (`sidePotWin` in engine.js; `hasSidePots`). The multiway solvers and the multiway lookahead use `multiwayStack`:
+  they still run when hero can match the bets it faces and every player with fewer total chips (committed + behind)
+  has at least 1 (river), 2 (turn) or 3 (flop) pots behind, with the stack capped at what the shortest can match;
+  otherwise the Monte Carlo with sidePotWin decides. (Gating on hasSidePots alone blocked every multiway turn and
+  river in Marwin's 5-6 handed log: a player who had just bet counts as shorter by chips behind.)
 - Lookahead (`makePlan`, `playOut`, `playOutMulti` in engine.js) runs on the flop and turn. Heads-up, either side
   can raise once per street (hero raises with about 80%+ equity against the betting range). Multiway is a betting
   round in seat order (hero first OOP, last IP) with one raise per street; after hero checks with players still to
@@ -126,7 +134,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%). The river solver
   models hero's range directly, so it does not take the shift.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
-  blends in the worst one by `robustWeight` (larger when reads are thin).
+  blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
+  or every caller all-in) also shift the current fold decision in those variants; other bets don't.
 - Multiway river (2-5 opponents, no side pots): `riverSolve` against the field as one opponent whose range is the
   strongest live hand, sampled jointly; it plays like the aggressor or the stickiest caller, with `fieldStats`: the
   field folds only if every player folds (`foldAtSize` multiplies each player's own curve; before v1.5.0 it used one
@@ -215,7 +224,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up preflop solver alone adds +2 ± 16 there); gain mostly from the blinds (SB +23 ± 11, BB +26 ± 10), UTG
   −9 ± 8. Heads-up preflop solver on minus off: typical bot −4 ± 13 (2,000 deals), maniac +18 ± 20, friends −2 ± 22,
   so about neutral (+2 ± 10 pooled). Multiway river fixes (fieldStats, overcalls) +3.5 ± 16; turn solver on vs off
-  heads-up +1.9 ± 21; reads rebuild about +8 ± 12 over 4 runs. Bots are simple; this is a regression check, not proof
+  heads-up +1.9 ± 21; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
+  against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals). Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
