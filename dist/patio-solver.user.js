@@ -2112,22 +2112,25 @@ function ENGINE() {
         ['for', 'j', I(0), I(52), 1, stf(at('cum', 'j', 3), ['f64', 0]), stf(at('all', 'j', 3), ['f64', 0])],
         ['set', 'tt', ['f64', 0]],
         ['for', 'j', I(0), 'no', 1,
-          ['set', 'x', ldf(at('r', ldi(at('xo', 'j', 2)), 3))], ['set', 'tt', add('tt', 'x')],
-          ['set', 'p', at('all', ldu8(['i32.add', 'xh', 'j']), 3)], stf('p', add(ldf('p'), 'x')),
-          ['set', 'p', at('all', ldu8(['i32.add', 'xl', 'j']), 3)], stf('p', add(ldf('p'), 'x'))],
+          ['set', 'x', ldf(at('r', ldi(at('xo', 'j', 2)), 3))],
+          ['if', ['f64.ne', 'x', ['f64', 0]], [['set', 'tt', add('tt', 'x')],
+            ['set', 'p', at('all', ldu8(['i32.add', 'xh', 'j']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'p', at('all', ldu8(['i32.add', 'xl', 'j']), 3)], stf('p', add(ldf('p'), 'x'))]]],
         ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cT', ['f64', 0]],
         ['while', ['i32.lt_s', 'b', 'nt'],
           ['set', 's', ldi(at('ts', 'b', 2))],
           ['while', ['i32.lt_s', ldi(at('xs', 'a', 2)), 's'],
-            ['set', 'x', ldf(at('r', ldi(at('xo', 'a', 2)), 3))], ['set', 'cT', add('cT', 'x')],
-            ['set', 'p', at('cum', ldu8(['i32.add', 'xh', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
-            ['set', 'p', at('cum', ldu8(['i32.add', 'xl', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a', 2)), 3))],
+            ['if', ['f64.ne', 'x', ['f64', 0]], [['set', 'cT', add('cT', 'x')],
+              ['set', 'p', at('cum', ldu8(['i32.add', 'xh', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+              ['set', 'p', at('cum', ldu8(['i32.add', 'xl', 'a']), 3)], stf('p', add(ldf('p'), 'x'))]],
             ['set', 'a', ['i32.add', 'a', I(1)]]],
           ['set', 'a2', 'a'], ['set', 'gT', ['f64', 0]],
           ['while', ['i32.eq', ldi(at('xs', 'a2', 2)), 's'],
-            ['set', 'x', ldf(at('r', ldi(at('xo', 'a2', 2)), 3))], ['set', 'gT', add('gT', 'x')],
-            ['set', 'p', at('grp', ldu8(['i32.add', 'xh', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
-            ['set', 'p', at('grp', ldu8(['i32.add', 'xl', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a2', 2)), 3))],
+            ['if', ['f64.ne', 'x', ['f64', 0]], [['set', 'gT', add('gT', 'x')],
+              ['set', 'p', at('grp', ldu8(['i32.add', 'xh', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+              ['set', 'p', at('grp', ldu8(['i32.add', 'xl', 'a2']), 3)], stf('p', add(ldf('p'), 'x'))]],
             ['set', 'a2', ['i32.add', 'a2', I(1)]]],
           ['while', ['i32.eq', ldi(at('ts', 'b', 2)), 's'],
             ['set', 'h', ldu8(['i32.add', 'th', 'b'])], ['set', 'l', ldu8(['i32.add', 'tl', 'b'])],
@@ -2229,11 +2232,12 @@ function ENGINE() {
           const reach = (slot) => [
             ['set', 'xi', ldi(at('xo', slot, 2))], ['set', 'x', ldf(at('r', 'xi', 3))], ['set', 'k', ldf(at('kap', 'xi', 3))],
             ['set', 'xa', mul('x', 'k')], ['set', 'xb', mul('x', sub(['f64', 1], 'k'))]];
-          const add3 = (slot, tA, tB, tR, sA, sB, sR) => [
+          // A hand with no reach adds +-0 everywhere, which changes nothing: skipped.
+          const add3 = (slot, tA, tB, tR, sA, sB, sR) => [['if', ['f64.ne', 'x', ['f64', 0]], [
             ['set', sA, add(sA, 'xa')], ['set', sB, add(sB, 'xb')], ['set', sR, add(sR, 'x')],
             ...[[tA, 'xa'], [tB, 'xb'], [tR, 'x']].flatMap(([t, v]) => [
               ['set', 'p', at(t, ldu8(['i32.add', 'xh', slot]), 3)], stf('p', add(ldf('p'), v)),
-              ['set', 'p', at(t, ldu8(['i32.add', 'xl', slot]), 3)], stf('p', add(ldf('p'), v))])];
+              ['set', 'p', at(t, ldu8(['i32.add', 'xl', slot]), 3)], stf('p', add(ldf('p'), v))])]]];
           return [
             ['for', 'j', I(0), 'no', 1, ...reach('j'), ...add3('j', 'lA', 'lB', 'lR', 'ttA', 'ttB', 'ttR')],
             ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cTA', ['f64', 0]], ['set', 'cTB', ['f64', 0]], ['set', 'cTR', ['f64', 0]],
