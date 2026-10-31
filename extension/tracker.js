@@ -242,7 +242,10 @@
           break;
         case 'game:player_turn_started':
           if (h) h.turnAt[data.playerID] = Date.now();
-          if (h && !h.finished) this.emit('turn', { playerID: data.playerID, isHero: data.playerID === this.heroId() });
+          if (h && !h.finished) {
+            const left = data.turnTimeDurationMS > 0 ? data.turnTimeDurationMS - (data.turnTimeElapsedMS || 0) : null;
+            this.emit('turn', { playerID: data.playerID, isHero: data.playerID === this.heroId(), timeLeftMs: left });
+          }
           break;
         case 'game:player_turn_ended':
           if (h && data.playerID === this.heroId()) this.emit('heroDone', null);
@@ -597,6 +600,7 @@
         if (r.best && r.best.foldPct > 0.02) a.foldPct = r2(r.best.foldPct);
         if (r.mix) a.mix = r.mix.map((m) => m.label + ' ' + Math.round(m.freq * 100) + '%');
         if (r.solver) { a.solve = r.solver.kind; if (r.solver.kind === 'river') a.riverSolve = true; }
+        if (r.quick) a.quick = true;
         if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
         if (r.opponents) a.reads = r.opponents.map((o) => ({
           name: o.name, type: o.type && o.type.label, hands: Math.round(o.stats.hands || 0),

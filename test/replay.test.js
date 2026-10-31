@@ -872,9 +872,33 @@ test('preflop solver: an open with several players behind is solved against the 
   assert.strictEqual(aa.solver.field, 5);
   assert.ok(['raise', 'allin'].includes(aa.best.kind));
   assert.strictEqual(junk.best.kind, 'fold');
-  // Limpers in front: not an open, so the Monte Carlo handles it.
-  const limped = pfSpot('Ks Kd', { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] });
-  assert.strictEqual(limped.solver, null);
+  // Limpers in front: solved against the field too, with multiway equity (or the Monte Carlo if asked).
+  const limpedIn = { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] };
+  const limped = pfSpot('Ks Kd', limpedIn);
+  assert.strictEqual(limped.solver.kind, 'preflop');
+  assert.strictEqual(limped.solver.field, 2);
+  assert.ok(['raise', 'allin'].includes(limped.best.kind));
+  assert.strictEqual(pfSpot('Ks Kd', Object.assign({ preflopMultiway: false }, limpedIn)).solver, null);
+});
+
+test('preflop solver: limped and raised multiway pots use multiway equity', () => {
+  const bb = (h) => pfSpot(h, { pot: 3.5, toCall: 0, inPosition: false, heroActions: {},
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }] });
+  const aa = bb('As Ad'), junk = bb('9c 4d');
+  assert.ok(['raise', 'bet', 'allin'].includes(aa.best.kind));
+  assert.strictEqual(junk.best.kind, 'check');
+  const vsRaise = (h) => pfSpot(h, { pot: 7.5, toCall: 2, inPosition: false, heroActions: {},
+    opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] });
+  const big = vsRaise('As Ad'), weak = vsRaise('9c 4d');
+  assert.strictEqual(big.solver.kind, 'preflop');
+  assert.ok(['raise', 'allin'].includes(big.best.kind));
+  assert.strictEqual(weak.best.kind, 'fold');
+  // Hero's multiway share is below the share against the strongest single hand.
+  const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
+  const m = E._pf.preflopMulti(opps, [], [], (x) => x, 0, 400, 7);
+  const cls = (n) => E.PREFLOP_ORDER.indexOf(n) >= 0 && E._pf.classIndex(n);
+  assert.ok(m.kappa[cls('AA')] < 1 && m.kappa[cls('AA')] > 0.7);
+  assert.ok(m.kappa[cls('72o')] < m.kappa[cls('AA')]);
 });
 
 const turnSpot = (h, extra) => Object.assign({
@@ -903,6 +927,65 @@ test('turn solver: workers\' solves are averaged in the final pass', () => {
   assert.ok(Math.abs(fin.ranked.find((x) => x.kind === 'call').ev - mean) < 1e-9);
 });
 
+test('multiway: the field folds only when every player folds', () => {
+  const a = E._pf.computeStats({}, 'typical'), b = E._pf.computeStats({}, 'loose');
+  const f = E._pf.fieldStats([a, b], a);
+  const want = E._pf.foldAtSize(a, 0.66, 5) * E._pf.foldAtSize(b, 0.66, 5);
+  assert.ok(Math.abs(E._pf.foldAtSize(f, 0.66, 5) - want) < 1e-9);
+  assert.ok(f.betFreq > Math.max(a.betFreq, b.betFreq));
+});
+
+test('turn solver: multiway turns are solved against the field on the computer', () => {
+  const two = (h, extra) => E.analyzeSync(Object.assign({
+    hero: C(h), board: C('Ts 9s 4d 2c'), pot: 30, toCall: 15, stack: 150, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+    iterations: 2000, turnSolver: true, turnIterations: 30, heroActions: { pre: 'call', flop: 'call' },
+    opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true },
+      { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }],
+  }, extra));
+  const weak = two('Ah Td'), set = two('4c 4h');
+  assert.strictEqual(weak.solver.kind, 'turn');
+  assert.strictEqual(weak.solver.field, 2);
+  assert.strictEqual(weak.best.kind, 'fold');
+  assert.notStrictEqual(set.best.kind, 'fold');
+  assert.strictEqual(two('Ah Td', { turnSolver: false }).solver, null);
+});
+
+test('flop solver: computer mode only; heads-up and against the field', () => {
+  const flop = (h, extra) => E.analyzeSync(Object.assign({
+    hero: C(h), board: C('Kh 8h 4c'), pot: 20, toCall: 8, stack: 100, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+    iterations: 2000, flopIterations: 8, heroActions: { pre: 'call' },
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }],
+  }, extra));
+  assert.strictEqual(flop('Ah 5h').solver, null);
+  assert.strictEqual(E.solvableSpot({ board: C('Kh 8h 4c'), opponents: [{}] }), null);
+  assert.strictEqual(E.solvableSpot({ board: C('Kh 8h 4c'), opponents: [{}], flopSolver: true }), 'flop');
+  const draw = flop('Ah 5h', { flopSolver: true }), air = flop('Qc 2d', { flopSolver: true });
+  assert.strictEqual(draw.solver.kind, 'flop');
+  assert.notStrictEqual(draw.best.kind, 'fold');
+  assert.strictEqual(air.best.kind, 'fold');
+  for (const r of [draw, air]) assert.ok(r.ranked.every((x) => isFinite(x.ev)));
+  const field = flop('Ah 5h', { flopSolver: true, pot: 34, opponents: [
+    { name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true },
+    { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call' } }] });
+  assert.strictEqual(field.solver.kind, 'flop');
+  assert.strictEqual(field.solver.field, 2);
+  assert.ok(field.ranked.every((x) => isFinite(x.ev)));
+});
+
+test('river: hands that play a straight-or-better board call, so bluffing into them is no edge', () => {
+  // Marwin's log, hand 93: three passive players, board 8-Q straight, hero 2d7h plays the board.
+  const opps = ['A', 'B', 'C'].map((name) => ({ name, tally: {}, actions: { pre: 'call', flop: 'check', turn: 'check', river: '' } }));
+  const spot = (extra) => E.analyzeSync(Object.assign({ hero: C('2d 7h'), board: C('Jd Qc Tc 9h 8c'), pot: 8, toCall: 0, stack: 300,
+    bigBlind: 2, inPosition: false, mix: false, seed: 1, iterations: 6000, opponents: opps,
+    heroActions: { pre: 'call', flop: 'check', turn: 'check' } }, extra));
+  assert.strictEqual(spot({ riverSolver: false }).best.kind, 'check');
+  assert.strictEqual(spot({ riverSolver: false, opponents: [opps[0]] }).best.kind, 'check');
+  for (const r of [spot({}), spot({ opponents: [opps[0]] })]) {
+    const ev = (k) => Math.max(...r.ranked.filter((a) => a.kind === k).map((a) => a.ev));
+    assert.ok(ev('bet') - ev('check') < 0.25, `bet ${ev('bet')} vs check ${ev('check')}`);
+  }
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
@@ -922,6 +1005,9 @@ test('kernels: river and preflop solves give bit-identical results with and with
       opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] },
     { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60,
       opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) },
+    // Multiway preflop leaves (a raise and a caller in front).
+    { hero: C('9s 8s'), board: [], pot: 75, toCall: 20, stack: 1000, bigBlind: 10, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60,
+      opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] },
   ];
   const json = (x) => JSON.stringify(x, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   for (const sp of spots) {
