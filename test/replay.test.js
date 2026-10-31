@@ -799,6 +799,29 @@ test('turn solver: workers\' solves are averaged in the final pass', () => {
   assert.ok(Math.abs(fin.ranked.find((x) => x.kind === 'call').ev - mean) < 1e-9);
 });
 
+test('multiway: the field folds only when every player folds', () => {
+  const a = E._pf.computeStats({}, 'typical'), b = E._pf.computeStats({}, 'loose');
+  const f = E._pf.fieldStats([a, b], a);
+  const want = E._pf.foldAtSize(a, 0.66, 5) * E._pf.foldAtSize(b, 0.66, 5);
+  assert.ok(Math.abs(E._pf.foldAtSize(f, 0.66, 5) - want) < 1e-9);
+  assert.ok(f.betFreq > Math.max(a.betFreq, b.betFreq));
+});
+
+test('turn solver: multiway turns are solved against the field on the computer', () => {
+  const two = (h, extra) => E.analyzeSync(Object.assign({
+    hero: C(h), board: C('Ts 9s 4d 2c'), pot: 30, toCall: 15, stack: 150, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+    iterations: 2000, turnSolver: true, turnIterations: 30, heroActions: { pre: 'call', flop: 'call' },
+    opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true },
+      { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }],
+  }, extra));
+  const weak = two('Ah Td'), set = two('4c 4h');
+  assert.strictEqual(weak.solver.kind, 'turn');
+  assert.strictEqual(weak.solver.field, 2);
+  assert.strictEqual(weak.best.kind, 'fold');
+  assert.notStrictEqual(set.best.kind, 'fold');
+  assert.strictEqual(two('Ah Td', { turnSolver: false }).solver, null);
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);

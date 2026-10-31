@@ -749,6 +749,28 @@
   }
 
   // Street-specific view of a player's stats.
+  // Stats for the field as one opponent (multiway solvers): it folds only if all of them fold,
+  // and bets or raises if any of them does. The rest follows `base` (the aggressor or the
+  // stickiest caller).
+  function fieldStats(list, base) {
+    const prod = (f) => list.reduce((a, x) => a * clamp(f(x), 0, 1), 1);
+    const st = Object.assign({}, base, { foldShift: 0, fieldOf: list });
+    st.foldToBet = prod((x) => x.foldToBet);
+    st.foldAfterAgg = prod((x) => (x.foldAfterAgg != null ? x.foldAfterAgg : x.foldToBet));
+    st.betFreq = 1 - prod((x) => 1 - x.betFreq);
+    st.raiseFreq = 1 - prod((x) => 1 - x.raiseFreq);
+    st.byStreet = {};
+    for (const n of [3, 4, 5]) {
+      const ss = list.map((x) => streetStats(x, n));
+      st.byStreet[n] = Object.assign({}, (base.byStreet && base.byStreet[n]) || {}, {
+        foldToBet: ss.reduce((a, x) => a * clamp(x.foldToBet, 0, 1), 1),
+        betFreq: 1 - ss.reduce((a, x) => a * (1 - clamp(x.betFreq, 0, 1)), 1),
+        raiseFreq: 1 - ss.reduce((a, x) => a * (1 - clamp(x.raiseFreq, 0, 1)), 1),
+      });
+    }
+    return st;
+  }
+
   function streetStats(stats, n) {
     const b = stats.byStreet && stats.byStreet[n];
     return b ? Object.assign({}, stats, b) : stats;
@@ -757,6 +779,8 @@
   // Fold probability against a bet of `f` x pot on street `n`: the size model for that
   // street, corrected by how they actually reacted to small, medium and large bets.
   function foldAtSize(stats, f, n) {
+    // The field (several players as one): it folds only if every one of them folds.
+    if (stats.fieldOf) return clamp(stats.fieldOf.reduce((a, x) => a * foldAtSize(Object.assign({}, x, { foldShift: 0 }), f, n), 1), 0.01, 0.98);
     const ss = streetStats(stats, n);
     // Past about pot size, folds grow much more slowly than the curve says: home-game
     // players call overbets more than the pot-odds math suggests.
@@ -1500,6 +1524,66 @@
    * negligible hands), which keeps the arrays short.
    */
   const TURN_ITERATIONS = 300;
+  // The field on the turn for the multiway turn solve: W = weights of the live hand with the
+  // most turn equity (ehs) over joint samples of every opponent's hand, and kappa per hero combo
+  // = hero's river share against all of them over the share against that hand, from the same
+  // samples (plus a random river card each).
+  function turnField(opps, heroW, board, dead, ehs, samples, seed) {
+    const rng = mulberry32((seed ^ 0x6a09e667) >>> 0);
+    const K = opps.length, W = new Float64Array(NUM_COMBOS);
+    let mx = 0;
+    for (let k = 0; k < NUM_COMBOS; k++) if (heroW[k] > mx) mx = heroW[k];
+    if (!(mx > 0)) return null;
+    const heroList = [];
+    for (let k = 0; k < NUM_COMBOS; k++) if (heroW[k] > 0.03 * mx) heroList.push(k);
+    const multiS = new Float64Array(NUM_COMBOS), repS = new Float64Array(NUM_COMBOS);
+    const used = new Uint8Array(52), buf = new Int32Array(7), hand = new Int32Array(K), sc = new Int32Array(K);
+    for (let j = 0; j < 4; j++) buf[j] = board[j];
+    let got = 0;
+    for (let it = 0; it < samples * 3 && got < samples; it++) {
+      used.fill(0);
+      for (const c of dead) used[c] = 1;
+      let ok = true, rep = 0;
+      for (let i = 0; i < K && ok; i++) {
+        let k = -1;
+        for (let tries = 0; tries < 40; tries++) {
+          const cand = sampleCombo(opps[i].sampler, rng());
+          if (!used[COMBO_HI[cand]] && !used[COMBO_LO[cand]]) { k = cand; break; }
+        }
+        if (k < 0) { ok = false; break; }
+        used[COMBO_HI[k]] = used[COMBO_LO[k]] = 1;
+        hand[i] = k;
+        if (ehs[k] > ehs[hand[rep]]) rep = i;
+      }
+      if (!ok) continue;
+      // Hero's own cards are dead for the field but not for hero's range: free them.
+      for (let i = 0; i < K; i++) { used[COMBO_HI[hand[i]]] = 2; used[COMBO_LO[hand[i]]] = 2; }
+      for (let j = 0; j < 4; j++) used[board[j]] = 2;
+      let river;
+      do { river = Math.floor(rng() * 52); } while (used[river] !== 0);
+      buf[4] = river;
+      W[hand[rep]]++;
+      got++;
+      let best = -1;
+      for (let i = 0; i < K; i++) { buf[5] = COMBO_HI[hand[i]]; buf[6] = COMBO_LO[hand[i]]; sc[i] = evaluate(buf, 7); if (sc[i] > best) best = sc[i]; }
+      let ties = 0;
+      for (let i = 0; i < K; i++) if (sc[i] === best) ties++;
+      const repScore = sc[rep];
+      for (const k of heroList) {
+        const a = COMBO_HI[k], b = COMBO_LO[k];
+        if (used[a] === 2 || used[b] === 2 || a === river || b === river) continue;
+        buf[5] = a; buf[6] = b;
+        const h = evaluate(buf, 7);
+        multiS[k] += h > best ? 1 : h === best ? 1 / (ties + 1) : 0;
+        repS[k] += h > repScore ? 1 : h === repScore ? 0.5 : 0;
+      }
+    }
+    if (got < 50) return null;
+    const kappa = new Float64Array(NUM_COMBOS).fill(1);
+    for (const k of heroList) kappa[k] = clamp((multiS[k] + 0.25) / (repS[k] + 0.25), 0.05, 1.05);
+    return { W, kappa, samples: got };
+  }
+
   function turnSolve(cfg) {
     const { board, heroCombo, heroW, oppW, oppStats, p, pot: P0, toCall, stack, heroFirst, heroIP, bigBlind } = cfg;
     const st4 = cfg.strengths4;
@@ -1548,6 +1632,9 @@
     H.cross = Int32Array.from(H.idx, (k) => O.local[k]);
     O.cross = Int32Array.from(O.idx, (k) => H.local[k]);
     const NMAX = Math.max(H.n, O.n);
+    const multi = cfg.multi && cfg.multi.kappa ? cfg.multi : null;
+    const kapCache = {};
+    const mtmp = multi ? new Float64Array(NMAX) : null, mrA = multi ? new Float64Array(H.n) : null, mrB = multi ? new Float64Array(H.n) : null;
     const sides = [H, O];
 
     // ----- blocker-aware showdown masses: for each hand of side T, the other side's reach
@@ -1660,7 +1747,7 @@
     const turnBets = (cfg.turnBets || [0.33, 0.66, 1]).slice(0, 3), riverBets = (cfg.riverBets || [0.5, 1]).slice(0, 3);
     const raiseFracs = (cfg.raiseFracs || [1]).slice(0, 2);
     let nodes = 0;
-    function makeNode(n5, card, player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise, fr, oppAgg, q) {
+    function makeNode(n5, card, player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise, fr, oppAgg, q, nb = 0) {
       nodes++;
       const potNow = P0 + hIn + oIn;
       const myIn = player === 0 ? hIn : oIn;
@@ -1670,9 +1757,9 @@
       const after = (amt) => (player === 0 ? [hIn + amt, oIn] : [hIn, oIn + amt]);
       // A call or check that ends the street: river cards next, or a showdown.
       const close = (h, o, frc, agg) => {
-        if (n5 === 5) return { term: 'show', card, hIn: h, oIn: o };
-        if (h >= maxIn(0) - 1e-9 || o >= maxIn(1) - 1e-9) return { term: 'allin', hIn: h, oIn: o };
-        return { chance: true, hIn: h, oIn: o, fr: frc, oppAgg: agg, subs: new Array(52) };
+        if (n5 === 5) return { term: 'show', card, hIn: h, oIn: o, nb };
+        if (h >= maxIn(0) - 1e-9 || o >= maxIn(1) - 1e-9) return { term: 'allin', hIn: h, oIn: o, nb };
+        return { chance: true, hIn: h, oIn: o, fr: frc, oppAgg: agg, subs: new Array(52), nb };
       };
       if (facing > 0) {
         add({ kind: 'fold', amount: 0 }, { term: 'fold', winner: 1 - player, hIn, oIn, card });
@@ -1684,18 +1771,18 @@
             const r = Math.min(left, round(facing + rf * (potNow + facing)));
             const [h3, o3] = after(r);
             add({ kind: r >= left - 1e-9 ? 'allin' : 'raise', amount: r, frac: (r - facing) / (potNow + facing) },
-              (frc) => makeNode(n5, card, 1 - player, h3, o3, r - facing, raisesLeft - 1, true, true, frc, oppAgg || player === 1, q));
+              (frc) => makeNode(n5, card, 1 - player, h3, o3, r - facing, raisesLeft - 1, true, true, frc, oppAgg || player === 1, q, nb + 1));
           }
         }
       } else {
-        add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q)));
+        add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 4 ? turnBets : riverBets) : [betFrac];
         for (const f of fracs) {
           const b = Math.min(left, round(f * potNow));
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
-            (frc) => makeNode(n5, card, 1 - player, h2, o2, b, raisesLeft, true, false, frc, oppAgg || player === 1, q));
+            (frc) => makeNode(n5, card, 1 - player, h2, o2, b, raisesLeft, true, false, frc, oppAgg || player === 1, q, nb + 1));
         }
       }
       const N = sides[player].n;
@@ -1719,11 +1806,11 @@
     }
     function riverRoot(ch, c) {
       const q = riverQuantiles(ch.fr, c);
-      return makeNode(5, c, heroIP ? 1 : 0, ch.hIn, ch.oIn, 0, 1, false, false, ch.fr, ch.oppAgg, q);
+      return makeNode(5, c, heroIP ? 1 : 0, ch.hIn, ch.oIn, 0, 1, false, false, ch.fr, ch.oppAgg, q, ch.nb);
     }
     const fr0 = Float64Array.from(O.w);
     const root = toCall > 0
-      ? makeNode(4, -1, 0, 0, 0, toCall, 1, true, false, fr0, false, qTurn)
+      ? makeNode(4, -1, 0, 0, 0, toCall, 1, true, false, fr0, false, qTurn, 1)
       : makeNode(4, -1, 0, 0, 0, 0, 1, !heroFirst, false, fr0, false, qTurn);
 
     // ----- Discounted CFR with chance-sampled river cards -----
@@ -1749,8 +1836,37 @@
       }
       const potF = P0 + n.hIn + n.oIn;
       out.fill(0, 0, T.n);
+      if (multi) {
+        const kap = kapAt(n.nb || 0);
+        if (n.term === 'show') { showMulti(r, X, T, n.card, out, 1, potF, myIn, kap, trav); return; }
+        for (let k = 0; k < sample.length; k++) showMulti(r, X, T, sample[k], out, scale, potF, myIn, kap, trav);
+        return;
+      }
       if (n.term === 'show') { showAdd(r, X, T, n.card, out, 1, potF, myIn); return; }
       for (let k = 0; k < sample.length; k++) showAdd(r, X, T, sample[k], out, scale, potF, myIn);
+    }
+    // Multiway (cfg.multi): the opponent is the field's strongest hand, and hero's share at a
+    // showdown is scaled by kappa (hero's share against every live opponent over the share
+    // against that hand) to the power rho^bets: each bet or raise on the way leaves only a
+    // part of the other players in. The rest of the pot goes to the field.
+    function kapAt(nb) {
+      if (kapCache[nb]) return kapCache[nb];
+      const e = Math.pow(multi.rho, nb), out = new Float64Array(H.n);
+      for (let i = 0; i < H.n; i++) out[i] = Math.pow(clamp(multi.kappa[H.idx[i]] || 1, 0.05, 1.05), e);
+      return (kapCache[nb] = out);
+    }
+    function showMulti(r, X, T, c, out, sc, potF, myIn, kap, trav) {
+      if (trav === 0) {
+        mtmp.fill(0, 0, T.n);
+        showAdd(r, X, T, c, mtmp, 1, 1, 0);
+        for (let i = 0; i < T.n; i++) out[i] += sc * potF * kap[i] * mtmp[i];
+        showAdd(r, X, T, c, out, sc, 0, myIn);
+        return;
+      }
+      for (let i = 0; i < X.n; i++) { mrA[i] = r[i] * kap[i]; mrB[i] = r[i] * (1 - kap[i]); }
+      showAdd(mrA, X, T, c, out, sc, potF, 0);
+      showAdd(mrB, X, T, c, out, sc, 0, -potF);
+      showAdd(r, X, T, c, out, sc, 0, myIn);
     }
     function cfr(n, trav, rH, rO, avg, d, out) {
       if (n.term) { terminal(n, trav, rH, rO, out); return; }
@@ -2939,6 +3055,34 @@
       });
       if (ts) { solved = Object.assign(ts, { kind: 'turn' }); target = Math.min(target, 6000); }
     }
+    // Computer mode, multiway turn (2-4 opponents, no side pots): the turn solver against the
+    // field as one opponent whose hand is the live hand with the most turn equity, sampled
+    // jointly. Hero's showdown share is scaled by kappa (turnFieldKappa) because the other
+    // players can still win on the river.
+    if (!solved && street === 4 && opps.length >= 2 && opps.length <= 4 && !sidePots && input.turnSolver === true && stack > 0) {
+      const heroStats = computeStats({}, tableStyle);
+      const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
+      const heroW = buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
+      const field = turnField(opps, heroW, board, dead, strengths[4].ehs, input.turnFieldSamples || 1500, seed);
+      if (field) {
+        const agg = opps.findIndex((o) => o.aggressor);
+        let pick = agg;
+        if (pick < 0) { pick = 0; for (let i = 1; i < opps.length; i++) if (opps[i].stats.foldToBet < opps[pick].stats.foldToBet) pick = i; }
+        const o = opps[pick];
+        const aggS = clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1);
+        const ts = turnSolve({
+          board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
+          oppStats: fieldStats(opps.map((x) => x.stats), o.stats), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
+          aggScale: opps.some((x) => x.aggroLine) ? aggS : 1, aggScaleIfAgg: aggS,
+          pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+          heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
+          iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
+          turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises,
+          multi: { kappa: field.kappa, K: opps.length, rho: input.turnFieldRho != null ? input.turnFieldRho : 0.4 },
+        });
+        if (ts) { solved = Object.assign(ts, { kind: 'turn', field: opps.length, multiway: opps.length }); target = Math.min(target, 6000); }
+      }
+    }
     // Multiway river: solve against the field as one opponent. Its range is the strongest of
     // the live opponents' hands, sampled jointly from their ranges (so card removal is right),
     // and it plays like the aggressor if there is one, otherwise like the stickiest caller.
@@ -2976,7 +3120,7 @@
           board, heroCombo, strengths: strengths[5], bigBlind,
           heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
           oppW: W,
-          oppStats: Object.assign({}, o.stats, { foldShift: 0 }),
+          oppStats: fieldStats(opps.map((x) => x.stats), o.stats),
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroLine) ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
           pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
@@ -3196,7 +3340,7 @@
       n++; its += g.iterations || 0;
     }
     acts.forEach((a) => { a.freq /= n; a.ev /= n; });
-    return { kind: got[0].kind, iterations: its, runs: n, field: got[0].field || 0, actions: acts };
+    return { kind: got[0].kind, iterations: its, runs: n, field: got[0].field || got[0].multiway || 0, actions: acts };
   }
 
   // Which solver will decide this spot (keep in step with createAnalysis): 'preflop', 'turn'
@@ -3208,9 +3352,14 @@
     if (street === 0) {
       const bb = input.bigBlind > 0 ? +input.bigBlind : 1, toCall = +input.toCall || 0;
       const allPending = opps.every((o) => ((o.actions && o.actions.pre) || 'pending') === 'pending');
-      return n === 1 || (n <= 8 && allPending && toCall > 0 && toCall <= bb + 1e-9) ? 'preflop' : null;
+      if (input.preflopSolver === false) return null;
+      return n === 1 || (n <= 8 && ((allPending && toCall > 0 && toCall <= bb + 1e-9) || input.preflopMultiway !== false)) ? 'preflop' : null;
     }
-    if (street === 4) return n === 1 ? 'turn' : null;
+    if (street === 4) {
+      const stack = input.stack > 0 ? +input.stack : Infinity;
+      const sidePots = input.heroCommitted != null && opps.every((o) => o.committed != null) && opps.some((o) => o.stack != null && o.stack < stack);
+      return n === 1 || (n <= 4 && !sidePots) ? 'turn' : null;
+    }
     if (street === 5) {
       const stack = input.stack > 0 ? +input.stack : Infinity;
       const sidePots = input.heroCommitted != null && opps.every((o) => o.committed != null) && opps.some((o) => o.stack != null && o.stack < stack);
@@ -3237,7 +3386,7 @@
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     createAnalysis, analyzeSync, solvableSpot, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // For tests.
-    _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax, preflopMulti, classIndex: (n) => CLASS_NAMES.indexOf(n) },
+    _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax, preflopMulti, classIndex: (n) => CLASS_NAMES.indexOf(n), fieldStats, foldAtSize, computeStats },
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
