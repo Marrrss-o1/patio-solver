@@ -415,13 +415,17 @@ function ENGINE() {
   const POS_SCALE = { early: 0.8, late: 1.25, blinds: 1 };
 
   // How often a player with fold-to-bet `ftb` folds to a bet of `f` x pot, before any size-specific data.
+  // Fitted on the logs' first responses to postflop bets: the fold odds grow with the bet size to the
+  // power 0.9 up to about 0.8 pot (20% folds to min-bets, 44% to a third, 67-74% to 0.55-0.9 pot), then
+  // barely (to the power 0.2): friends call overbets about as often as pot-size bets, and the old curve's
+  // extra folds above pot made weak overbets look profitable (they lost real money). `ftb` is read as the
+  // fold rate against a third of the pot, about the usual bet in the home game.
+  const FOLD_CURVE = { ref: 0.33, k: 0.9, flat: 0.8, k2: 0.2 };
   function modelFold(ftb, f) {
-    const mdf = 1 / (1 + Math.max(0.05, f));
-    // Fold rates rise only gently with bet size: home-game players call big bets far
-    // more than pot odds say they should (the old, steeper curve made overbets with
-    // weak hands look profitable, and they lost at the table).
-    const elasticity = clamp(0.8 * Math.sqrt(ftb / 0.45), 0.5, 1.1);
-    return clamp(1 - (1 - ftb) * Math.pow(mdf / 0.625, elasticity), 0.03, 0.97);
+    const C = FOLD_CURVE;
+    const x = Math.max(0.05, f);
+    const lf = C.k * Math.log(Math.min(x, C.flat) / C.ref) + (x > C.flat ? C.k2 * Math.log(x / C.flat) : 0);
+    return clamp(sigmoid(logit(clamp(ftb, 0.02, 0.98)) + lf), 0.03, 0.97);
   }
 
   // Strength (percentile against every hand) of one known hand on a board, without potential.
@@ -715,12 +719,18 @@ function ENGINE() {
       };
     }
 
-    // Folds by the size of the bet they face, shrunk toward the size model.
+    // Folds by the size of the bet they face, shrunk toward the size model. Each bucket's rate
+    // sits at the average size seen in it (tally `fs`/`fn`), not at a fixed point: the small
+    // bucket is full of min-bets, which friends call, and read at 1/3 pot it made a third-pot bet
+    // look like it gets called as often as a min-bet (44% folds in the logs, 33% predicted).
     stats.foldBySize = {};
+    stats.sizeAnchor = {};
     stats.raw.foldBySize = {};
-    for (const [key, f] of SIZE_BUCKETS) {
-      const x = Object.assign({ fold: 0, call: 0, raise: 0 }, (t.vs && t.vs[key]) || {});
+    for (const [key, c] of SIZE_BUCKETS) {
+      const x = Object.assign({ fold: 0, call: 0, raise: 0, fs: 0, fn: 0 }, (t.vs && t.vs[key]) || {});
       const nf = x.fold + x.call + x.raise;
+      const f = (x.fs + 2 * c) / (x.fn + 2);
+      stats.sizeAnchor[key] = f;
       const prior = modelFold(stats.foldToBet, f);
       stats.foldBySize[key] = (x.fold + 4 * prior) / (nf + 4);
       stats.raw.foldBySize[key] = nf ? x.fold / nf : null;
@@ -857,7 +867,7 @@ function ENGINE() {
     const mix = (read, eq) => p * read + (1 - p) * eq;
     stats.foldToBet = mix(stats.foldToBet, eqFold(0.6));
     for (const k of [3, 4, 5]) stats.byStreet[k].foldToBet = mix(stats.byStreet[k].foldToBet, eqFold(0.6));
-    for (const [key, f] of SIZE_BUCKETS) stats.foldBySize[key] = mix(stats.foldBySize[key], eqFold(f));
+    for (const [key] of SIZE_BUCKETS) stats.foldBySize[key] = mix(stats.foldBySize[key], eqFold(stats.sizeAnchor[key]));
     stats.valueShare = mix(stats.valueShare, eqValueShare(0.66));
     stats.valueShareBig = mix(stats.valueShareBig, eqValueShare(1.1));
     stats.valueShareSmall = mix(stats.valueShareSmall, eqValueShare(0.33));
@@ -1303,7 +1313,8 @@ function ENGINE() {
     const top = SIZE_BUCKETS[SIZE_BUCKETS.length - 1][1];
     const base = f <= top ? modelFold(ftb, f) : modelFold(ftb, top) + 0.3 * (modelFold(ftb, f) - modelFold(ftb, top));
     if (!stats.foldBySize) return base;
-    const corr = SIZE_BUCKETS.map(([k, c]) => [c, stats.foldBySize[k] - modelFold(stats.foldToBet, c)]);
+    const at = stats.sizeAnchor || {};
+    const corr = SIZE_BUCKETS.map(([k, c]) => { const f = at[k] != null ? at[k] : c; return [f, stats.foldBySize[k] - modelFold(stats.foldToBet, f)]; });
     let d;
     if (f <= corr[0][0]) d = corr[0][1];
     else if (f >= corr[corr.length - 1][0]) d = corr[corr.length - 1][1];
@@ -6194,6 +6205,8 @@ ENGINE();
   }
   const streetTally = () => ({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 });
   const facingTally = () => ({ fold: 0, call: 0, raise: 0 });
+  // Facing a bet by size bucket, plus the sizes seen in the bucket (fs = sum of pot fractions, fn = count).
+  const sizeTally = () => ({ fold: 0, call: 0, raise: 0, fs: 0, fn: 0 });
   const posTally = () => ({ n: 0, vpip: 0, pfr: 0 });
   function blankTally() {
     return {
@@ -6224,7 +6237,7 @@ ENGINE();
       stMw: { flop: streetTally(), turn: streetTally(), river: streetTally() },
       stOld: { flop: streetTally(), turn: streetTally(), river: streetTally() },
       // Reaction to a bet by its size (fraction of the pot before the bet): <45%, 45-85%, >85%.
-      vs: { small: facingTally(), medium: facingTally(), large: facingTally() },
+      vs: { small: sizeTally(), medium: sizeTally(), large: sizeTally() },
       // Response to a single open raise preflop by its raise-to size: <=2.5bb, <=3.5bb, more ('raise' = 3-bet).
       vsOpen: { small: facingTally(), medium: facingTally(), large: facingTally() },
       // Their own bet sizes postflop, as fractions of the pot.
@@ -6525,7 +6538,10 @@ ENGINE();
           if (key && t.st[key] && t.st[key][kind] != null) t.st[key][kind]++;
           if (multiway && key && t.stMw && t.stMw[key] && t.stMw[key][kind] != null) t.stMw[key][kind]++;
           if (facing > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) {
-            t.vs[sizeBucket(facing / Math.max(1, potBefore - facing))][kind]++;
+            const f = facing / Math.max(1, potBefore - facing), vb = t.vs[sizeBucket(f)];
+            vb[kind]++;
+            vb.fs = (vb.fs || 0) + Math.min(f, 3);
+            vb.fn = (vb.fn || 0) + 1;
           }
           if (kind === 'bet') { t.betSize.n++; t.betSize.sum += frac; }
           if (cbetSpot && p.id === h.pfRaiser && !p.cbetSeen && !h.flopBet) { t.cbetOpp++; if (kind === 'bet') t.cbet++; }
