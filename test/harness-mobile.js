@@ -4,6 +4,8 @@ const { chromium, devices } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const out = path.join(__dirname, 'out'); fs.mkdirSync(out, { recursive: true });
+// TABLE_TYPE=public (or empty for a table whose type isn't known yet) checks that the overlay stays off.
+const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TABLE_TYPE ? JSON.stringify(process.env.TABLE_TYPE) : 'undefined';
 (async () => {
   const msgs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   const shots = (process.argv[3] || '').split(',').filter(Boolean).map(Number);
@@ -13,7 +15,7 @@ const out = path.join(__dirname, 'out'); fs.mkdirSync(out, { recursive: true });
   const ctx = await browser.newContext({ ...devices['iPhone 13'] });
   await ctx.route('https://pokerpatio.com/**', r => r.fulfill({ status: 200, contentType: 'text/html', body:
     `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;height:100vh;background:#111 url(data:image/jpeg;base64,${img}) center top/cover no-repeat">
-    <script>window.__L=[];window.GameManager={data:{tableType:'private'},playerData:{id:'H'},state:{players:[],settings:{blind_sizes:[{sb:5,bb:10}]}},socket:{onAny(f){__L.push(f)}}};</script></body></html>` }));
+    <script>window.__L=[];window.GameManager={data:{tableType:${TABLE_TYPE}},playerData:{id:'H'},state:{players:[],settings:{blind_sizes:[{sb:5,bb:10}]}},socket:{onAny(f){__L.push(f)}}};</script></body></html>` }));
   const page = await ctx.newPage();
   const errs = []; page.on('pageerror', e => errs.push(String(e))); page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   await page.goto('https://pokerpatio.com/mp?game=test');
