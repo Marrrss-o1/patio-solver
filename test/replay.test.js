@@ -1027,6 +1027,28 @@ test('multiway solves run when every shorter stack still has a few pots behind',
   assert.strictEqual(E.solvableSpot(spot(5)), null);
 });
 
+test('multiway lookahead: no stabs or raises with weak hands that only win when opponents pay off too much', () => {
+  // Three real 3-4 way flops (names removed) where v1.6.0 bet or raised: J-high stab into three
+  // players on 7-7-3, raising middle pair weak kicker into a bet and a check-raise, raising K-high
+  // into a bet and a call. Players who had called once kept calling at whole-range rates later.
+  const spots = require('./fixtures/real-multiway-flops.json');
+  const run = (x) => E.analyzeSync(Object.assign({}, x, { mix: false, seed: 1, iterations: 6000 }));
+  const ev = (r, kind) => Math.max(...r.ranked.filter((s) => s.kind === kind).map((s) => s.ev));
+  const stab = run(spots.stabJackHigh);
+  assert.strictEqual(stab.best.kind, 'check', 'J-high checks 4-way, best was ' + stab.best.kind + ' ' + stab.best.amount);
+  for (const k of ['raiseMiddlePair', 'raiseKingHigh']) {
+    const r = run(spots[k]);
+    assert.notStrictEqual(r.best.kind, 'raise', k + ': best was raise ' + r.best.amount);
+    assert.ok(ev(r, 'raise') < 0, k + ': raise EV ' + ev(r, 'raise'));
+  }
+  // A strong hand still wins a lot, and betting it is about as good as anything.
+  const qq = run({ hero: C('Qs Qc'), board: C('Qh 8d 3c'), pot: 24, toCall: 0, stack: 250, bigBlind: 2, inPosition: false,
+    heroActions: { pre: 'call', flop: '' }, heroCommitted: 8,
+    opponents: [0, 1].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: i ? 'call' : 'raise', flop: '' }, committed: 8, stack: 250 })) });
+  assert.ok(qq.ranked[0].ev > 50, 'top set EV ' + qq.ranked[0].ev);
+  assert.ok(ev(qq, 'bet') >= 0.95 * qq.ranked[0].ev, 'top set bet EV ' + ev(qq, 'bet') + ' vs best ' + qq.ranked[0].ev);
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);

@@ -1693,6 +1693,11 @@
   }
 
   const HERO_BET = 0.66;
+  // What an opponent did on a street of the lookahead (makePlan's line masks, 2 bits per street).
+  const LINE_CALL = 1, LINE_CHECK = 2, LINE_BET = 3;
+  const lineAt = (m, s, kind) => (m & ~(3 << (2 * (s - 3)))) | (kind << (2 * (s - 3)));
+  const LINE_SOFT = 0.5;
+  const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
   const VARIANTS = [{}, { foldShift: 0.15, betShift: -0.08 }, { foldShift: -0.15 }, { betShift: 0.15, valueShift: 0.15, raiseShift: 0.1 }];
@@ -1734,18 +1739,17 @@
         xs[5][j] = runouts.river(draw(), -1)[k];
       }
     }
-    const plan = {};
-    for (const s of streets) {
-      const x = xs[s].sort();
-      const q = (p) => x[clamp(Math.floor(p * (N - 1)), 0, N - 1)];
+    // Thresholds for street s from the strengths x (sorted, n of them) of the hands that got there.
+    const build = (s, x, n) => {
+      const q = (p) => x[clamp(Math.floor(p * (n - 1)), 0, n - 1)];
       const ss = streetStats(o.stats, s);
       const betFreq = clamp(ss.betFreq + (o.stats.betShift || 0), 0.05, 0.9);
       const vr = clamp(valueShare(o.stats, o.stats.betSize) - (o.stats.valueShift || 0), 0.2, 0.97);
       const vCut = q(1 - betFreq * vr);
       const airCut = q(0.35);
       const pBluff = clamp((betFreq * (1 - vr)) / 0.35, 0, 0.9);
-      const cum = new Float64Array(N + 1);
-      for (let j = 0; j < N; j++) cum[j + 1] = cum[j] + (x[j] >= vCut ? 1 : x[j] < airCut ? pBluff : 0);
+      const cum = new Float64Array(n + 1);
+      for (let j = 0; j < n; j++) cum[j + 1] = cum[j] + (x[j] >= vCut ? 1 : x[j] < airCut ? pBluff : 0);
       // Fold rate by bet size on a 5%-of-pot grid, so the hot loop does no allocation.
       const grid = new Float64Array(61);
       const aggScale = ctx.aggro ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1;
@@ -1756,24 +1760,89 @@
       const rf = clamp(ss.raiseFreq + (o.stats.raiseShift || 0), 0.02, 0.35);
       const rCut = q(1 - rf * 0.85);
       const pBluffR = clamp((rf * 0.15) / 0.35, 0, 0.3);
-      const cumR = new Float64Array(N + 1);
-      for (let j = 0; j < N; j++) cumR[j + 1] = cumR[j] + (x[j] >= rCut ? 1 : x[j] < airCut ? pBluffR : 0);
-      plan[s] = {
-        rCut, pBluffR,
+      const cumR = new Float64Array(n + 1);
+      for (let j = 0; j < n; j++) cumR[j + 1] = cumR[j] + (x[j] >= rCut ? 1 : x[j] < airCut ? pBluffR : 0);
+      return {
+        q, rCut, pBluffR,
         // They call a raise of their bet with nearly all of their value range.
         raiseCallCut: q(1 - betFreq * vr * 0.9),
-        eqVsRaise: (h) => (cumR[N] > 0 ? cumR[lowerBound(x, h)] / cumR[N] : 1),
+        eqVsRaise: (h) => (cumR[n] > 0 ? cumR[lowerBound(x, h)] / cumR[n] : 1),
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
         foldHero: aggScale * foldAtSize(o.stats, HERO_BET, s),
         callCut,
         // Hero value-bets when it beats 55% of the hands that would call.
-        valueCut: c0 < N ? x[c0 + Math.floor(0.55 * (N - 1 - c0))] : 2,
-        eqVsCall: (h) => (c0 < N ? Math.max(0, lowerBound(x, h) - c0) / (N - c0) : 1),
-        eqVsBet: (h) => (cum[N] > 0 ? cum[lowerBound(x, h)] / cum[N] : 1),
-        eqAll: (h) => lowerBound(x, h) / N,
+        valueCut: c0 < n ? x[c0 + Math.floor(0.55 * (n - 1 - c0))] : 2,
+        eqVsCall: (h) => (c0 < n ? Math.max(0, lowerBound(x, h) - c0) / (n - c0) : 1),
+        eqVsBet: (h) => (cum[n] > 0 ? cum[lowerBound(x, h)] / cum[n] : 1),
+        eqAll: (h) => lowerBound(x, h) / n,
       };
-    }
+    };
+    const plan = {};
+    for (const s of streets) plan[s] = build(s, Float64Array.from(xs[s]).sort(), N);
+    // The read's rates are what a player does once they get to a street, whatever got them there.
+    // So on later streets of the lookahead their thresholds are quantiles of the hands that would
+    // have played the line so far, not of their whole range: a range that called a bet is stronger
+    // and a range that checked is weaker, and each still folds, bets and raises as often as the read
+    // says. (With quantiles of the whole range, players who had called the flop folded only 14% to a
+    // turn bet when their read said 45%, which paid hero's improved hands off far too often, and
+    // players who checked the turn folded to a river bet far more often than their read.)
+    // `m` holds 2 bits per street b >= ctx.street (shift 2(b - 3)): LINE_CALL (continued against a
+    // bet), LINE_CHECK (could bet and checked), LINE_BET (bet or raised). Bits 4+ (lineCont) hold
+    // 1 + 20 x the share of their range that continued against hero's bet or raise on ctx.street, so
+    // a small bet's callers are a wider range than a big bet's (otherwise the cut is a 2/3-pot bet's).
+    const u = new Float64Array(N);
+    const urng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+    for (let j = 0; j < N; j++) u[j] = urng();
+    const below = (s) => (1 << (2 * (s - 3))) - 1;
+    const memo = {}, sets = {};
+    const canon = (s, m) => {
+      const line = m & below(s);
+      return line && ((line >> (2 * (street - 3))) & 3) === LINE_CALL ? line | (m & ~15) : line;
+    };
+    const survivors = (s, m) => {
+      m = canon(s, m);
+      if (!m) return null;
+      const key = s * 512 + m;
+      if (sets[key] !== undefined) return sets[key];
+      let b = 4;
+      while (b >= 3 && !((m >> (2 * (b - 3))) & 3)) b--;
+      const kind = (m >> (2 * (b - 3))) & 3;
+      const prev = survivors(b, m & (below(b) | ~15));
+      const t = plan.at(b, m);
+      // Callers: the share that continued, widened by LINE_SOFT toward the whole range, because
+      // players who called once fold less to the next bet than their read (logs: 33% on the turn
+      // after calling the flop, read about 45%; whole-range quantiles gave 14%).
+      const share = b === street && m >> 4 ? ((m >> 4) - 1) / 20 : 1 - t.foldHero;
+      const cut = t.q(1 - (share + LINE_SOFT * (1 - share))), xb = xs[b];
+      const keep = (j) => {
+        const x = xb[j];
+        if (kind === LINE_CALL) return x >= cut;
+        const bets = x >= t.vCut || (x < t.airCut && u[j] < t.pBluff);
+        return kind === LINE_BET ? bets : !bets;
+      };
+      const out = [];
+      if (prev) { for (const j of prev) if (keep(j)) out.push(j); }
+      else for (let j = 0; j < N; j++) if (keep(j)) out.push(j);
+      return (sets[key] = out.length >= Math.max(20, 0.05 * N) ? out : prev);
+    };
+    plan.at = (s, m) => {
+      m = canon(s, m);
+      if (!m || !xs[s]) return plan[s];
+      const key = s * 512 + m;
+      let p = memo[key];
+      if (!p) {
+        const idx = survivors(s, m);
+        if (!idx) p = plan[s];
+        else {
+          const x = new Float64Array(idx.length);
+          for (let j = 0; j < idx.length; j++) x[j] = xs[s][idx[j]];
+          p = build(s, x.sort(), idx.length);
+        }
+        memo[key] = p;
+      }
+      return p;
+    };
     return plan;
   }
 
@@ -5024,13 +5093,15 @@
     // this decision. Bet the remaining streets with both strategies and return hero's gain.
     // Either side can raise once per street; hero only bluffs the river.
     // `room`: the opponent's chips behind, so bets never go past what they can put in.
-    function playOut(i, P, heroIn, share, rng, startCur, v, from, room) {
+    // `m`: streets on which they already continued against a bet in this lookahead (makePlan).
+    function playOut(i, P, heroIn, share, rng, startCur, v, from, room, m) {
       const plan = planFor(i, v);
       const oc = oppCombo[i];
       let left = Math.min(stack - heroIn, room != null ? room : Infinity), extra = 0;
+      m = m || 0;
       for (let s = from != null ? from : startCur ? street : street + 1; s <= 5; s++) {
         if (left <= 0) break;
-        const t = plan[s];
+        const t = m ? plan.at(s, m) : plan[s];
         const sh = heroStrengthAt(s), so = strengthAt(s, oc);
         const oppBets = () => so >= t.vCut || (so < t.airCut && rng() < t.pBluff);
         // Opponent bets; hero folds (false), calls, or raises with a monster.
@@ -5048,6 +5119,7 @@
           return true;
         };
         // Hero bets for value or as a river bluff; the opponent folds, calls or raises.
+        let raisedNow = false;
         const heroBets = () => {
           const B = Math.min(left, roundChips(HERO_BET * P, bigBlind));
           const value = sh >= t.valueCut;
@@ -5056,6 +5128,7 @@
           const raises = left > B && (so >= t.rCut || (so < t.airCut && rng() < t.pBluffR));
           if (!raises && so < t.callCut(B / P)) return 'won';
           if (raises) {
+            raisedNow = true;
             const R = Math.min(left, roundChips(B + (P + 2 * B), bigBlind));
             const potBefore = P + B + R;
             if (t.eqVsRaise(sh) < (R - B) / (potBefore + R - B)) { P += B + R; extra += B; return 'lost'; }
@@ -5065,19 +5138,22 @@
           P += 2 * B; extra += B; left -= B;
           return 'called';
         };
-        let r;
+        // `line`: what the opponent did on this street, for their thresholds on the next ones.
+        let r, line;
         if (s === street) {
           // Hero checked; the opponent acts behind.
-          if (oppBets()) r = heroFaces();
+          if (oppBets()) { line = LINE_BET; r = heroFaces(); } else line = LINE_CHECK;
           if (r === false) return -heroIn - extra;
           if (r === 'won') return P - heroIn - extra;
         } else if (heroIPvs[i]) {
           if (oppBets()) {
+            line = LINE_BET;
             r = heroFaces();
             if (r === false) return -heroIn - extra;
             if (r === 'won') return P - heroIn - extra;
           } else {
             r = heroBets();
+            line = r === 'called' ? (raisedNow ? LINE_BET : LINE_CALL) : LINE_CHECK;
             if (r === 'won') return P - heroIn - extra;
             if (r === 'lost') return -heroIn - extra;
           }
@@ -5085,12 +5161,15 @@
           r = heroBets();
           if (r === 'won') return P - heroIn - extra;
           if (r === 'lost') return -heroIn - extra;
-          if (r === 'check' && oppBets()) {
-            const f = heroFaces();
-            if (f === false) return -heroIn - extra;
-            if (f === 'won') return P - heroIn - extra;
-          }
+          if (r === 'called') line = raisedNow ? LINE_BET : LINE_CALL;
+          else if (oppBets()) {
+            line = LINE_BET;
+            r = heroFaces();
+            if (r === false) return -heroIn - extra;
+            if (r === 'won') return P - heroIn - extra;
+          } else line = LINE_CHECK;
         }
+        if (s < 5) m = lineAt(m, s, line);
       }
       return share * P - heroIn - extra;
     }
@@ -5105,12 +5184,16 @@
     const multiAlive = new Uint8Array(opps.length);
     const multiState = new Uint8Array(opps.length); // 0 checked/unknown, 1 bet, 2 called, 3 raised
     const multiPut = new Float64Array(opps.length);
+    const multiMask = new Uint16Array(opps.length); // each one's line so far (makePlan's masks)
+    const entryMask = new Uint16Array(opps.length);
+    const multiLine = new Uint8Array(opps.length); // what each did on this street
     const HERO = -1;
+    const planAt = (i, v, s) => (multiMask[i] ? planFor(i, v).at(s, multiMask[i]) : planFor(i, v)[s]);
     function heroEq(list, s, sh, v) {
       let eq = 1;
       for (const i of list) {
         if (!multiAlive[i]) continue;
-        const t = planFor(i, v)[s];
+        const t = planAt(i, v, s);
         const st = multiState[i];
         eq *= st === 3 ? t.eqVsRaise(sh) : st === 1 ? t.eqVsBet(sh) : st === 2 ? t.eqVsCall(sh) : t.eqAll(sh);
       }
@@ -5119,7 +5202,7 @@
     function playOutMulti(list, P, heroIn, heroScore, rng, v, startCur) {
       let left = stack - heroIn, extra = 0, listMask = 0;
       multiAlive.fill(0);
-      for (const i of list) { multiAlive[i] = 1; listMask |= 1 << i; }
+      for (const i of list) { multiAlive[i] = 1; listMask |= 1 << i; multiMask[i] = entryMask[i]; }
       const aliveCount = () => { let n = 0; for (const i of list) n += multiAlive[i]; return n; };
       const lastAlive = () => { for (const i of list) if (multiAlive[i]) return i; return -1; };
       for (let s = startCur ? street : street + 1; s <= 5; s++) {
@@ -5127,10 +5210,11 @@
         if (aliveCount() === 1) {
           const i = lastAlive();
           const share = heroScore > oppScore[i] ? 1 : heroScore === oppScore[i] ? 0.5 : 0;
-          return playOut(i, P, heroIn + extra, share, rng, false, v, s, oppLeft[i] - addNow[i] - extra);
+          return playOut(i, P, heroIn + extra, share, rng, false, v, s, oppLeft[i] - addNow[i] - extra, multiMask[i]);
         }
         const sh = heroStrengthAt(s);
         multiState.fill(0);
+        multiLine.fill(0);
         // Seat order for this street. On the current street hero has already checked, so only the
         // opponents still to act can open, and the rest respond after a bet.
         const okey = 2 * listMask + (s === street ? 1 : 0);
@@ -5155,16 +5239,20 @@
           if (a === HERO) {
             if (k >= opensFrom) continue;
             let value = true;
-            for (const i of list) if (multiAlive[i] && sh < planFor(i, v)[s].valueCut) { value = false; break; }
+            for (const i of list) if (multiAlive[i] && sh < planAt(i, v, s).valueCut) { value = false; break; }
             if (value) { bettor = HERO; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); at = k; }
-          } else if (multiAlive[a]) {
-            const t = planFor(a, v)[s], so = strengthAt(s, oppCombo[a]);
+          } else if (multiAlive[a] && (s !== street || opps[a].pending)) {
+            // (On the current street the others have already checked.)
+            const t = planAt(a, v, s), so = strengthAt(s, oppCombo[a]);
             if (so >= t.vCut || (so < t.airCut && rng() < t.pBluff / Math.max(1, aliveCount() - 1))) {
               bettor = a; B = Math.min(left, roundChips(t.betFrac * P, bigBlind)); at = k;
-            }
+            } else multiLine[a] = LINE_CHECK;
           }
         }
-        if (bettor === -2) continue;
+        if (bettor === -2) {
+          if (s < 5) for (const i of list) if (multiLine[i]) multiMask[i] = lineAt(multiMask[i], s, LINE_CHECK);
+          continue;
+        }
         multiPut.fill(0);
         let heroPut = 0;
         const heroAdd = (x) => { P += x; extra += x; left -= x; heroPut += x; };
@@ -5190,7 +5278,7 @@
               if (eq < need / (P + need)) return -heroIn - extra;
               heroAdd(need);
             } else if (multiAlive[a] && a !== raiser && multiPut[a] < target) {
-              const t = planFor(a, v)[s], so = strengthAt(s, oppCombo[a]);
+              const t = planAt(a, v, s), so = strengthAt(s, oppCombo[a]);
               if (raiser === -2 && so >= t.rCut && left > B) {
                 R = Math.min(left + heroPut, roundChips(B + (P + B), bigBlind));
                 raiser = a; multiState[a] = 3; P += R - multiPut[a]; multiPut[a] = R;
@@ -5201,6 +5289,13 @@
           }
         }
         if (aliveCount() === 0) return P - heroIn - extra;
+        if (s < 5) {
+          for (const i of list) {
+            if (!multiAlive[i]) continue;
+            const st = multiState[i], line = st === 1 || st === 3 ? LINE_BET : st === 2 ? LINE_CALL : multiLine[i];
+            if (line) multiMask[i] = lineAt(multiMask[i], s, line);
+          }
+        }
       }
       let best = heroScore, n = 1, heroBest = true;
       for (const i of list) {
@@ -5281,13 +5376,17 @@
       let inCount = 0, lastIn = -1;
       for (let i = 0; i < opps.length; i++) if (oppIn[i]) { inCount++; lastIn = i; }
       let gain;
+      // Opponents who just chose to continue against hero's bet, raise or call (their range
+      // doesn't hold that choice yet) play later streets from the hands that continue.
+      const lineNow = lineAt(0, street, LINE_CALL);
       if (lookahead && inCount === 1 && sc.amount < stack && oppLeft[lastIn] > addNow[lastIn]) {
         const startCur = sc.kind === 'check' && opps[lastIn].pending;
-        gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v, null, oppLeft[lastIn] - addNow[lastIn]);
+        const m = sc.opp[lastIn].cont < 0.999 ? lineNow | lineCont(sc.opp[lastIn].cont) : 0;
+        gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v, null, oppLeft[lastIn] - addNow[lastIn], m);
         settledLooked = true;
       } else if (lookahead && inCount >= 2 && sc.amount < stack && mwStack != null) {
         let mask = 0, anyPending = false;
-        for (let i = 0; i < opps.length; i++) if (oppIn[i]) { mask |= 1 << i; if (opps[i].pending) anyPending = true; }
+        for (let i = 0; i < opps.length; i++) if (oppIn[i]) { mask |= 1 << i; if (opps[i].pending) anyPending = true; entryMask[i] = sc.opp[i].cont < 0.999 ? lineNow | lineCont(sc.opp[i].cont) : 0; }
         const list = listFor(mask);
         const startCur = sc.kind === 'check' && anyPending;
         gain = playOutMulti(list, finalPot, sc.amount, hs, rng, v, startCur);
