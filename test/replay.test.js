@@ -364,6 +364,23 @@ test('reads: vsOpen counts the response to a single open by its size', () => {
   ]) t.handle(ev, data, snap);
   const vo = t.db.players.V.tally.vsOpen;
   assert.strictEqual(vo.large.call, 1, JSON.stringify(vo));
+  // A limper calling a raise is not a response to an open (they keep most of their limping range).
+  const t3 = new T({ players: {} });
+  const snap3 = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' },
+    { id: 3, authUserId: 'W', name: 'Wes', stack: 200, posType: 's3', playState: 'playing' }] };
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 2 }], ['game:big_blind_paid', { amount: 2, playerId: 3 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'fold', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 1 }],
+    ['player:game:action_taken', { playerID: 3, actionType: 'raise', makeBetValue: 6 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 6 }],
+  ]) t3.handle(ev, data, snap3);
+  const vo3 = t3.db.players.V.tally.vsOpen;
+  assert.strictEqual(vo3.large.call + vo3.medium.call + vo3.small.call, 0, JSON.stringify(vo3));
   const st = E.computeStats(Object.assign(T.blankTally(), { vsOpen: { small: { fold: 0, call: 0, raise: 0 }, medium: { fold: 0, call: 0, raise: 0 }, large: { fold: 20, call: 0, raise: 0 } } }), 'typical');
   assert.ok(st.vsOpen.large.cont < 0.2 && st.vsOpen.small.cont > 0.5, JSON.stringify(st.vsOpen));
 });

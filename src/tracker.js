@@ -306,7 +306,9 @@
           p.faced3 = true;
           r.tally.pf3betOpp++;
           if (kind === '3bet') r.tally.pf3bet++;
-          const toBB = h.bigBlind > 0 ? (p.stageBet - added + facing) / h.bigBlind : 0;
+          // Response to an open by size, for players who had not acted yet (limpers facing a raise
+          // keep most of their limping range, and the solver asks only about players still to act).
+          const toBB = h.bigBlind > 0 && p.seq.pre.length === 1 ? (p.stageBet - added + facing) / h.bigBlind : 0;
           const vo = toBB > 0 && r.tally.vsOpen && r.tally.vsOpen[toBB <= 2.5 ? 'small' : toBB <= 3.5 ? 'medium' : 'large'];
           const k2 = kind === '3bet' ? 'raise' : kind;
           if (vo && vo[k2] != null) vo[k2]++;
