@@ -1,0 +1,187 @@
+// Fits home-bot parameters so simulated friends play like the real ones in the hand logs.
+//
+//   node test/sim/calibrate.js <export.json> [more.json ...] [--rounds 14] [--hands 8000] [--players 4]
+//        [--min-hands 15] [--out test/sim/profiles.json] [--names names.json]
+//
+// Each friend with enough hands becomes a profile f1, f2, ... (most hands first) plus `pool` (everyone together).
+// Targets are the friend's numbers from profile.js, shrunk toward the pool by sample size. The bots then play
+// 4-handed tables (a baseline player in the fourth seat, rotating lineups) and every round each parameter moves
+// toward its target, measured with the same profile.js code. Names stay out of the repo (it is public):
+// --names writes the id -> name mapping to a separate file.
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const prof = require('./profile.js');
+const bots = require('./bots.js');
+const { playHand, shuffled, keyed } = require('./game.js');
+
+const args = process.argv.slice(2);
+const opt = (k, d) => (args.includes('--' + k) ? args[args.indexOf('--' + k) + 1] : d);
+const files = args.filter((a, i) => !a.startsWith('--') && !(args[i - 1] || '').startsWith('--'));
+const ROUNDS = +opt('rounds', 14), HANDS = +opt('hands', 8000), NP = +opt('players', 4), MIN_HANDS = +opt('min-hands', 15);
+const OUT = opt('out', path.join(__dirname, 'profiles.json'));
+const NAMES_OUT = opt('names', null);
+const BB = 2, STACK = 300;
+
+// ---------- targets ----------
+const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+const tallies = prof.profileEntries(entries);
+const names = Object.keys(tallies).filter((n) => tallies[n].hands >= MIN_HANDS).sort((a, b) => tallies[b].hands - tallies[a].hands);
+const pool = prof.summarize(prof.mergeTallies(Object.values(tallies)));
+const real = {};
+for (const n of names) real[n] = prof.summarize(tallies[n]);
+
+// Stats the calibration matches: [key, getter, sample-size getter, prior (for the pool), shrink K]
+const STATS = [
+  ['vpip', (s) => s.vpip, (s) => s.hands, null, 15],
+  ['pfr', (s) => s.pfr, (s) => s.hands, null, 15],
+  ['vsOpenFold', (s) => s.vsOpenFold, (s) => s.vsOpenN, 0.4, 10],
+  ['vsOpen3b', (s) => s.vsOpen3b, (s) => s.vsOpenN, 0.12, 10],
+  ['callBig', (s) => s.callBig, (s) => s.callBigN, 0.45, 10],
+  ['openSize', (s) => s.openSize, (s) => s.unopenedN * (s.openRaise || 0), 4, 6],
+  ['betPct', (s) => s.betPct, (s) => s.betPctN, 0.5, 8],
+];
+for (const st of ['flop', 'turn', 'river']) {
+  STATS.push([st + 'Bet', (s) => s.st[st].betFreq, (s) => s.st[st].u, null, 20]);
+  STATS.push([st + 'Fold', (s) => s.st[st].foldToBet, (s) => s.st[st].f, null, 20]);
+  STATS.push([st + 'Raise', (s) => s.st[st].raiseFreq, (s) => s.st[st].f, null, 20]);
+}
+// The pool's own numbers, shrunk toward a prior where the pool is thin.
+const poolT = {};
+for (const [k, get, nOf, prior, K] of STATS) {
+  const x = get(pool), n = nOf(pool) || 0;
+  poolT[k] = x == null ? prior : prior == null ? x : (n * x + K * prior) / (n + K);
+}
+function targetsFor(s) {
+  const t = {};
+  for (const [k, get, nOf, , K] of STATS) {
+    const x = s ? get(s) : null, n = s ? nOf(s) || 0 : 0;
+    t[k] = x == null || !n ? poolT[k] : (n * x + K * poolT[k]) / (n + K);
+  }
+  return t;
+}
+const ids = names.map((_, i) => 'f' + (i + 1)).concat(['pool']);
+const targets = {};
+names.forEach((n, i) => { targets[ids[i]] = targetsFor(real[n]); });
+targets.pool = Object.assign({}, poolT);
+// The hero (Marwin following the advice) is calibrated too and sits in the fourth seat, so the
+// friends face bets about as often as they did at the real table.
+const heroTallies = prof.profileEntries(entries, { includeHero: true });
+const heroName = (entries.find((h) => h.players.some((p) => p.hero)) || { players: [] }).players.find((p) => p.hero);
+if (heroName && heroTallies[heroName.name]) {
+  real.__hero = prof.summarize(heroTallies[heroName.name]);
+  ids.push('hero');
+  targets.hero = targetsFor(real.__hero);
+}
+
+// ---------- parameters ----------
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const params = {};
+for (const id of ids) {
+  const t = targets[id];
+  const p = clone(bots.HOME_DEFAULT);
+  p.vpip = t.vpip; p.pfr = t.pfr; p.cont = 1 - t.vsOpenFold; p.threeBet = t.vsOpen3b; p.callBig = t.callBig;
+  p.openBB = t.openSize; p.betSize = t.betPct;
+  params[id] = p;
+}
+// [stat, param, index or null, direction, step, lo, hi, mode]
+const CTRL = [
+  ['vpip', 'vpip', null, 1, 0.9, 0.08, 0.97],
+  ['pfr', 'pfr', null, 1, 0.9, 0.01, 0.6],
+  ['vsOpenFold', 'cont', null, -1, 0.8, 0.05, 0.97],
+  ['vsOpen3b', 'threeBet', null, 1, 0.8, 0.005, 0.5],
+  ['callBig', 'callBig', null, 1, 0.6, 0.05, 0.9],
+  ['openSize', 'openBB', null, 1, 0.7, 2, 10, 'ratio'],
+  ['betPct', 'betSize', null, 1, 0.7, 0.15, 1.2, 'ratio'],
+];
+['flop', 'turn', 'river'].forEach((st, i) => {
+  CTRL.push([st + 'Bet', 'val', i, -1, 0.7, 0.4, 0.99]);
+  CTRL.push([st + 'Fold', 'call', i, 1, 0.7, 0.05, 0.97]);
+  CTRL.push([st + 'Raise', 'raise', i, -1, 0.5, 0.6, 0.995]);
+});
+
+// ---------- simulate and measure ----------
+function measure(round) {
+  const nb = NP - 1;
+  const entriesSim = [];
+  const hero = params.hero ? bots.homeBot(params.hero) : bots.baseline();
+  const seatNames = [params.hero ? 'hero' : 'Hero'];
+  const opp = ids.filter((x) => x !== 'hero');
+  for (let blk = 0; blk < Math.ceil(HANDS / 100); blk++) {
+    // A lineup per block of 100 hands; the pool bot fills in too.
+    const order = opp.map((id, i) => [keyed(round, blk, i, 99), id]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+    const line = order.slice(0, nb);
+    const seats = [hero].concat(line.map((id) => bots.homeBot(params[id])));
+    const nm = seatNames.concat(line);
+    for (let h = 0; h < 100; h++) {
+      const d = blk * 100 + h;
+      const deck = shuffled((round * 7919 + d * 104729) >>> 0);
+      const hands = []; for (let i = 0; i < NP; i++) hands.push([deck[2 * i], deck[2 * i + 1]]);
+      const res = playHand({ n: NP, btn: d % NP, hands, boardAll: deck.slice(2 * NP, 2 * NP + 5), stacks: new Array(NP).fill(STACK), sb: BB / 2, bb: BB,
+        seats, hero: 0, names: nm, seed: (round * 1000003 + d) >>> 0, log: true });
+      entriesSim.push(res.entry);
+    }
+  }
+  const t = prof.profileEntries(entriesSim, { includeHero: true });
+  const out = {};
+  for (const id of ids) if (t[id]) out[id] = prof.summarize(t[id]);
+  return out;
+}
+const statVal = (s, k) => {
+  const def = STATS.find((x) => x[0] === k);
+  return def[1](s);
+};
+
+let last = null;
+for (let round = 1; round <= ROUNDS; round++) {
+  const m = measure(round);
+  last = m;
+  let err = 0, cnt = 0;
+  const damp = round <= 3 ? 1 : round <= 8 ? 0.7 : 0.45;
+  for (const id of ids) {
+    if (!m[id]) continue;
+    const p = params[id], t = targets[id];
+    for (const [k, key, idx, dir, step, lo, hi, mode] of CTRL) {
+      const x = statVal(m[id], k);
+      if (x == null || t[k] == null) continue;
+      const cur = idx == null ? p[key] : p[key][idx];
+      let nx;
+      if (mode === 'ratio') nx = cur * Math.pow(t[k] / Math.max(1e-3, x), step * damp);
+      else nx = cur + dir * step * damp * (t[k] - x);
+      nx = Math.max(lo, Math.min(hi, nx));
+      if (idx == null) p[key] = nx; else p[key][idx] = nx;
+      if (mode !== 'ratio') { err += Math.abs(t[k] - x); cnt++; }
+    }
+  }
+  process.stderr.write(`round ${round}: mean abs error ${(err / cnt * 100).toFixed(2)} points\n`);
+}
+
+// ---------- write ----------
+const r3 = (x) => (x == null ? null : Math.round(x * 1000) / 1000);
+const style = (t) => {
+  const loose = t.vpip >= 0.6 ? 'very loose' : t.vpip >= 0.45 ? 'loose' : 'medium';
+  const agg = t.pfr >= 0.25 ? 'aggressive' : t.pfr >= 0.13 ? 'semi-aggressive' : 'passive';
+  return `${loose} ${agg} preflop (VPIP ${Math.round(t.vpip * 100)} / PFR ${Math.round(t.pfr * 100)}), folds ${Math.round(t.flopFold * 100)}/${Math.round(t.turnFold * 100)}/${Math.round(t.riverFold * 100)}% to flop/turn/river bets`;
+};
+const out = {};
+for (const id of ids) {
+  const p = params[id];
+  const rp = {};
+  for (const [k, v] of Object.entries(p)) rp[k] = Array.isArray(v) ? v.map(r3) : r3(v);
+  const meas = {};
+  const tgt = {};
+  for (const [k] of STATS) { tgt[k] = r3(targets[id][k]); meas[k] = last[id] ? r3(statVal(last[id], k)) : null; }
+  if (last[id]) { meas.wtsd = r3(last[id].wtsd); meas.sdBluffShare = r3(last[id].sdBluffShare); meas.limp = r3(last[id].limp); }
+  const src = id === 'pool' ? pool : id === 'hero' ? real.__hero : real[names[ids.indexOf(id)]];
+  out[id] = { style: style(targets[id]), hands: src.hands, target: tgt, real: { wtsd: r3(src.wtsd), sdBluffShare: r3(src.sdBluffShare), limp: r3(src.limp) }, simulated: meas, params: rp };
+}
+fs.writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n');
+if (NAMES_OUT) fs.writeFileSync(NAMES_OUT, JSON.stringify(Object.fromEntries(names.map((n, i) => [ids[i], n])), null, 1));
+console.log(`wrote ${OUT}: ${ids.join(', ')}`);
+for (const id of ids) {
+  const o = out[id];
+  const worst = Object.keys(o.target).map((k) => [k, o.target[k], o.simulated[k]]).filter((x) => x[2] != null && x[1] != null)
+    .map((x) => [x[0], Math.abs(x[1] - x[2]) / (/Size|Pct/.test(x[0]) ? x[1] : 1)]).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, e]) => `${k} ${(e * 100).toFixed(1)}${/Size|Pct/.test(k) ? '%' : 'pt'}`);
+  console.log(`${id.padEnd(5)} ${o.hands} hands: ${o.style}; worst fits: ${worst.join(', ')}; WTSD real ${o.real.wtsd} sim ${o.simulated.wtsd}`);
+}
