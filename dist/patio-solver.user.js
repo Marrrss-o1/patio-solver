@@ -232,6 +232,12 @@ function ENGINE() {
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
   const BIG_BET = 0.75;
 
+  // Balanced-play references for a bet of f x pot.
+  const eqFold = (f) => f / (1 + f);
+  const eqValueShare = (f) => (1 + f) / (1 + 2 * f);
+  // Position groups: 'late' = button and cutoff, 'blinds' = SB and BB, 'early' = the rest.
+  const POS_SCALE = { early: 0.8, late: 1.25, blinds: 1 };
+
   // How often a player with fold-to-bet `ftb` folds to a bet of `f` x pot, before any size-specific data.
   function modelFold(ftb, f) {
     const mdf = 1 / (1 + Math.max(0.05, f));
@@ -370,8 +376,49 @@ function ENGINE() {
     stats.raw.bluffShare = V + B ? B / (V + B) : null;
     stats.bluffShare = 1 - vr;
 
+    // Preflop by position group, shrunk toward their overall numbers scaled by how
+    // much looser people usually play late and tighter early.
+    stats.byPos = {};
+    for (const g of Object.keys(POS_SCALE)) {
+      const x = Object.assign({ n: 0, vpip: 0, pfr: 0 }, (t.pos && t.pos[g]) || {});
+      const pv = clamp(vpip * POS_SCALE[g], 0.05, 0.95), pp = clamp(stats.pfr * POS_SCALE[g], 0.02, pv);
+      const v = (x.vpip + 8 * pv) / (x.n + 8);
+      stats.byPos[g] = { vpip: v, pfr: Math.min(v, (x.pfr + 8 * pp) / (x.n + 8)), hands: x.n };
+    }
+
     const n = hands + stats.postflopActions / 2;
     stats.confidence = n < 10 ? 'guess' : n < 40 ? 'low' : n < 120 ? 'medium' : 'solid';
+
+    // Confidence-pinned exploitation (restricted Nash response): trust the read with
+    // weight p, which grows from 0.5 with no hands to 0.9 at about 120, and fill the rest
+    // with balanced play: fold f/(1+f) to a bet of f x pot (minimum defense), and bet
+    // value:bluff in the (1+f):f ratio that makes calling break even.
+    // The floor is 0.5, not the 0.2 the papers use: the default read is already a
+    // typical amateur, which is a better guess for a home game than balanced play.
+    // Read accuracy: where each shown hand sat in the range we would have put them on.
+    // A well-calibrated range has the shown hand in its more likely half about half the
+    // time. Reads that keep missing get less trust.
+    const fits = (t.shows || []).map((x) => x && x.fit).filter((f) => f && f.top != null);
+    const hits = fits.filter((f) => f.top < 0.5).length;
+    stats.accuracy = fits.length ? {
+      n: fits.length, hits,
+      // How many times more likely the shown hand was under our range than under a random guess.
+      vsGuess: Math.pow(2, fits.reduce((a, f) => a + Math.log2(Math.max(1e-3, f.lr)), 0) / fits.length),
+    } : null;
+    // Average miss in strength (0 = shown hands sit in the middle of our ranges), shrunk
+    // toward zero until there are several showdowns.
+    const sqs = fits.filter((f) => f.sq != null);
+    stats.strengthBias = clamp(sqs.reduce((a, f) => a + (f.sq - 0.5), 0) / (sqs.length + 4), -0.3, 0.3);
+    const trust = clamp(((hits + 2) / (fits.length + 4)) / 0.5, 0.5, 1.1);
+    const p = clamp((0.5 + (0.4 * n) / 120) * trust, 0.3, 0.95);
+    stats.exploitWeight = p;
+    const mix = (read, eq) => p * read + (1 - p) * eq;
+    stats.foldToBet = mix(stats.foldToBet, eqFold(0.6));
+    for (const k of [3, 4, 5]) stats.byStreet[k].foldToBet = mix(stats.byStreet[k].foldToBet, eqFold(0.6));
+    for (const [key, f] of SIZE_BUCKETS) stats.foldBySize[key] = mix(stats.foldBySize[key], eqFold(f));
+    stats.valueShare = mix(stats.valueShare, eqValueShare(0.66));
+    stats.valueShareBig = mix(stats.valueShareBig, eqValueShare(1.1));
+    stats.valueShareSmall = mix(stats.valueShareSmall, eqValueShare(0.33));
     return stats;
   }
 
@@ -391,7 +438,7 @@ function ENGINE() {
     let key;
     const ratio = stats.pfr / Math.max(stats.vpip, 0.01);
     if (stats.hands < 8 && stats.postflopActions < 8) key = 'unknown';
-    else if (stats.vpip >= 0.45 && (stats.af >= 3 || stats.pfr >= 0.3 || stats.bluffShare >= 0.45)) key = 'maniac';
+    else if (stats.vpip >= 0.45 && (stats.af >= 3 || stats.pfr >= 0.3 || (stats.raw.bluffShare != null && stats.raw.bluffShare >= 0.5))) key = 'maniac';
     else if (stats.vpip >= 0.35 && (ratio < 0.4 || stats.af < 1.2)) key = 'station';
     else if (stats.vpip >= 0.27 && stats.pfr >= 0.19) key = 'lag';
     else if (stats.vpip <= 0.16) key = ratio >= 0.55 ? 'nit' : 'rock';
@@ -405,6 +452,8 @@ function ENGINE() {
   function readSummary(stats) {
     const p = (x) => Math.round(x * 100) + '%';
     const r = stats.raw || {}, parts = [];
+    const acc = stats.accuracy;
+    if (acc) parts.push('range read right ' + acc.hits + ' of ' + acc.n + ' showdowns (' + acc.vsGuess.toFixed(1) + '× better than a guess)');
     if (r.threeBet != null) parts.push('3-bet ' + p(r.threeBet));
     if (r.cbet != null) parts.push('c-bet ' + p(r.cbet));
     const fs = r.foldBySize;
@@ -412,6 +461,35 @@ function ENGINE() {
     if (stats.shown && stats.shown.bets) parts.push('bluffed ' + stats.shown.bluffs + ' of ' + stats.shown.bets + ' shown bets');
     if (r.wtsd != null) parts.push('to showdown ' + p(r.wtsd));
     return parts.join(' · ');
+  }
+
+  // Score a shown hand against the range the engine would have put that player on.
+  // Returns { top, lr }: top = share of the range's weight on hands it rated more likely
+  // than the real one (0 = our top guess), lr = the real hand's weight / the range's average.
+  function scoreShow(show, tally, tableStyle) {
+    const hole = show.cards.map(parseCard), board = show.board.map(parseCard);
+    if (hole.length !== 2 || hole.some((x) => x < 0) || board.some((x) => x < 0) || board.length < 3) return null;
+    const stats = computeStats(tally, tableStyle);
+    const strengths = { 0: boardStrength([]) };
+    for (const n of [3, 4, 5]) if (board.length >= n) strengths[n] = boardStrength(board.slice(0, n));
+    const W = buildRange(stats, show.actions || {}, strengths, board, show.sizes, show.pfAggressor, show.position, true);
+    const k = COMBO_INDEX[hole[0] * 52 + hole[1]];
+    // Where the real hand ranked by strength (on the final board) inside our range.
+    const sq = rangeQuantiles(W, strengths[board.length].hs)[k];
+    let total = 0, above = 0, same = 0, live = 0;
+    for (let j = 0; j < NUM_COMBOS; j++) {
+      if (!(W[j] >= 0) || board.includes(COMBO_HI[j]) || board.includes(COMBO_LO[j])) continue;
+      live++;
+      total += W[j];
+      if (W[j] > W[k] + 1e-12) above += W[j];
+      else if (Math.abs(W[j] - W[k]) <= 1e-12) same += W[j];
+    }
+    if (!(total > 0)) return null;
+    return {
+      top: Math.round(((above + same / 2) / total) * 1000) / 1000,
+      lr: Math.round((W[k] / (total / live)) * 100) / 100,
+      sq: Math.round(sq * 1000) / 1000,
+    };
   }
 
   function percentiles(scores, valid, count, out) {
@@ -582,7 +660,7 @@ function ENGINE() {
       const w = (f - corr[i][0]) / (corr[i + 1][0] - corr[i][0]);
       d = corr[i][1] * (1 - w) + corr[i + 1][1] * w;
     }
-    return clamp(base + d, 0.02, 0.98);
+    return clamp(base + d + (stats.foldShift || 0), 0.02, 0.98);
   }
 
   function aggressionProbs(W, st, freq, vr) {
@@ -619,16 +697,19 @@ function ENGINE() {
     if (opts && opts.cbet && action === 'bet') stats = Object.assign({}, stats, { betFreq: stats.cbet });
     if (opts && opts.cbet && action === 'check') stats = Object.assign({}, stats, { betFreq: stats.cbet });
     const vr = valueShare(stats, size);
+    // Big bets come from a narrower, more polarized range; small bets from a wider one
+    // that includes more medium hands.
+    const sizeScale = !(size > 0) ? 1 : size >= 1 ? 0.8 : size >= BIG_BET ? 0.9 : size < 0.45 ? 1.2 : 1;
     let P;
     if (action === 'bet') {
-      P = aggressionProbs(W, st, stats.betFreq, vr);
+      P = aggressionProbs(W, st, clamp(stats.betFreq * sizeScale, 0.03, 0.95), vr);
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k]);
     } else if (action === 'check') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
       const slow = clamp(0.5 - 0.1 * stats.af, 0.1, 0.45);
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(slow, 1 - P[k]);
     } else if (action === 'raise') {
-      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
+      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * sizeScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.02, P[k]);
     } else if (action === 'call') {
       const q = rangeQuantiles(W, st.ehs);
@@ -665,8 +746,9 @@ function ENGINE() {
     return s;
   }
 
-  function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor) {
-    let W = preflopRange(stats, actions.pre || 'pending');
+  function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
+    const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
+    let W = preflopRange(pre, actions.pre || 'pending');
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
@@ -683,6 +765,16 @@ function ENGINE() {
     }
     if (sumWeights(W) <= 1e-9) {
       for (let k = 0; k < NUM_COMBOS; k++) W[k] = dead[COMBO_HI[k]] || dead[COMBO_LO[k]] ? 0 : 1;
+    }
+    // Learned correction: if this player's shown hands keep landing below (or above) the
+    // middle of the range we predicted, tilt the range weaker (or stronger) to match.
+    const bias = stats.strengthBias || 0;
+    if (!noTilt && Math.abs(bias) > 0.005) {
+      const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
+      const q = rangeQuantiles(W, strengths[last].ehs);
+      const keep = W.bluffShare;
+      for (let k = 0; k < NUM_COMBOS; k++) if (W[k] > 0) W[k] *= Math.exp(8 * bias * (q[k] - 0.5));
+      W.bluffShare = keep;
     }
     return W;
   }
@@ -871,6 +963,9 @@ function ENGINE() {
   }
 
   const HERO_BET = 0.66;
+  // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
+  // folding more, calling more, and betting and bluffing more than the read says.
+  const VARIANTS = [{}, { foldShift: 0.15, betShift: -0.08 }, { foldShift: -0.15 }, { betShift: 0.15, valueShift: 0.15 }];
   const PLAN_SAMPLES = 500;
 
   /*
@@ -914,14 +1009,17 @@ function ENGINE() {
       const x = xs[s].sort();
       const q = (p) => x[clamp(Math.floor(p * (N - 1)), 0, N - 1)];
       const ss = streetStats(o.stats, s);
-      const betFreq = clamp(ss.betFreq, 0.05, 0.9);
-      const vr = valueShare(o.stats, o.stats.betSize);
+      const betFreq = clamp(ss.betFreq + (o.stats.betShift || 0), 0.05, 0.9);
+      const vr = clamp(valueShare(o.stats, o.stats.betSize) - (o.stats.valueShift || 0), 0.2, 0.97);
       const vCut = q(1 - betFreq * vr);
       const airCut = q(0.35);
       const pBluff = clamp((betFreq * (1 - vr)) / 0.35, 0, 0.9);
       const cum = new Float64Array(N + 1);
       for (let j = 0; j < N; j++) cum[j + 1] = cum[j] + (x[j] >= vCut ? 1 : x[j] < airCut ? pBluff : 0);
-      const callCut = (f) => q(foldAtSize(o.stats, f, s));
+      // Fold rate by bet size on a 5%-of-pot grid, so the hot loop does no allocation.
+      const grid = new Float64Array(61);
+      for (let g = 0; g <= 60; g++) grid[g] = q(foldAtSize(o.stats, g * 0.05, s));
+      const callCut = (f) => grid[Math.min(60, Math.round(f * 20))];
       const c0 = lowerBound(x, callCut(HERO_BET));
       plan[s] = {
         vCut, airCut, pBluff,
@@ -968,9 +1066,9 @@ function ENGINE() {
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
-      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor);
+      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position);
       const qCont = rangeQuantiles(W, current.ehs);
-      const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead) : W;
+      const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
         ? actions.pre === 'raise' || actions.pre === '3bet'
         : currentAction === 'bet' || currentAction === 'raise' || currentAction === 'checkraise';
@@ -982,7 +1080,7 @@ function ENGINE() {
 
     const scenarios = [];
     const cap = (x) => Math.min(x, stack);
-    const fmtFrac = (f) => ({ 0.33: '⅓ pot', 0.5: '½ pot', 0.75: '¾ pot', 1: 'pot', 1.5: '1½ pot' })[f] || Math.round(f * 100) + '% pot';
+    const fmtFrac = (f) => ({ 0.33: '⅓ pot', 0.5: '½ pot', 0.75: '¾ pot', 1: 'pot', 1.5: '1½ pot', 2: '2× pot overbet' })[f] || Math.round(f * 100) + '% pot';
     const addScenario = (s) => {
       if (scenarios.some((x) => x.kind === s.kind && Math.abs(x.amount - s.amount) < 1e-9)) return;
       scenarios.push(s);
@@ -994,7 +1092,7 @@ function ENGINE() {
 
     if (toCall <= 0) {
       addScenario({ kind: 'check', label: 'Check', amount: 0 });
-      const fracs = street === 0 ? [0.75, 1, 1.5] : [0.33, 0.5, 0.75, 1, 1.5];
+      const fracs = street === 0 ? [0.75, 1, 1.5] : street >= 4 ? [0.33, 0.5, 0.75, 1, 1.5, 2] : [0.33, 0.5, 0.75, 1, 1.5];
       for (const f of fracs) {
         const amt = cap(Math.max(bigBlind, roundChips(f * pot, bigBlind)));
         addScenario({ kind: amt >= stack ? 'allin' : 'bet', label: amt >= stack ? 'All-in' : 'Bet', sizeLabel: fmtFrac(f), amount: amt });
@@ -1053,7 +1151,7 @@ function ENGINE() {
       Object.assign(sc, {
         n: 0, gainSum: 0, gainSq: 0, foldAll: 0, showdowns: 0, shareSum: 0, wins: 0, ties: 0,
         vsWins: new Float64Array(opps.length), vsTies: new Float64Array(opps.length), vsCount: new Float64Array(opps.length),
-        oppFolds: new Float64Array(opps.length), reraised: 0, looked: 0,
+        oppFolds: new Float64Array(opps.length), reraised: 0, looked: 0, varSum: new Float64Array(VARIANTS.length),
       });
     }
 
@@ -1080,6 +1178,7 @@ function ENGINE() {
     const oppCombo = new Int16Array(opps.length);
     const oppScore = new Int32Array(opps.length);
     const oppIn = new Uint8Array(opps.length);
+    const varGain = new Float64Array(VARIANTS.length);
     let done = 0;
 
     function strengthAt(s, k) {
@@ -1091,8 +1190,11 @@ function ENGINE() {
     // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
     // this decision. Bet the remaining streets with both strategies and return hero's gain.
     // Simplifications: no raises after this decision, and hero only bluffs the river.
-    function playOut(i, P, heroIn, share, rng, startCur) {
-      const plan = plans[i] || (plans[i] = makePlan(opps[i], { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0 }));
+    function playOut(i, P, heroIn, share, rng, startCur, v) {
+      const key = i * VARIANTS.length + v;
+      const plan = plans[key] || (plans[key] = makePlan(
+        { stats: Object.assign({}, opps[i].stats, VARIANTS[v]), sampler: opps[i].sampler },
+        { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0 }));
       const oc = oppCombo[i];
       let left = stack - heroIn, extra = 0;
       for (let s = startCur ? street : street + 1; s <= 5; s++) {
@@ -1171,6 +1273,7 @@ function ENGINE() {
           cards[i + 2] = x;
         }
         let gain;
+        varGain.fill(NaN);
         if (!anyIn) {
           gain = pot;
           sc.foldAll++;
@@ -1197,7 +1300,9 @@ function ENGINE() {
           let inCount = 0, lastIn = -1;
           for (let i = 0; i < opps.length; i++) if (oppIn[i]) { inCount++; lastIn = i; }
           if (lookahead && inCount === 1 && sc.amount < stack) {
-            gain = playOut(lastIn, finalPot, sc.amount, share, rng, sc.kind === 'check' && opps[lastIn].pending);
+            const startCur = sc.kind === 'check' && opps[lastIn].pending;
+            gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, 0);
+            for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v);
             sc.looked++;
           } else {
             gain = share * (sc.amount >= stack ? 1 : realize) * finalPot - sc.amount;
@@ -1208,6 +1313,7 @@ function ENGINE() {
           else if (share > 0) sc.ties++;
         }
         sc.n++;
+        for (let v = 1; v < VARIANTS.length; v++) sc.varSum[v] += isNaN(varGain[v]) ? gain : varGain[v];
         sc.gainSum += gain;
         sc.gainSq += gain * gain;
       }
@@ -1226,12 +1332,19 @@ function ENGINE() {
       return o.W.bluffShare;
     }
 
+    const robustWeight = lookahead ? 0.25 * (1 - opps.reduce((a, o) => a + o.stats.exploitWeight, 0) / opps.length) : 0;
+
     function result() {
       for (const sc of scenarios) {
-        if (sc.kind === 'fold') { sc.ev = 0; sc.se = 0; continue; }
+        if (sc.kind === 'fold') { sc.ev = sc.evRead = sc.evWorst = 0; sc.se = 0; continue; }
         const n = Math.max(1, sc.n);
-        sc.ev = sc.gainSum / n;
-        sc.se = Math.sqrt(Math.max(0, sc.gainSq / n - sc.ev * sc.ev) / n);
+        sc.evRead = sc.gainSum / n;
+        sc.se = Math.sqrt(Math.max(0, sc.gainSq / n - sc.evRead * sc.evRead) / n);
+        // Hold up against opponents who play differently from the read: blend in the worst
+        // version, more so when the read is thin.
+        sc.evWorst = sc.evRead;
+        if (lookahead) for (let v = 1; v < VARIANTS.length; v++) sc.evWorst = Math.min(sc.evWorst, sc.varSum[v] / n);
+        sc.ev = (1 - robustWeight) * sc.evRead + robustWeight * sc.evWorst;
         sc.foldPct = sc.foldAll / n;
         sc.reraisedPct = sc.reraised / n;
         sc.lookedPct = sc.looked / n;
@@ -1245,11 +1358,22 @@ function ENGINE() {
         const near = ranked.filter((sc) => aggressive(sc) && best.ev - sc.ev <= tol);
         best = near.sort((a, b) => a.amount - b.amount)[0];
       }
-      const runnerUp = ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
+      let runnerUp = ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
       const base = scenarios.find((s) => s.kind !== 'fold');
       const margin = runnerUp ? best.ev - runnerUp.ev : Infinity;
       const closeThreshold = Math.max(0.03 * (pot + toCall), 2 * best.se, 0.25 * bigBlind);
+      const close = margin < closeThreshold;
+
+      // Close spots: play a mix, so friends' helpers can't learn a fixed pattern. The better
+      // option gets 50-100% depending on its edge, and the seed picks which one to show.
+      let mix = null;
+      if (close && runnerUp && input.mix !== false) {
+        const fb = Math.round((0.5 + 0.5 * clamp(margin / closeThreshold, 0, 1)) * 20) / 20;
+        mix = [{ kind: best.kind, amount: best.amount, label: best.label, freq: fb },
+          { kind: runnerUp.kind, amount: runnerUp.amount, label: runnerUp.label, freq: 1 - fb }];
+        if (mulberry32((seed ^ 0x2545f491) >>> 0)() >= fb) { const b = best; best = runnerUp; runnerUp = b; }
+      }
 
       const equity = base ? {
         share: base.showdowns ? base.shareSum / base.showdowns : 1,
@@ -1267,7 +1391,7 @@ function ENGINE() {
 
       return {
         street, streetName, pot, toCall, stack, bigBlind, realize, inPosition, lookahead,
-        scenarios, ranked, best, runnerUp, margin, close: margin < closeThreshold,
+        scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight,
         equity, potOdds, hero: heroInfo, impliedOddsNeeded,
         iterations: done,
         opponents: opps.map((o, i) => ({
@@ -1299,7 +1423,7 @@ function ENGINE() {
     RANKS, SUITS, CATEGORY_NAMES, CLASS_NAMES, CLASS_COMBO_COUNT, PREFLOP_ORDER, PLAYER_TYPES, TABLE_PRIORS,
     parseCard, cardToString, evaluate, describeScore, describeHero,
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
-    foldAtSize, valueShare, classifyShows, handPercentile, readSummary,
+    foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     createAnalysis, analyzeSync, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
   };
 
@@ -1334,8 +1458,20 @@ ENGINE();
     return isNaN(n) ? 0 : n;
   }
   const MAX_SHOWS = 40;
+  const MAX_HISTORY = 150;
+  // Each hand a player is dealt into shrinks their older counts by 1%, so the last
+  // hundred or so hands carry most of the weight and reads follow players who change.
+  const DECAY = 0.99;
+  function decayTally(t) {
+    for (const k of Object.keys(t)) {
+      if (k === 'shows') continue;
+      if (typeof t[k] === 'number') t[k] *= DECAY;
+      else if (t[k] && typeof t[k] === 'object') decayTally(t[k]);
+    }
+  }
   const streetTally = () => ({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 });
   const facingTally = () => ({ fold: 0, call: 0, raise: 0 });
+  const posTally = () => ({ n: 0, vpip: 0, pfr: 0 });
   function blankTally() {
     return {
       pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0,
@@ -1350,6 +1486,8 @@ ENGINE();
       // Their own bet sizes postflop, as fractions of the pot.
       betSize: { n: 0, sum: 0 },
       sawFlop: 0, wtsd: 0,
+      // Preflop by position group ('early', 'late' = cutoff and button, 'blinds').
+      pos: { early: posTally(), late: posTally(), blinds: posTally() },
       // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
       shows: [],
     };
@@ -1359,7 +1497,7 @@ ENGINE();
     const b = blankTally();
     for (const k of Object.keys(b)) {
       if (t[k] == null) t[k] = b[k];
-      else if (k === 'st' || k === 'vs') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
+      else if (k === 'st' || k === 'vs' || k === 'pos') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
     }
     return t;
   }
@@ -1403,6 +1541,8 @@ ENGINE();
       const players = {};
       for (const p of s.players) {
         if (p.playState !== 'playing' && p.playState !== 'folded' && p.playState !== 'all_in') continue;
+        const known = p.authUserId !== s.heroAuthId && this.db.players[p.authUserId];
+        if (known && known.tally) decayTally(upgradeTally(known.tally));
         players[p.id] = {
           id: p.id, auth: p.authUserId, name: p.name, pos: p.posType,
           stageBet: 0, total: 0, folded: false, allin: false,
@@ -1592,13 +1732,72 @@ ENGINE();
           const r = this.record(p.auth, p.name);
           if (!r) continue;
           r.tally[p.pfCat || 'pfFold']++;
+          const g = this.posGroup(p.id);
+          if (g) {
+            const pt = r.tally.pos[g];
+            pt.n++;
+            if (p.pfCat === 'pfCall' || p.pfCat === 'pfRaise') pt.vpip++;
+            if (p.pfCat === 'pfRaise') pt.pfr++;
+          }
           const sawFlop = h.board.length >= 3 && (p.seq.flop.length > 0 || !p.folded);
           if (sawFlop) r.tally.sawFlop++;
           if (sawFlop && !p.folded && live >= 2) r.tally.wtsd++;
         }
       }
+      if (h.started) this.logHand();
       this.emit('handEnd', h);
       this.emit('save', this.db);
+    }
+
+    // Keep a short hand history for review: board, everyone's actions, shown cards and
+    // what the solver advised. Shown cards fill in later (they arrive after the hand ends).
+    logHand() {
+      const h = this.hand;
+      const heroId = this.heroId();
+      const entry = {
+        t: Date.now(), board: h.board.slice(), bigBlind: h.bigBlind,
+        hero: h.heroUids.map((u) => h.heroCards[u]).filter(Boolean),
+        pot: Object.values(h.players).reduce((a, p) => a + p.total, 0),
+        advice: (h.advice || []).slice(),
+        players: Object.values(h.players).map((p) => ({
+          name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded,
+          put: p.total, actions: p.seq, shown: p.shown,
+        })),
+      };
+      h.logEntry = entry;
+      const list = this.db.history || (this.db.history = []);
+      list.push(entry);
+      if (list.length > MAX_HISTORY) list.splice(0, list.length - MAX_HISTORY);
+    }
+
+    // The overlay reports each piece of advice so the hand log can show it.
+    noteAdvice(text, ev) {
+      const h = this.hand;
+      if (!h || h.finished) return;
+      (h.advice || (h.advice = [])).push({ street: h.board.length, text, ev: Math.round(ev * 100) / 100 });
+    }
+
+    // Players in postflop order: small blind first, button last.
+    // (Assumes seats run clockwise in ascending number; see CLAUDE.md.)
+    seatOrder() {
+      const h = this.hand;
+      const all = Object.values(h.players).sort((a, b) => seatNum(a.pos) - seatNum(b.pos));
+      const dealerN = seatNum(h.dealerPos);
+      return all.filter((p) => seatNum(p.pos) > dealerN).concat(all.filter((p) => seatNum(p.pos) <= dealerN));
+    }
+
+    // 'blinds', 'late' (button and cutoff) or 'early'. Heads-up the button is 'late'.
+    posGroup(id) {
+      const h = this.hand;
+      if (!h || h.dealerPos == null) return null;
+      const order = this.seatOrder();
+      const i = order.findIndex((p) => p.id === id);
+      const n = order.length;
+      if (i < 0 || n < 2) return null;
+      if (i === n - 1) return 'late';
+      if (n === 2 || i < 2) return 'blinds';
+      if (n >= 5 && i === n - 2) return 'late';
+      return 'early';
     }
 
     // An opponent's hole card was turned face up (showdown, or a voluntary show).
@@ -1612,10 +1811,19 @@ ENGINE();
       if (!p.shown.includes(card)) p.shown.push(card);
       if (p.shown.length !== 2 || p.logged) return;
       p.logged = true;
-      if (!p.agg.length || h.board.length < 3) return;
+      if (h.board.length < 3) return;
       const r = this.record(p.auth, p.name);
       if (!r) return;
-      r.tally.shows.push({ cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice() });
+      const actions = { pre: PatioTracker.streetAction(p.seq.pre, 0) };
+      for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (h.board.length >= n) actions[k] = PatioTracker.streetAction(p.seq[k], n);
+      if (actions.pre === 'pending') actions.pre = 'call';
+      const show = {
+        cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
+        actions, sizes: Object.assign({}, p.sizes), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
+      };
+      // How well the range we would have put them on matches what they showed.
+      if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
+      r.tally.shows.push(show);
       if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
     }
@@ -1654,9 +1862,7 @@ ENGINE();
       const heroStack = heroSnap ? heroSnap.stack : null;
 
       // Seat order starting after the dealer (postflop action order).
-      const all = Object.values(h.players).sort((a, b) => seatNum(a.pos) - seatNum(b.pos));
-      const dealerN = seatNum(h.dealerPos);
-      const afterDealer = all.filter((p) => seatNum(p.pos) > dealerN).concat(all.filter((p) => seatNum(p.pos) <= dealerN));
+      const afterDealer = this.seatOrder();
       const live = afterDealer.filter((p) => !p.folded);
       const canAct = live.filter((p) => !p.allin || p.id === heroId);
       const inPosition = canAct.length ? canAct[canAct.length - 1].id === heroId : true;
@@ -1690,7 +1896,7 @@ ENGINE();
         }
         if (street > 0 && actions.pre === 'pending') actions.pre = 'call';
         const cbetter = h.pfRaiser === o.id;
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter };
+        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id) };
       });
 
       return {
@@ -1702,6 +1908,8 @@ ENGINE();
           inPosition, tableStyle: tableStyle || 'typical',
           opponents,
           iterations: opponents.length > 2 ? 16000 : 24000,
+          // Fresh seed each decision, so close spots get mixed rather than always the same advice.
+          seed: (Math.random() * 4294967296) >>> 0,
         },
         heroStageBet: hero.stageBet,
         heroCards, board: h.board.slice(),
@@ -1732,7 +1940,7 @@ function slim(r) {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
     bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close,
+    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map(function (o) {
       return {
@@ -1788,6 +1996,7 @@ function slim(r) {
   var narrow = Math.min(W.innerWidth, W.screen ? W.screen.width : 9999) < 640;
   var ui = Object.assign({ tableStyle: 'typical', x: null, y: null, expanded: !narrow, showOptions: !narrow }, load(UI_KEY) || {});
   var tracker = new PatioTracker(load(DB_KEY) || { players: {} });
+  tracker.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle); };
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
 
@@ -1880,6 +2089,13 @@ function slim(r) {
     var what = a.getAttribute('data-a');
     if (what === 'toggle') { ui.expanded = !ui.expanded; save(UI_KEY, ui); render(); }
     else if (what === 'opts') { ui.showOptions = !ui.showOptions; save(UI_KEY, ui); render(); }
+    else if (what === 'log') {
+      var url = URL.createObjectURL(new Blob([JSON.stringify(tracker.db.history || [], null, 1)], { type: 'application/json' }));
+      var link = document.createElement('a');
+      link.href = url; link.download = 'patio-hand-log.json';
+      root.appendChild(link); link.click(); link.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    }
     else if (what === 'reset') {
       if (a.getAttribute('data-c') !== '1') {
         a.setAttribute('data-c', '1'); a.textContent = 'Tap again to reset';
@@ -1901,7 +2117,7 @@ function slim(r) {
     if (!list.length) return '';
     return '<div><div class="sec">Reads</div>' + list.map(function (o) {
       return '<div class="opp"><span class="nm">' + esc(o.name) + '</span><span class="ty">' + esc(o.type) + '</span>' +
-        '<div class="muted">' + o.hands + ' hand' + (o.hands === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
+        '<div class="muted">' + Math.round(o.hands) + ' hand' + (Math.round(o.hands) === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
         (o.summary ? '<div class="muted">' + esc(o.summary) + '</div>' : '') +
         (o.bluffChance != null ? '<div class="tip">Bluffing here about ' + pct(o.bluffChance) + ' of the time</div>' : '') +
         (o.tip ? '<div class="tip">' + esc(o.tip) + '</div>' : '') + '</div>';
@@ -1950,6 +2166,7 @@ function slim(r) {
     if (advice) {
       var r = advice.result, c = advice.ctx, best = r.best, kv = [];
       if (r.hero) kv.push(['Your hand', esc(r.hero.made + (r.hero.draws && r.hero.draws.length ? ' + ' + r.hero.draws.map(function (d) { return d.name.toLowerCase(); }).join(', ') : '') + (r.street === 0 && r.hero.topPercent != null ? ' (top ' + Math.max(1, Math.round(r.hero.topPercent)) + '%)' : ''))]);
+      if (r.mix) kv.push(['Close spot, mix it', esc(r.mix.map(function (m) { return m.label + ' ' + pct(m.freq); }).join(' · '))]);
       if (r.equity) kv.push(['Equity vs their ranges', pct(r.equity.share)]);
       if (r.toCall > 0) kv.push(['Needed to call', pct(r.potOdds)]);
       kv.push(['Pot', money(r.pot)]);
@@ -1977,7 +2194,7 @@ function slim(r) {
     var n = Object.keys(tracker.db.players).length;
     html += '<div class="ft"><select>' + ['tight', 'typical', 'loose'].map(function (s) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
-    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="reset">Reset reads</button></div>';
+    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
     body.innerHTML = html;
     place();
@@ -1996,6 +2213,7 @@ function slim(r) {
       thinking = false;
       if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
       advice = { result: res.result, ctx: built, stale: false };
+      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0);
       render();
     });
   }

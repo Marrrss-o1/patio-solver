@@ -115,6 +115,7 @@
       <span class="muted">Table</span>
       <select data-a="style"><option value="tight">Tight</option><option value="typical">Typical</option><option value="loose">Loose</option></select>
       <span class="sp" style="flex:1"></span>
+      <button class="btn" data-a="log">Hand log</button>
       <button class="btn" data-a="reset">Reset reads</button>
     </div>
   </div>`;
@@ -154,6 +155,13 @@
     const what = a.getAttribute('data-a');
     if (what === 'collapse') {
       ui.collapsed = !ui.collapsed; store.set(UI_KEY, ui); render();
+    } else if (what === 'log') {
+      if (!tracker) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(tracker.db.history || [], null, 1)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = 'patio-hand-log.json';
+      root.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     } else if (what === 'reset') {
       if (!tracker) return;
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
@@ -175,7 +183,7 @@
     if (!list.length) return '';
     return `<div><div class="sec">Reads</div>${list.map((o) => `
       <div class="opp"><span class="nm">${esc(o.name)}</span><span class="ty">${esc(o.type)}</span>
-        <div class="muted">${o.hands} hand${o.hands === 1 ? '' : 's'} · VPIP ${pct(o.vpip)} · PFR ${pct(o.pfr)} · folds to bets ${pct(o.ftb)}${o.likely ? ' · likely ' + esc(o.likely) : ''}</div>
+        <div class="muted">${Math.round(o.hands)} hand${Math.round(o.hands) === 1 ? '' : 's'} · VPIP ${pct(o.vpip)} · PFR ${pct(o.pfr)} · folds to bets ${pct(o.ftb)}${o.likely ? ' · likely ' + esc(o.likely) : ''}</div>
         ${o.summary ? `<div class="muted">${esc(o.summary)}</div>` : ''}
         ${o.bluffChance != null ? `<div class="tip">Bluffing here about ${pct(o.bluffChance)} of the time</div>` : ''}
         ${o.tip ? `<div class="tip">${esc(o.tip)}</div>` : ''}</div>`).join('')}</div>`;
@@ -229,6 +237,7 @@
       html += `<div class="rec ${tone(best)} ${advice.stale ? 'stale' : ''}">
         <div class="act">${esc(actionText(best, c.heroStageBet, r.toCall))}${r.close ? '<span class="badge">close</span>' : ''}</div>
         <div class="sub">${best.sizeLabel && best.sizeLabel !== 'raise' ? esc(best.sizeLabel) + ' · ' : ''}${evLine}${advice.stale ? ' · last turn' : ''}</div>
+        ${r.mix ? `<div class="sub">Close spot, so mix it up: ${r.mix.map((m) => esc(m.label) + ' ' + pct(m.freq)).join(' · ')}. This time: ${esc(best.label)}.</div>` : ''}
       </div>`;
       const kv = [];
       if (r.hero) kv.push(['Your hand', esc(r.hero.made + (r.hero.draws && r.hero.draws.length ? ' + ' + r.hero.draws.map((d) => d.name.toLowerCase()).join(', ') : '') + (r.street === 0 && r.hero.topPercent != null ? ` (top ${Math.max(1, Math.round(r.hero.topPercent))}%)` : ''))]);
@@ -274,6 +283,7 @@
     thinking = false;
     if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
     advice = { result: res.result, ctx: built, stale: false };
+    tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0);
     render();
   }
 
@@ -283,6 +293,7 @@
     if (saved) ui = Object.assign(ui, saved);
     const db = (await store.get(DB_KEY)) || { players: {} };
     tracker = new PatioTracker(db);
+    tracker.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle);
     tracker.on((type) => {
       if (type === 'save') store.set(DB_KEY, tracker.db);
       if (type === 'hand') { advice = null; thinking = false; reqId++; status = 'New hand. Waiting for your turn…'; render(); }

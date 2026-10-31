@@ -50,6 +50,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Side pots are not modelled (the engine treats all chips as one pot).
 - Lookahead (`makePlan` / `playOut` in engine.js) only runs on the flop and turn once hero is heads-up. Preflop and
   multiway pots still use the `realize` fudge factor. Inside the lookahead nobody raises, and hero only bluffs the river.
+  It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
+  blends in the worst one by `robustWeight` (larger when reads are thin).
+- Confidence-pinned exploitation: `computeStats` blends fold rates and value shares toward balanced play with weight
+  `exploitWeight` (0.5 with no hands up to 0.9, scaled by read accuracy). The 0.5 floor is a deliberate choice: the
+  default read is a typical amateur, which is a better guess for a home game than balanced play.
+- Read accuracy: when an opponent shows cards, `tracker.scorer` (set by both UIs to `PokerEngine.scoreShow`) stores
+  `fit = { top, lr, sq }` on the show. `computeStats` turns these into `accuracy`, a trust factor, and
+  `strengthBias`, which tilts that player's ranges weaker or stronger in `buildRange`.
+- Counts decay 1% per hand a player is dealt into (`DECAY` in tracker.js), so they are floats. Round before display.
+- Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
+  the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
+- `db.history` keeps the last 150 hands (actions, shown cards, advice) for the "Hand log" export.
 - Showdown reads only see hands that were shown, so they over-sample hands that got called. Bluffs that won
   uncontested are invisible unless the player shows voluntarily.
 - Tally format (tracker.js `blankTally`): flat counts plus `st` (per street), `vs` (reaction by facing-bet size),
@@ -58,8 +70,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Joining mid-hand: tracking starts at the next `set_blinds`.
 - Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
-- Ideas: position-aware stats, raises inside the lookahead, lookahead for multiway pots and preflop,
-  syncing reads between devices.
+- Ideas: real-time river range-vs-range solver (CFR), raises inside the lookahead, lookahead for multiway pots and
+  preflop, a model of hero's own range, side pots, syncing reads between devices.
 
 ## Testing limits in the cloud sandbox
 

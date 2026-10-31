@@ -22,8 +22,20 @@
     return isNaN(n) ? 0 : n;
   }
   const MAX_SHOWS = 40;
+  const MAX_HISTORY = 150;
+  // Each hand a player is dealt into shrinks their older counts by 1%, so the last
+  // hundred or so hands carry most of the weight and reads follow players who change.
+  const DECAY = 0.99;
+  function decayTally(t) {
+    for (const k of Object.keys(t)) {
+      if (k === 'shows') continue;
+      if (typeof t[k] === 'number') t[k] *= DECAY;
+      else if (t[k] && typeof t[k] === 'object') decayTally(t[k]);
+    }
+  }
   const streetTally = () => ({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 });
   const facingTally = () => ({ fold: 0, call: 0, raise: 0 });
+  const posTally = () => ({ n: 0, vpip: 0, pfr: 0 });
   function blankTally() {
     return {
       pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0,
@@ -38,6 +50,8 @@
       // Their own bet sizes postflop, as fractions of the pot.
       betSize: { n: 0, sum: 0 },
       sawFlop: 0, wtsd: 0,
+      // Preflop by position group ('early', 'late' = cutoff and button, 'blinds').
+      pos: { early: posTally(), late: posTally(), blinds: posTally() },
       // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
       shows: [],
     };
@@ -47,7 +61,7 @@
     const b = blankTally();
     for (const k of Object.keys(b)) {
       if (t[k] == null) t[k] = b[k];
-      else if (k === 'st' || k === 'vs') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
+      else if (k === 'st' || k === 'vs' || k === 'pos') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
     }
     return t;
   }
@@ -91,6 +105,8 @@
       const players = {};
       for (const p of s.players) {
         if (p.playState !== 'playing' && p.playState !== 'folded' && p.playState !== 'all_in') continue;
+        const known = p.authUserId !== s.heroAuthId && this.db.players[p.authUserId];
+        if (known && known.tally) decayTally(upgradeTally(known.tally));
         players[p.id] = {
           id: p.id, auth: p.authUserId, name: p.name, pos: p.posType,
           stageBet: 0, total: 0, folded: false, allin: false,
@@ -280,13 +296,72 @@
           const r = this.record(p.auth, p.name);
           if (!r) continue;
           r.tally[p.pfCat || 'pfFold']++;
+          const g = this.posGroup(p.id);
+          if (g) {
+            const pt = r.tally.pos[g];
+            pt.n++;
+            if (p.pfCat === 'pfCall' || p.pfCat === 'pfRaise') pt.vpip++;
+            if (p.pfCat === 'pfRaise') pt.pfr++;
+          }
           const sawFlop = h.board.length >= 3 && (p.seq.flop.length > 0 || !p.folded);
           if (sawFlop) r.tally.sawFlop++;
           if (sawFlop && !p.folded && live >= 2) r.tally.wtsd++;
         }
       }
+      if (h.started) this.logHand();
       this.emit('handEnd', h);
       this.emit('save', this.db);
+    }
+
+    // Keep a short hand history for review: board, everyone's actions, shown cards and
+    // what the solver advised. Shown cards fill in later (they arrive after the hand ends).
+    logHand() {
+      const h = this.hand;
+      const heroId = this.heroId();
+      const entry = {
+        t: Date.now(), board: h.board.slice(), bigBlind: h.bigBlind,
+        hero: h.heroUids.map((u) => h.heroCards[u]).filter(Boolean),
+        pot: Object.values(h.players).reduce((a, p) => a + p.total, 0),
+        advice: (h.advice || []).slice(),
+        players: Object.values(h.players).map((p) => ({
+          name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded,
+          put: p.total, actions: p.seq, shown: p.shown,
+        })),
+      };
+      h.logEntry = entry;
+      const list = this.db.history || (this.db.history = []);
+      list.push(entry);
+      if (list.length > MAX_HISTORY) list.splice(0, list.length - MAX_HISTORY);
+    }
+
+    // The overlay reports each piece of advice so the hand log can show it.
+    noteAdvice(text, ev) {
+      const h = this.hand;
+      if (!h || h.finished) return;
+      (h.advice || (h.advice = [])).push({ street: h.board.length, text, ev: Math.round(ev * 100) / 100 });
+    }
+
+    // Players in postflop order: small blind first, button last.
+    // (Assumes seats run clockwise in ascending number; see CLAUDE.md.)
+    seatOrder() {
+      const h = this.hand;
+      const all = Object.values(h.players).sort((a, b) => seatNum(a.pos) - seatNum(b.pos));
+      const dealerN = seatNum(h.dealerPos);
+      return all.filter((p) => seatNum(p.pos) > dealerN).concat(all.filter((p) => seatNum(p.pos) <= dealerN));
+    }
+
+    // 'blinds', 'late' (button and cutoff) or 'early'. Heads-up the button is 'late'.
+    posGroup(id) {
+      const h = this.hand;
+      if (!h || h.dealerPos == null) return null;
+      const order = this.seatOrder();
+      const i = order.findIndex((p) => p.id === id);
+      const n = order.length;
+      if (i < 0 || n < 2) return null;
+      if (i === n - 1) return 'late';
+      if (n === 2 || i < 2) return 'blinds';
+      if (n >= 5 && i === n - 2) return 'late';
+      return 'early';
     }
 
     // An opponent's hole card was turned face up (showdown, or a voluntary show).
@@ -300,10 +375,19 @@
       if (!p.shown.includes(card)) p.shown.push(card);
       if (p.shown.length !== 2 || p.logged) return;
       p.logged = true;
-      if (!p.agg.length || h.board.length < 3) return;
+      if (h.board.length < 3) return;
       const r = this.record(p.auth, p.name);
       if (!r) return;
-      r.tally.shows.push({ cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice() });
+      const actions = { pre: PatioTracker.streetAction(p.seq.pre, 0) };
+      for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (h.board.length >= n) actions[k] = PatioTracker.streetAction(p.seq[k], n);
+      if (actions.pre === 'pending') actions.pre = 'call';
+      const show = {
+        cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
+        actions, sizes: Object.assign({}, p.sizes), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
+      };
+      // How well the range we would have put them on matches what they showed.
+      if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
+      r.tally.shows.push(show);
       if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
     }
@@ -342,9 +426,7 @@
       const heroStack = heroSnap ? heroSnap.stack : null;
 
       // Seat order starting after the dealer (postflop action order).
-      const all = Object.values(h.players).sort((a, b) => seatNum(a.pos) - seatNum(b.pos));
-      const dealerN = seatNum(h.dealerPos);
-      const afterDealer = all.filter((p) => seatNum(p.pos) > dealerN).concat(all.filter((p) => seatNum(p.pos) <= dealerN));
+      const afterDealer = this.seatOrder();
       const live = afterDealer.filter((p) => !p.folded);
       const canAct = live.filter((p) => !p.allin || p.id === heroId);
       const inPosition = canAct.length ? canAct[canAct.length - 1].id === heroId : true;
@@ -378,7 +460,7 @@
         }
         if (street > 0 && actions.pre === 'pending') actions.pre = 'call';
         const cbetter = h.pfRaiser === o.id;
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter };
+        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id) };
       });
 
       return {
@@ -390,6 +472,8 @@
           inPosition, tableStyle: tableStyle || 'typical',
           opponents,
           iterations: opponents.length > 2 ? 16000 : 24000,
+          // Fresh seed each decision, so close spots get mixed rather than always the same advice.
+          seed: (Math.random() * 4294967296) >>> 0,
         },
         heroStageBet: hero.stageBet,
         heroCards, board: h.board.slice(),
