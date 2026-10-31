@@ -120,6 +120,7 @@ function pooledRates(players) {
     f3bet: rate((t) => t.f3bet, (t) => t.f3betOpp),
     fourBet: rate((t) => t.pf4bet || 0, (t) => t.f3betOpp),
     limp: rate((t) => t.limp, (t) => t.limpOpp),
+    limpFold: rate((t) => t.limpFold, (t) => t.limpFaceN),
     vsOpenSmall: rate((t) => vo('small', 'call')(t) + vo('small', 'raise')(t), vo('small')) + ' 3bet ' + rate(vo('small', 'raise'), vo('small')),
     vsOpenMedium: rate((t) => vo('medium', 'call')(t) + vo('medium', 'raise')(t), vo('medium')) + ' 3bet ' + rate(vo('medium', 'raise'), vo('medium')),
     vsOpenLarge: rate((t) => vo('large', 'call')(t) + vo('large', 'raise')(t), vo('large')) + ' 3bet ' + rate(vo('large', 'raise'), vo('large')),
