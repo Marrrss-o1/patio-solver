@@ -26,7 +26,11 @@ function solverAgent(opts = {}) {
     else E.setBlueprint(loaded);
   }
   const tracker = new T(opts.db ? JSON.parse(JSON.stringify(opts.db)) : { players: {} });
-  tracker.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
+  // Wired like the overlay: shows scored against the pooled table prior, per-action read accuracy (engines that have them).
+  const style = opts.tableStyle || 'typical';
+  const pool = () => (typeof tracker.poolTally === 'function' ? tracker.poolTally() : undefined);
+  tracker.scorer = (show, tally) => E.scoreShow(show, tally, style, pool());
+  if (typeof E.makePredictor === 'function') { tracker.predictor = E.makePredictor(() => style, pool); tracker.fitVersion = E.FIT_VERSION; }
   tracker.rawKeep = 0;
   const fallback = bots.baseline();
   const stats = { decisions: 0, errors: 0, ms: 0, solved: {} };
@@ -35,7 +39,7 @@ function solverAgent(opts = {}) {
     E, T, tracker, stats,
     onEvent(ev, data, snapFn) { tracker.handle(ev, data, snapFn()); },
     act(v) {
-      const b = tracker.solverInput(opts.tableStyle || 'typical');
+      const b = tracker.solverInput(style);
       if (b.error) { stats.errors++; return fallback.act(v); }
       const t0 = Date.now();
       const input = Object.assign({}, b.input, {

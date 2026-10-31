@@ -1726,7 +1726,7 @@ function ENGINE() {
     'f32.demote_f64': 0xb6, 'f64.promote_f32': 0xbb,
   };
   const WASM_SIMD = {
-    'v128.load': 0x00, 'v128.store': 0x0b, 'f64x2.splat': 0x14, 'f64x2.gt': 0x4a, 'v128.bitselect': 0x52,
+    'v128.load': 0x00, 'v128.store': 0x0b, 'f64x2.splat': 0x14, 'f64x2.gt': 0x4a, 'v128.and': 0x4e, 'v128.bitselect': 0x52,
     'v128.store64_lane': 0x5b, 'v128.load64_zero': 0x5d, 'f32x4.demote_f64x2_zero': 0x5e, 'f64x2.promote_low_f32x4': 0x5f,
     'f64x2.add': 0xf0, 'f64x2.sub': 0xf1, 'f64x2.mul': 0xf2, 'f64x2.div': 0xf3, 'f64x2.pmax': 0xf7,
   };
@@ -1963,6 +1963,119 @@ function ENGINE() {
           ['set', 'p0', ['f64x2.splat', ldf(at('ph', 'j', 3))]],
           ['for', 'b', I(0), I(170), 2,
             st2(at('acc', 'b', 3), vadd(ld2(at('acc', 'b', 3)), vmul('p0', ldf32x2(at('r0', 'b', 2)))))]]]] },
+    // Turn solver, regret matching: float regrets in nA rows of Np (Np even); t = sum of the
+    // positive ones, x = t > 0 ? max(r, 0) * (1 / t) : u, then x = p * fixed + q * x when fx
+    // is not 0 (float rows like reg). s gets x (rows of Np doubles), r2 gets base * x (rows of M).
+    { name: 'turnStrategy', params: [...P('reg s r2 base nA Np M fx'), ['p', 'f64'], ['q', 'f64'], ['u', 'f64']],
+      locals: [...P('i a pr ps pm pf rowF rowD rowM'), ...['t', 'x', 'm', 'z', 'uv', 'pv', 'qv', 'one', 'inv', 'b'].map((n) => [n, 'v128'])],
+      body: [
+        ['set', 'z', ['f64x2.splat', ['f64', 0]]], ['set', 'uv', ['f64x2.splat', 'u']], ['set', 'one', ['f64x2.splat', ['f64', 1]]],
+        ['set', 'pv', ['f64x2.splat', 'p']], ['set', 'qv', ['f64x2.splat', 'q']],
+        ['set', 'rowF', ['i32.shl', 'Np', I(2)]], ['set', 'rowD', ['i32.shl', 'Np', I(3)]], ['set', 'rowM', ['i32.shl', 'M', I(3)]],
+        ['for', 'i', I(0), 'Np', 2,
+          ['set', 't', 'z'], ['set', 'pr', at('reg', 'i', 2)],
+          ['for', 'a', I(0), 'nA', 1,
+            ['set', 't', vadd('t', ['f64x2.pmax', 'z', ldf32x2('pr')])], ['set', 'pr', ['i32.add', 'pr', 'rowF']]],
+          ['set', 'm', ['f64x2.gt', 't', 'z']], ['set', 'inv', ['f64x2.div', 'one', 't']],
+          ['set', 'b', ld2(at('base', 'i', 3))],
+          ['set', 'pr', at('reg', 'i', 2)], ['set', 'pf', at('fx', 'i', 2)], ['set', 'ps', at('s', 'i', 3)], ['set', 'pm', at('r2', 'i', 3)],
+          ['for', 'a', I(0), 'nA', 1,
+            ['set', 'x', ['v128.bitselect', vmul(['f64x2.pmax', 'z', ldf32x2('pr')], 'inv'), 'uv', 'm']],
+            ['if', 'fx', [['set', 'x', vadd(vmul('pv', ldf32x2('pf')), vmul('qv', 'x'))]]],
+            st2('ps', 'x'), st2('pm', vmul('b', 'x')),
+            ['set', 'pr', ['i32.add', 'pr', 'rowF']], ['set', 'pf', ['i32.add', 'pf', 'rowF']],
+            ['set', 'ps', ['i32.add', 'ps', 'rowD']], ['set', 'pm', ['i32.add', 'pm', 'rowM']]]]] },
+    // Turn solver, the traverser's node: out = sum over a of s * V (V in rows of M), then each
+    // float regret r becomes (r > 0 ? r * pos : r * 0.5) + V - out and each float sum
+    // sum * w + base * s.
+    { name: 'turnRegret', params: [...P('reg sum s V base out nA Np M'), ['pos', 'f64'], ['w', 'f64']],
+      locals: [...P('i a pr pq ps pv rowF rowD rowM'), ...['v', 'r', 'z', 'posv', 'wv', 'half', 'b'].map((n) => [n, 'v128'])],
+      body: [
+        ['set', 'z', ['f64x2.splat', ['f64', 0]]], ['set', 'posv', ['f64x2.splat', 'pos']], ['set', 'wv', ['f64x2.splat', 'w']],
+        ['set', 'half', ['f64x2.splat', ['f64', 0.5]]],
+        ['set', 'rowF', ['i32.shl', 'Np', I(2)]], ['set', 'rowD', ['i32.shl', 'Np', I(3)]], ['set', 'rowM', ['i32.shl', 'M', I(3)]],
+        ['for', 'i', I(0), 'Np', 2,
+          ['set', 'v', 'z'], ['set', 'ps', at('s', 'i', 3)], ['set', 'pv', at('V', 'i', 3)],
+          ['for', 'a', I(0), 'nA', 1,
+            ['set', 'v', vadd('v', vmul(ld2('ps'), ld2('pv')))],
+            ['set', 'ps', ['i32.add', 'ps', 'rowD']], ['set', 'pv', ['i32.add', 'pv', 'rowM']]],
+          st2(at('out', 'i', 3), 'v'),
+          ['set', 'b', ld2(at('base', 'i', 3))],
+          ['set', 'pr', at('reg', 'i', 2)], ['set', 'pq', at('sum', 'i', 2)], ['set', 'ps', at('s', 'i', 3)], ['set', 'pv', at('V', 'i', 3)],
+          ['for', 'a', I(0), 'nA', 1,
+            ['set', 'r', ldf32x2('pr')],
+            ['v128.store64_lane', 'pr', ['f32x4.demote_f64x2_zero',
+              vsub(vadd(['v128.bitselect', vmul('r', 'posv'), vmul('r', 'half'), ['f64x2.gt', 'r', 'z']], ld2('pv')), 'v')]],
+            ['v128.store64_lane', 'pq', ['f32x4.demote_f64x2_zero', vadd(vmul(ldf32x2('pq'), 'wv'), vmul('b', ld2('ps')))]],
+            ['set', 'pr', ['i32.add', 'pr', 'rowF']], ['set', 'pq', ['i32.add', 'pq', 'rowF']],
+            ['set', 'ps', ['i32.add', 'ps', 'rowD']], ['set', 'pv', ['i32.add', 'pv', 'rowM']]]]] },
+    // Turn solver showdown sweep (showAdd in turnSolve, the same operations in the same
+    // order). Per river card each side's live hands come in score order: hand ids (o), scores
+    // (s, ending with a sentinel above every real score), cards (h, l) and, for the side whose
+    // values are written, the cross index (tc) into the other side.
+    { name: 'showTurn', params: [...P('r out xo xs xh xl no xv to ts th tl tc nt cum grp all'), ['sc', 'f64'], ['potF', 'f64'], ['myIn', 'f64']],
+      locals: [...P('j a b a2 i h l ci s p'), ...['x', 'tt', 'cT', 'gT', 'same'].map((n) => [n, 'f64'])],
+      body: [
+        ['for', 'j', I(0), I(52), 1, stf(at('cum', 'j', 3), ['f64', 0]), stf(at('all', 'j', 3), ['f64', 0])],
+        ['set', 'tt', ['f64', 0]],
+        ['for', 'j', I(0), 'no', 1,
+          ['set', 'x', ldf(at('r', ldi(at('xo', 'j', 2)), 3))], ['set', 'tt', add('tt', 'x')],
+          ['set', 'p', at('all', ldu8(['i32.add', 'xh', 'j']), 3)], stf('p', add(ldf('p'), 'x')),
+          ['set', 'p', at('all', ldu8(['i32.add', 'xl', 'j']), 3)], stf('p', add(ldf('p'), 'x'))],
+        ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cT', ['f64', 0]],
+        ['while', ['i32.lt_s', 'b', 'nt'],
+          ['set', 's', ldi(at('ts', 'b', 2))],
+          ['while', ['i32.lt_s', ldi(at('xs', 'a', 2)), 's'],
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a', 2)), 3))], ['set', 'cT', add('cT', 'x')],
+            ['set', 'p', at('cum', ldu8(['i32.add', 'xh', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'p', at('cum', ldu8(['i32.add', 'xl', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'a', ['i32.add', 'a', I(1)]]],
+          ['set', 'a2', 'a'], ['set', 'gT', ['f64', 0]],
+          ['while', ['i32.eq', ldi(at('xs', 'a2', 2)), 's'],
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a2', 2)), 3))], ['set', 'gT', add('gT', 'x')],
+            ['set', 'p', at('grp', ldu8(['i32.add', 'xh', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'p', at('grp', ldu8(['i32.add', 'xl', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'a2', ['i32.add', 'a2', I(1)]]],
+          ['while', ['i32.eq', ldi(at('ts', 'b', 2)), 's'],
+            ['set', 'h', ldu8(['i32.add', 'th', 'b'])], ['set', 'l', ldu8(['i32.add', 'tl', 'b'])],
+            ['set', 'ci', ldi(at('tc', 'b', 2))], ['set', 'same', ['f64', 0]],
+            ['if', ['i32.ge_s', 'ci', I(0)], [['if', ldu8(['i32.add', 'xv', 'ci']), [['set', 'same', ldf(at('r', 'ci', 3))]]]]],
+            ['set', 'p', at('out', ldi(at('to', 'b', 2)), 3)],
+            stf('p', add(ldf('p'), mul('sc', sub(
+              mul('potF', add(sub(sub('cT', ldf(at('cum', 'h', 3))), ldf(at('cum', 'l', 3))),
+                ['f64.div', add(sub(sub('gT', ldf(at('grp', 'h', 3))), ldf(at('grp', 'l', 3))), 'same'), ['f64', 2]])),
+              mul('myIn', add(sub(sub('tt', ldf(at('all', 'h', 3))), ldf(at('all', 'l', 3))), 'same')))))),
+            ['set', 'b', ['i32.add', 'b', I(1)]]],
+          ['for', 'j', 'a', 'a2', 1,
+            stf(at('grp', ldu8(['i32.add', 'xh', 'j']), 3), ['f64', 0]), stf(at('grp', ldu8(['i32.add', 'xl', 'j']), 3), ['f64', 0])]]] },
+    // Turn solver fold values: out[i] = g * (r's total without hands sharing a card with T's hand i).
+    { name: 'foldTurn', params: [...P('r out hi lo N th tl cross nt all'), ['g', 'f64']],
+      locals: [...P('i k h l cur ci'), ['T', 'f64'], ['x', 'f64'], ['acc', 'f64'], ['same', 'f64']],
+      body: [
+        ['for', 'k', I(0), I(52), 1, stf(at('all', 'k', 3), ['f64', 0])],
+        ['set', 'T', ['f64', 0]],
+        ...ALL_SUMS,
+        ['for', 'i', I(0), 'nt', 1,
+          ['set', 'ci', ldi(at('cross', 'i', 2))], ['set', 'same', ['f64', 0]],
+          ['if', ['i32.ge_s', 'ci', I(0)], [['set', 'same', ldf(at('r', 'ci', 3))]]],
+          stf(at('out', 'i', 3), mul('g', add(sub(sub('T', ldf(at('all', ldu8(['i32.add', 'th', 'i']), 3))), ldf(at('all', ldu8(['i32.add', 'tl', 'i']), 3))), 'same')))]] },
+    // dst = mask ? src : 0 and out += mask ? sc * tmp : 0 (mask: all-ones or zero lanes), n even.
+    // Adding +0 leaves out as it is (it never holds -0: it starts at +0).
+    { name: 'maskCopy', params: P('dst src mask n'), locals: P('i p'),
+      body: [['for', 'i', I(0), 'n', 2, ['set', 'p', ['i32.shl', 'i', I(3)]],
+        st2(['i32.add', 'dst', 'p'], ['v128.and', ld2(['i32.add', 'src', 'p']), ld2(['i32.add', 'mask', 'p'])])]] },
+    { name: 'maskAdd', params: [...P('out tmp mask n'), ['sc', 'f64']], locals: [...P('i p'), ['sv', 'v128']],
+      body: [['set', 'sv', ['f64x2.splat', 'sc']],
+        ['for', 'i', I(0), 'n', 2, ['set', 'p', ['i32.shl', 'i', I(3)]],
+          st2(['i32.add', 'out', 'p'], vadd(ld2(['i32.add', 'out', 'p']), ['v128.and', vmul('sv', ld2(['i32.add', 'tmp', 'p'])), ld2(['i32.add', 'mask', 'p'])]))]] },
+    // out = sum over a of V (rows of M), n doubles (n even)
+    { name: 'sumRows', params: P('V out nA n M'), locals: [...P('i a pv rowM'), ['v', 'v128']],
+      body: [
+        ['set', 'rowM', ['i32.shl', 'M', I(3)]],
+        ['for', 'i', I(0), 'n', 2,
+          ['set', 'v', ['f64x2.splat', ['f64', 0]]], ['set', 'pv', at('V', 'i', 3)],
+          ['for', 'a', I(0), 'nA', 1, ['set', 'v', vadd('v', ld2('pv'))], ['set', 'pv', ['i32.add', 'pv', 'rowM']]],
+          st2(at('out', 'i', 3), 'v')]] },
   ];
 
   // The kernels, the shared memory and a bump allocator over it (null without WebAssembly SIMD).
@@ -1976,8 +2089,9 @@ function ENGINE() {
       const bytes = wasmModule(KERNELS);
       if (!WebAssembly.validate(bytes)) return null;
       const mem = new WebAssembly.Memory({ initial: 16 });
-      const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), { e: { m: mem } });
-      WK = { k: inst.exports, mem, top: 0, end: 0 };
+      const mod = new WebAssembly.Module(bytes);
+      const inst = new WebAssembly.Instance(mod, { e: { m: mem } });
+      WK = { k: inst.exports, mem, mod, top: 0, end: 0 };
     } catch (e) {
       WK = null;
     }
@@ -2007,6 +2121,30 @@ function ENGINE() {
   const arenaI32 = (n) => new Int32Array(WK.mem.buffer, arenaTake(4 * n), n).fill(0);
   const arenaU8 = (n) => new Uint8Array(WK.mem.buffer, arenaTake(n), n).fill(0);
   const arenaBytes = (n, size) => Math.ceil((n * size) / 16) * 16;
+  // A kernel instance with its own (zeroed) memory of `bytes` bytes, for one large solve: the
+  // memory goes away with the solve instead of staying with the shared instance. Null when
+  // there are no kernels or that much memory can't be had.
+  function arenaOwn(bytes) {
+    const K = kernels();
+    if (!K) return null;
+    try {
+      const mem = new WebAssembly.Memory({ initial: Math.ceil((bytes + 1024) / 65536) });
+      const k = new WebAssembly.Instance(K.mod, { e: { m: mem } }).exports;
+      let top = 16;
+      const take = (n) => {
+        const o = top;
+        top += Math.ceil(n / 16) * 16;
+        if (top > mem.buffer.byteLength) throw new Error('kernel arena overflow');
+        return o;
+      };
+      return {
+        k, f64: (n) => new Float64Array(mem.buffer, take(8 * n), n), f32: (n) => new Float32Array(mem.buffer, take(4 * n), n),
+        i32: (n) => new Int32Array(mem.buffer, take(4 * n), n), u8: (n) => new Uint8Array(mem.buffer, take(n), n),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
 
   // ---------- River solver ----------
   /*
@@ -2538,8 +2676,10 @@ function ENGINE() {
     const NMAX = Math.max(H.n, O.n);
     const multi = cfg.multi && cfg.multi.kappa ? cfg.multi : null;
     const kapCache = {};
-    const mtmp = multi ? new Float64Array(NMAX) : null, mrA = multi ? new Float64Array(H.n) : null, mrB = multi ? new Float64Array(H.n) : null;
+    let mtmp = multi ? new Float64Array(NMAX) : null, mrA = multi ? new Float64Array(H.n) : null, mrB = multi ? new Float64Array(H.n) : null;
     const sides = [H, O];
+    // The WebAssembly kernels' memory for this solve, when they run (set up below).
+    let KT = null, kSweep = null;
 
     // ----- blocker-aware showdown masses: for each hand of side T, the other side's reach
     // below, tied with and in total, skipping hands that share a card -----
@@ -2548,6 +2688,12 @@ function ENGINE() {
     // Adds sc * (potF * (below + tie / 2) - myIn * total) to out[i] for every hand i of T that
     // is live with river card c (the showdown sweep and the value written in one pass).
     function showAdd(r, X, T, c, out, sc, potF, myIn) {
+      if (KT) {
+        const KX = X.K, KT2 = T.K, oX = KX.R[c], oT = KT2.R[c];
+        KT.k.showTurn(r.byteOffset, out.byteOffset, oX.o, oX.s, oX.h, oX.l, oX.n, oX.valid,
+          oT.o, oT.s, oT.h, oT.l, oT.c, oT.n, kSweep.cum, kSweep.grp, kSweep.all, sc, potF, myIn);
+        return;
+      }
       const RX = X.R[c], RT = T.R[c];
       const oo = RX.order, os = RX.score, xv = RX.valid, to = RT.order, ts = RT.score;
       const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo, cross = T.cross;
@@ -2577,6 +2723,10 @@ function ENGINE() {
     }
     // out[i] = g * (the other side's reach not sharing a card with hand i of T).
     function foldValues(r, X, T, out, g) {
+      if (KT) {
+        KT.k.foldTurn(r.byteOffset, out.byteOffset, X.K.hi, X.K.lo, X.n, T.K.hi, T.K.lo, T.K.cross, T.n, kSweep.all, g);
+        return;
+      }
       all.fill(0);
       let tt = 0;
       const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo, cross = T.cross, nx = X.n, nt = T.n;
@@ -2858,35 +3008,153 @@ function ENGINE() {
       }
     }
 
+    // ----- the same CFR with the WebAssembly kernels. Every river subgame is built up front
+    // (the final pass builds them all anyway, and building them doesn't depend on the order),
+    // so the whole tree's buffers fit in one kernel memory of their own. Each side's rows are
+    // padded to an even length; the padding lanes never feed a real hand's numbers. -----
+    const tStart = Date.now();
+    const ev = (x) => x + (x & 1), MK = ev(NMAX);
+    let wHk = null, wOk = null, outHk = null, outOk = null;
+    if (kernels()) {
+      let maxD = 0, bytes = 0;
+      const B = arenaBytes, Hp = ev(H.n), Op = ev(O.n);
+      const walk = (n, d) => {
+        if (n.term) return;
+        if (d > maxD) maxD = d;
+        if (n.chance) {
+          for (const c of rivers) { if (!n.subs[c]) n.subs[c] = riverRoot(n, c); walk(n.subs[c], d + 1); }
+          return;
+        }
+        bytes += (n.player === 1 ? 3 : 2) * B(n.acts.length * ev(sides[n.player].n), 4);
+        for (const k of n.kids) walk(k, d + 1);
+      };
+      walk(root, 0);
+      bytes += (maxD + 1) * (3 * B(4 * MK, 8) + B(MK, 8) + B(Hp, 8) + B(Op, 8)) + 2 * (B(Hp, 8) + B(Op, 8)) + 3 * B(52, 8);
+      for (const S of sides) bytes += 2 * B(S.n, 1) + B(S.n, 4) + rivers.length * (3 * B(S.n + 1, 4) + 3 * B(S.n, 1) + B(ev(S.n), 8));
+      if (multi) bytes += B(MK, 8) + 2 * B(Hp, 8);
+      KT = arenaOwn(bytes);
+      if (KT) {
+        // The showdown sweeps' data: each side's cards and cross index, and per river card its
+        // score order and scores, each ending with a sentinel hand (index n, score above all).
+        const offs = (a) => a.byteOffset;
+        for (const S of sides) {
+          const hi = KT.u8(S.n), lo = KT.u8(S.n), cross = KT.i32(S.n);
+          hi.set(S.hi); lo.set(S.lo); cross.set(S.cross);
+          S.K = { hi: offs(hi), lo: offs(lo), cross: offs(cross), R: new Array(52) };
+          for (const c of rivers) {
+            const R = S.R[c], L = R.order.length, ord = KT.i32(L), sc = KT.i32(L + 1), h = KT.u8(L), l = KT.u8(L), cr = KT.i32(L), va = KT.u8(S.n);
+            for (let j = 0; j < L; j++) { const i = R.order[j]; ord[j] = i; sc[j] = R.score[i]; h[j] = S.hi[i]; l[j] = S.lo[i]; cr[j] = S.cross[i]; }
+            sc[L] = 0x7fffffff;
+            va.set(R.valid);
+            // valid as lane masks: all ones (two -1 words) for live hands
+            const mask = KT.i32(2 * ev(S.n));
+            for (let i = 0; i < S.n; i++) if (R.valid[i]) { mask[2 * i] = -1; mask[2 * i + 1] = -1; }
+            S.K.R[c] = { o: offs(ord), s: offs(sc), h: offs(h), l: offs(l), c: offs(cr), n: L, valid: offs(va), mask: offs(mask) };
+          }
+        }
+        kSweep = { cum: offs(KT.f64(52)), grp: offs(KT.f64(52)), all: offs(KT.f64(52)) };
+        if (multi) { mtmp = KT.f64(MK); mrA = KT.f64(Hp); mrB = KT.f64(Hp); }
+        wHk = KT.f64(Hp); wHk.set(H.w); wOk = KT.f64(Op); wOk.set(O.w);
+        outHk = KT.f64(Hp); outOk = KT.f64(Op);
+        for (let d = 0; d <= maxD; d++) {
+          const r2f = KT.f64(4 * MK), valf = KT.f64(4 * MK);
+          pools[d] = {
+            s: KT.f64(4 * MK), tmp: KT.f64(MK), r2f, valf,
+            r2: [0, 1, 2, 3].map((a) => r2f.subarray(a * MK, (a + 1) * MK)),
+            vals: [0, 1, 2, 3].map((a) => valf.subarray(a * MK, (a + 1) * MK)),
+            mH: KT.f64(Hp), mO: KT.f64(Op),
+          };
+        }
+        const move = (n) => {
+          if (n.term) return;
+          if (n.chance) { for (const c of rivers) move(n.subs[c]); return; }
+          const nA = n.acts.length, N = sides[n.player].n, Np = ev(N);
+          n.Np = Np;
+          n.regret = KT.f32(nA * Np); n.sum = KT.f32(nA * Np);
+          if (n.player === 1) {
+            const fx = KT.f32(nA * Np);
+            for (let a = 0; a < nA; a++) fx.set(n.fixed.subarray(a * N, (a + 1) * N), a * Np);
+            n.fixed = fx;
+          }
+          for (const k of n.kids) move(k);
+        };
+        move(root);
+      }
+    }
+    function cfrK(n, trav, rH, rO, avg, d, out) {
+      if (n.term) { terminal(n, trav, rH, rO, out); return; }
+      const T = sides[trav];
+      const P = pools[d];
+      if (n.chance) {
+        const k = KT.k, mH = P.mH, mO = P.mO, NT = ev(T.n);
+        out.fill(0, 0, NT);
+        for (const c of sample) {
+          k.maskCopy(mH.byteOffset, rH.byteOffset, H.K.R[c].mask, ev(H.n));
+          k.maskCopy(mO.byteOffset, rO.byteOffset, O.K.R[c].mask, ev(O.n));
+          cfrK(n.subs[c], trav, mH, mO, avg, d + 1, P.tmp);
+          k.maskAdd(out.byteOffset, P.tmp.byteOffset, T.K.R[c].mask, NT, scale);
+        }
+        return;
+      }
+      const k = KT.k, nA = n.acts.length, Np = n.Np, s = P.s, R2 = P.r2f, V = P.valf, M = MK;
+      const base = n.player === 0 ? rH : rO;
+      if (avg) {
+        const N = sides[n.player].n, sum = n.sum;
+        for (let i = 0; i < N; i++) {
+          let t = 0;
+          for (let a = 0; a < nA; a++) t += sum[a * Np + i];
+          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * Np + i] / t : 1 / nA; s[a * Np + i] = x; R2[a * M + i] = base[i] * x; }
+        }
+      } else {
+        k.turnStrategy(n.regret.byteOffset, s.byteOffset, R2.byteOffset, base.byteOffset, nA, Np, M,
+          n.player === 1 ? n.fixed.byteOffset : 0, p, 1 - p, 1 / nA);
+      }
+      for (let a = 0; a < nA; a++) {
+        if (n.player === 0) cfrK(n.kids[a], trav, P.r2[a], rO, avg, d + 1, P.vals[a]);
+        else cfrK(n.kids[a], trav, rH, P.r2[a], avg, d + 1, P.vals[a]);
+      }
+      const NT = T.n;
+      if (n.player !== trav) { k.sumRows(V.byteOffset, out.byteOffset, nA, ev(NT), M); return; }
+      if (avg) {
+        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * Np + i] * V[a * M + i]; out[i] = v; }
+        if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
+        return;
+      }
+      n.t++;
+      const tt = n.t, pos = Math.pow(tt, 1.5) / (Math.pow(tt, 1.5) + 1), w = Math.pow(tt / (tt + 1), 2);
+      k.turnRegret(n.regret.byteOffset, n.sum.byteOffset, s.byteOffset, V.byteOffset, base.byteOffset, out.byteOffset, nA, Np, M, pos, w);
+    }
+
     const K = Math.min(rivers.length, cfg.riverSamples || 6);
     const rng = mulberry32((cfg.seed >>> 0) || 0x51ed270b);
     const iterations = cfg.iterations || TURN_ITERATIONS;
-    const deadline = cfg.timeMs ? Date.now() + cfg.timeMs : Infinity;
-    const outH = new Float64Array(H.n), outO = new Float64Array(O.n);
+    const deadline = cfg.timeMs ? tStart + cfg.timeMs : Infinity;
+    const outH = KT ? outHk : new Float64Array(H.n), outO = KT ? outOk : new Float64Array(O.n);
+    const run = KT ? cfrK : cfr, wH0 = KT ? wHk : H.w, wO0 = KT ? wOk : O.w, SH = KT ? ev(H.n) : H.n;
     let ran = 0;
     const deck = rivers.slice();
     for (let it = 1; it <= iterations; it++) {
       for (let i = 0; i < K; i++) { const j = i + Math.floor(rng() * (deck.length - i)); const x = deck[i]; deck[i] = deck[j]; deck[j] = x; }
       sample = deck.slice(0, K);
       scale = (rivers.length / K) / 44;
-      cfr(root, 0, H.w, O.w, false, 0, outH);
-      cfr(root, 1, H.w, O.w, false, 0, outO);
+      run(root, 0, wH0, wO0, false, 0, outH);
+      run(root, 1, wH0, wO0, false, 0, outO);
       ran = it;
       if (Date.now() > deadline) break;
     }
     // Final pass with average strategies over every river card.
     sample = rivers;
     scale = 1 / 44;
-    cfr(root, 0, H.w, O.w, true, 0, outH);
+    run(root, 0, wH0, wO0, true, 0, outH);
     totals(O.w, O, H);
     const norm = tot[h0] > 0 ? tot[h0] : 1;
     let t = 0;
-    for (let a = 0; a < root.acts.length; a++) t += root.sum[a * H.n + h0];
+    for (let a = 0; a < root.acts.length; a++) t += root.sum[a * SH + h0];
     return {
       iterations: ran, combos: [H.n, O.n], nodes,
       actions: root.acts.map((a, j) => ({
         kind: a.kind, amount: a.amount, frac: a.frac,
-        freq: t > 0 ? root.sum[j * H.n + h0] / t : 1 / root.acts.length,
+        freq: t > 0 ? root.sum[j * SH + h0] / t : 1 / root.acts.length,
         ev: root.vals[j][h0] / norm,
       })),
     };
@@ -3711,9 +3979,24 @@ function ENGINE() {
       }
       const oChips = n.m ? n.m * n.oIn : n.oIn;
       const potF = P0 + n.hIn + oChips;
-      // Multiway leaves run in JS (the kernel memory's vectors index like the JS ones).
-      if (n.kap) return multiTerminal(n, trav, rH, rO, v, potF, oChips, n.term === 'show' ? MEQ : n.S);
       const m = kMat.get(n.term === 'show' ? MEQ : n.S);
+      if (n.kap) {
+        // A multiway leaf (multiTerminal): every class with weight above 0, hero's share scaled by kap.
+        const kap = n.kap, L = kLive, W = kW;
+        let nz = 0;
+        if (trav === 0) {
+          mass(rO, T, 1);
+          for (let b = 0; b < NC; b++) if (rO[b] > 0) { L[nz] = b; W[nz] = rO[b]; nz++; }
+          k.pfRowsT(m.xt, L.byteOffset, W.byteOffset, nz, kOut.byteOffset);
+          for (let a = 0; a < NC; a++) v[a] = potF * kap[a] * kOut[a] - n.hIn * T[a];
+        } else {
+          mass(rH, T, 1);
+          for (let a = 0; a < NC; a++) { const ph = rH[a] * kap[a]; if (ph > 0) { L[nz] = a; W[nz] = ph; nz++; } }
+          k.pfAcc(m.xp, L.byteOffset, W.byteOffset, nz, kOut.byteOffset);
+          for (let b = 0; b < NC; b++) v[b] = potF * (T[b] - kOut[b]) - oChips * T[b];
+        }
+        return v;
+      }
       if (trav === 0) {
         mass(rO, T, 1);
         const nz = k.pfLive(rO.byteOffset, kLive.byteOffset, kW.byteOffset);

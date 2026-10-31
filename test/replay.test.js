@@ -995,7 +995,7 @@ test('tracker passes chips committed and behind for side pots', () => {
 // ---------------------------------------------------------------------------
 // WebAssembly kernels: the same numbers as the JS loops
 // ---------------------------------------------------------------------------
-test('kernels: river and preflop solves give bit-identical results with and without WebAssembly', () => {
+test('kernels: river, preflop and turn solves give bit-identical results with and without WebAssembly', () => {
   if (!E.kernelsActive()) { console.log('     (no WebAssembly SIMD here, JS loops only)'); return; }
   const spots = [
     riverSpot('As Kc', { riverIterations: 60 }),
@@ -1008,6 +1008,14 @@ test('kernels: river and preflop solves give bit-identical results with and with
     // Multiway preflop leaves (a raise and a caller in front).
     { hero: C('9s 8s'), board: [], pot: 75, toCall: 20, stack: 1000, bigBlind: 10, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60,
       opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] },
+    // Turn solver: facing a bet, first to act (odd and even hand counts), and multiway.
+    turnSpot('Qs Js', { turnSolver: true, turnIterations: 6, heroActions: { pre: 'raise', flop: 'call' } }),
+    turnSpot('Ah Kd', { turnSolver: true, turnIterations: 6, toCall: 0, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: '' } }], heroActions: { pre: 'raise', flop: 'bet' } }),
+    // Boards where a straight can be (or is) on the board: ties for every hand that plays it.
+    turnSpot('As Qd', { turnSolver: true, turnIterations: 6, board: C('Ts 9d 8c 7h') }),
+    riverSpot('As Qd', { riverIterations: 60, board: C('Ts 9d 8c 7h 6s') }),
+    turnSpot('4c 4h', { turnSolver: true, turnIterations: 6, pot: 30, toCall: 15, stack: 150,
+      opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }] }),
   ];
   const json = (x) => JSON.stringify(x, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   for (const sp of spots) {
