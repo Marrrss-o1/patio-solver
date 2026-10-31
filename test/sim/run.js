@@ -16,6 +16,7 @@
 //   --b-opts JSON      ... for B; giving any --b-* option turns on the paired A/B run
 //   --a-ref REF        git ref whose src/ A runs (default: the working tree); --b-ref likewise
 //   --b-agent X        agent for B (default: same as A)
+//   --a-bp FILES       blueprint files for A (comma list; --a-bp alone = none), --b-bp likewise; default: env BP
 //   Env PF=0, PFIT=n, TURN=1, TURNIT=n set solver options for both A and B (the old simulators' flags).
 // Noise
 //   --dup 1|0          duplicate: play every deal once per seat, with the cards and position rotating (default 1)
@@ -85,9 +86,10 @@ function buildConfig(args) {
   const bb = +(args.bb || 2);
   const env = envSolverOpts();
   const parse = (s) => (s ? JSON.parse(s) : {});
-  const variants = [{ name: 'A', agent: String(args.agent || 'solver'), src: srcForRef(args['a-ref']), ref: args['a-ref'] || 'working tree', solver: Object.assign({}, env, parse(args['a-opts'])) }];
-  if (args['b-opts'] || args['b-ref'] || args['b-agent']) {
-    variants.push({ name: 'B', agent: String(args['b-agent'] || args.agent || 'solver'), src: srcForRef(args['b-ref']), ref: args['b-ref'] || 'working tree', solver: Object.assign({}, env, parse(args['b-opts'])) });
+  const bp = (k) => (args[k] === true ? '' : args[k] != null ? String(args[k]) : undefined);
+  const variants = [{ name: 'A', agent: String(args.agent || 'solver'), src: srcForRef(args['a-ref']), ref: args['a-ref'] || 'working tree', solver: Object.assign({}, env, parse(args['a-opts'])), bp: bp('a-bp') }];
+  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null) {
+    variants.push({ name: 'B', agent: String(args['b-agent'] || args.agent || 'solver'), src: srcForRef(args['b-ref']), ref: args['b-ref'] || 'working tree', solver: Object.assign({}, env, parse(args['b-opts'])), bp: bp('b-bp') });
   }
   return {
     n, bots: botsSpec, bb, sb: bb / 2, stack: Math.round(+(args.stack || (home ? 150 : 100)) * bb),
@@ -120,7 +122,7 @@ function lineup(cfg, block) {
 }
 
 function makeHero(variant, cfg) {
-  if (variant.agent === 'solver') return solverAgent({ src: variant.src, solver: variant.solver, iters: cfg.iters, riverIters: cfg.riverIters });
+  if (variant.agent === 'solver') return solverAgent({ src: variant.src, solver: variant.solver, iters: cfg.iters, riverIters: cfg.riverIters, blueprint: variant.bp });
   if (variant.agent === 'baseline') return bots.baseline();
   const m = /^bot:(.+)$/.exec(variant.agent);
   if (m) return bots.makeBot(m[1], cfg.profiles);

@@ -14,7 +14,7 @@ function solverAgent(opts = {}) {
   const E = require(path.join(src, 'engine.js'));
   const T = require(path.join(src, 'tracker.js'));
   // Blueprint strategies for engines that support them: BP=<file>[,<file>] (.gz files are gunzipped).
-  const bpFiles = (opts.blueprint || process.env.BP || '').split(',').filter(Boolean);
+  const bpFiles = (opts.blueprint != null ? opts.blueprint : process.env.BP || '').split(',').filter(Boolean);
   if (bpFiles.length && typeof E.setBlueprint === 'function' && fs.existsSync(path.join(src, 'blueprint.js'))) {
     const BPmod = require(path.join(src, 'blueprint.js'));
     const read = (f) => (f.endsWith('.gz') ? zlib.gunzipSync(fs.readFileSync(f)) : fs.readFileSync(f));
