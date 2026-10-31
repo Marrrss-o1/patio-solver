@@ -345,9 +345,12 @@
     window.addEventListener('message', (e) => {
       if (e.source !== window || !e.data || e.data.source !== 'patio-solver-hook') return;
       const { ev, data, snap } = e.data;
-      if (snap && snap.tableType && snap.tableType !== 'private') {
+      // Private lobbies only. A table whose type isn't known yet (page still loading) is off too.
+      if (!snap || snap.tableType !== 'private') {
         blocked = true;
-        status = 'Patio Solver only runs in private lobbies you play with friends. It stays off at public tables.';
+        status = snap && snap.tableType
+          ? 'Patio Solver only runs in private lobbies you play with friends. It stays off at public tables.'
+          : 'Waiting to see what kind of table this is…';
         render();
         return;
       }

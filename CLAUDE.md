@@ -33,11 +33,16 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
                          (`advice.quick`). The tracker's `turn` event carries `timeLeftMs` for this. With
                          `FLOP_SOLVER` on, flops get the same treatment as turns (`flopSolver`, `flopTimeMs`).
   slim.js                Shrinks a result for the overlay (used by background and workers).
-  engine.js, tracker.js  COPIES of src/ written by the build. Edit src/, then run the build.
+  engine.js, tracker.js  COPIES of src/ written by the build (blueprint.js too). Edit src/, then run the build.
+  blueprint-{3,4,5}max.bin.gz  Trained self-play blueprints (150bb), loaded by the panel; not in the dist zip.
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
 dist/patio-solver-extension.zip Built extension zip.
 docs/protocol.md         What the game's socket sends. Read this before touching tracker.js.
-test/                    replay.test.js (node), Playwright harnesses, recorded + synthetic fixtures
+src/blueprint.js         Blueprint lookup (history, seats, heroName, startStack from solverInput).
+blueprint/               trainer.c (MCCFR self-play trainer), run.sh (chunked training that resumes), publish.sh,
+                         coverage.js, README.md (training runs and numbers).
+test/                    replay.test.js and blueprint.test.js (node), fuzz.js (random spots and random socket hands
+                         for property tests), Playwright harnesses, recorded + synthetic fixtures
                          (synth-showdown.json: heads-up hand that ends with the opponent's cards shown).
 ```
 
@@ -219,6 +224,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Joining mid-hand: tracking starts at the next `set_blinds`.
 - Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
+- Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
+  preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does
+  not change the advice unless `input.blueprint === true`: blending it in lost in the friends simulator (3-handed
+  -9.6 ± 18.9, 4-handed -25.5 ± 13.7 bb/100; blinds and premium hands lose). See blueprint/README.md.
+- Safety and legality (audit round 2): the private-table gate fails closed (a missing `tableType` counts as not
+  private); the tracker takes the big blind from `admin:game:new_hand_started` (settingsBB), so a short-posted big
+  blind doesn't shrink it; solver bets are at least the big blind. `test/fuzz.js` property tests: random spots give
+  legal advice with EVs inside what can be won or lost and a solver's check EV >= 0; random socket hands through the
+  tracker report the table's pot, price, stacks and seats.
+- Solver EVs: when the root EVs are read, hero plays its best action at every decision below the root (average
+  strategies there stayed near uniform where hero's hand rarely goes), and turn/flop subgames no iteration sampled
+  play the current strategy. Frequencies and the chosen action are unchanged; only rarely played options' EVs rise.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. `modelFold` elasticity is
   0.8*sqrt(ftb/0.45) and `foldAtSize` grows only 30% as fast above 1.1 pot. Against a raise, opponents continue
@@ -229,7 +246,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up preflop solver alone adds +2 ± 16 there); gain mostly from the blinds (SB +23 ± 11, BB +26 ± 10), UTG
   −9 ± 8. Heads-up preflop solver on minus off: typical bot −4 ± 13 (2,000 deals), maniac +18 ± 20, friends −2 ± 22,
   so about neutral (+2 ± 10 pooled). Multiway river fixes (fieldStats, overcalls) +3.5 ± 16; turn solver on vs off
-  heads-up +1.9 ± 21; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
+  heads-up +1.9 ± 21 and 4-handed +5 ± 20 (1,000 deals); multiway preflop on the refit bots (limpers fold like the
+  friends) +31 ± 18; v1.4.0 vs v1.5.0 main +13 ± 21 4-handed, +12 ± 22 heads-up; side-pot gate (#21) +28 ± 16; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
   against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals). Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
