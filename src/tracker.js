@@ -45,6 +45,8 @@
   }
   const streetTally = () => ({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 });
   const facingTally = () => ({ fold: 0, call: 0, raise: 0 });
+  // Facing a bet by size bucket, plus the sizes seen in the bucket (fs = sum of pot fractions, fn = count).
+  const sizeTally = () => ({ fold: 0, call: 0, raise: 0, fs: 0, fn: 0 });
   const posTally = () => ({ n: 0, vpip: 0, pfr: 0 });
   function blankTally() {
     return {
@@ -75,7 +77,7 @@
       stMw: { flop: streetTally(), turn: streetTally(), river: streetTally() },
       stOld: { flop: streetTally(), turn: streetTally(), river: streetTally() },
       // Reaction to a bet by its size (fraction of the pot before the bet): <45%, 45-85%, >85%.
-      vs: { small: facingTally(), medium: facingTally(), large: facingTally() },
+      vs: { small: sizeTally(), medium: sizeTally(), large: sizeTally() },
       // Response to a single open raise preflop by its raise-to size: <=2.5bb, <=3.5bb, more ('raise' = 3-bet).
       vsOpen: { small: facingTally(), medium: facingTally(), large: facingTally() },
       // Their own bet sizes postflop, as fractions of the pot.
@@ -376,7 +378,10 @@
           if (key && t.st[key] && t.st[key][kind] != null) t.st[key][kind]++;
           if (multiway && key && t.stMw && t.stMw[key] && t.stMw[key][kind] != null) t.stMw[key][kind]++;
           if (facing > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) {
-            t.vs[sizeBucket(facing / Math.max(1, potBefore - facing))][kind]++;
+            const f = facing / Math.max(1, potBefore - facing), vb = t.vs[sizeBucket(f)];
+            vb[kind]++;
+            vb.fs = (vb.fs || 0) + Math.min(f, 3);
+            vb.fn = (vb.fn || 0) + 1;
           }
           if (kind === 'bet') { t.betSize.n++; t.betSize.sum += frac; }
           if (cbetSpot && p.id === h.pfRaiser && !p.cbetSeen && !h.flopBet) { t.cbetOpp++; if (kind === 'bet') t.cbet++; }

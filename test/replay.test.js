@@ -201,6 +201,8 @@ test('showdown hand: detailed tallies', () => {
   assert.strictEqual(t.st.turn.bet, 1);
   assert.strictEqual(t.st.river.bet, 1);
   assert.strictEqual(t.vs.medium.call, 1);            // called 30 into 60
+  assert.strictEqual(t.vs.medium.fn, 1);              // ... a half-pot bet, kept for the size read
+  assert.ok(Math.abs(t.vs.medium.fs - 0.5) < 1e-9);
   assert.strictEqual(t.vsCbet, 1);
   assert.strictEqual(t.foldCbet, 0);
   assert.strictEqual(t.betSize.n, 2);
@@ -620,10 +622,24 @@ test('no 2x-pot overbets: they lost money at a real table', () => {
   assert.strictEqual(has2x('7s Kc 2d 9h 3c'), false);
 });
 
-test('fold rates rise only gently with bet size', () => {
+test('size reads sit at the bets actually seen: folds to min-bets do not pull down the third-pot read', () => {
+  // Folded 2 of 10 min-bets (0.1 pot) and nothing else seen in the small bucket.
+  const minBets = Object.assign(T.blankTally(), { vs: { small: { fold: 2, call: 8, raise: 0, fs: 1, fn: 10 }, medium: { fold: 0, call: 0, raise: 0, fs: 0, fn: 0 }, large: { fold: 0, call: 0, raise: 0, fs: 0, fn: 0 } } });
+  const st = E.computeStats(minBets, 'typical');
+  const at = (s, f) => E.foldAtSize(s, f, 3);
+  // Read at the min-bets' size, the low fold count says little about a third-pot bet.
+  const old = E.computeStats(Object.assign(T.blankTally(), { vs: { small: { fold: 2, call: 8, raise: 0 } } }), 'typical');
+  assert.ok(st.sizeAnchor.small < 0.2, String(st.sizeAnchor.small));
+  assert.ok(at(st, 0.33) > at(old, 0.33), `${at(st, 0.33)} vs ${at(old, 0.33)}`);
+});
+
+test('fold rates rise with bet size up to about pot, then barely (overbets buy no folds)', () => {
   const st = E.computeStats({}, 'typical');
-  assert.ok(E.foldAtSize(st, 2, 5) < st.byStreet[5].foldToBet + 0.18, String(E.foldAtSize(st, 2, 5)));
-  assert.ok(E.foldAtSize(st, 2, 5) - E.foldAtSize(st, 0.5, 5) < 0.2);
+  const f = (x) => E.foldAtSize(st, x, 5);
+  // The logs: 20% folds to min-bets, 44% to a third of the pot, 67-74% to 0.55-0.9 pot, the same above.
+  assert.ok(f(0.33) - f(0.1) > 0.12 && f(0.75) - f(0.33) > 0.1, `${f(0.1)} ${f(0.33)} ${f(0.75)}`);
+  assert.ok(f(2) - f(1) < 0.05, `${f(1)} vs ${f(2)}`);
+  assert.ok(f(2) - f(0.5) < 0.2);
 });
 
 test('bet size: a big bet reads more polarized (fewer medium hands) than a small one', () => {
@@ -992,11 +1008,13 @@ test('flop solver: computer mode only; heads-up and against the field', () => {
   assert.strictEqual(field.solver.kind, 'flop');
   assert.strictEqual(field.solver.field, 2);
   assert.ok(field.ranked.every((x) => isFinite(x.ev)));
-  // River betting at the end of the turn lines (flopRiverBet): a made flush draw gets paid.
-  const rb = flop('Ah 5h', { flopSolver: true, flopRiverBet: 0.5 });
+  // River betting at the end of the turn lines (flopRiverBet): a made flush draw gets paid. The gain
+  // is small next to the solver's noise at a few iterations, so this compares 30-iteration solves.
+  const rb = flop('Ah 5h', { flopSolver: true, flopRiverBet: 0.5, flopIterations: 30 });
+  const draw30 = flop('Ah 5h', { flopSolver: true, flopIterations: 30 });
   const ev = (r, k) => r.ranked.find((x) => x.kind === k).ev;
   assert.ok(rb.ranked.every((x) => isFinite(x.ev)));
-  assert.ok(ev(rb, 'call') > ev(draw, 'call'));
+  assert.ok(ev(rb, 'call') > ev(draw30, 'call'));
 });
 
 test('river: hands that play a straight-or-better board call, so bluffing into them is no edge', () => {
@@ -1034,8 +1052,15 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
   const spots = require('./fixtures/real-multiway-flops.json');
   const run = (x) => E.analyzeSync(Object.assign({}, x, { mix: false, seed: 1, iterations: 6000 }));
   const ev = (r, kind) => Math.max(...r.ranked.filter((s) => s.kind === kind).map((s) => s.ev));
+  // The J-high stab: v1.6.0 had the half-pot bet 2.7 above check, from payoffs. With the fold curve
+  // fitted on the logs (friends fold about half the time to a quarter to 0.45 pot multiway, 70% to
+  // 0.45-0.85 pot), a stab can win on folds the logs support, so every bet must stay within noise of
+  // check (1.5 SE) rather than below it.
   const stab = run(spots.stabJackHigh);
-  assert.strictEqual(stab.best.kind, 'check', 'J-high checks 4-way, best was ' + stab.best.kind + ' ' + stab.best.amount);
+  const chk = stab.ranked.find((s) => s.kind === 'check');
+  for (const b of stab.ranked.filter((s) => s.kind === 'bet' || s.kind === 'allin')) {
+    assert.ok(b.ev - chk.ev < 1.5 * (b.se || 0), `J-high 4-way: bet ${b.amount} EV ${b.ev} vs check ${chk.ev} (SE ${b.se})`);
+  }
   for (const k of ['raiseMiddlePair', 'raiseKingHigh']) {
     const r = run(spots[k]);
     assert.notStrictEqual(r.best.kind, 'raise', k + ': best was raise ' + r.best.amount);
