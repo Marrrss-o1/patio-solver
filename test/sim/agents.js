@@ -2,6 +2,8 @@
 // overlay drives it, from any copy of src/ (so two versions can be compared on the same deals).
 'use strict';
 const path = require('path');
+const fs = require('fs');
+const zlib = require('zlib');
 const { keyed } = require('./game.js');
 const bots = require('./bots.js');
 
@@ -11,6 +13,13 @@ function solverAgent(opts = {}) {
   const src = opts.src || path.join(__dirname, '..', '..', 'src');
   const E = require(path.join(src, 'engine.js'));
   const T = require(path.join(src, 'tracker.js'));
+  // Blueprint strategies for engines that support them: BP=<file>[,<file>] (.gz files are gunzipped).
+  const bpFiles = (opts.blueprint || process.env.BP || '').split(',').filter(Boolean);
+  if (bpFiles.length && typeof E.setBlueprint === 'function' && fs.existsSync(path.join(src, 'blueprint.js'))) {
+    const BPmod = require(path.join(src, 'blueprint.js'));
+    const read = (f) => (f.endsWith('.gz') ? zlib.gunzipSync(fs.readFileSync(f)) : fs.readFileSync(f));
+    E.setBlueprint(bpFiles.map((f) => BPmod.load(read(f))));
+  }
   const tracker = new T(opts.db ? JSON.parse(JSON.stringify(opts.db)) : { players: {} });
   tracker.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
   tracker.rawKeep = 0;
@@ -30,7 +39,9 @@ function solverAgent(opts = {}) {
       }, extra);
       const res = E.analyzeSync(input);
       stats.ms += Date.now() - t0; stats.decisions++;
-      if (res.solver) stats.solved[res.solver.kind || 'river'] = (stats.solved[res.solver.kind || 'river'] || 0) + 1;
+      const bump = (k) => { stats.solved[k] = (stats.solved[k] || 0) + 1; };
+      if (res.solver) bump(res.solver.kind || 'river');
+      if (res.blueprint) bump(res.blueprint.used ? 'bp' : 'bp-off:' + res.blueprint.why);
       const best = res.best;
       if (agent.onDecision) agent.onDecision(v, b.input, res);
       if (best.kind === 'fold') return { t: 'fold' };
