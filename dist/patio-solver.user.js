@@ -1553,18 +1553,30 @@ function ENGINE() {
     };
   }
 
+  // Inverse-CDF sampling. `guide[j]` is the first entry whose cumulative weight reaches j/GUIDE
+  // of the total, so the binary search starts from a narrow window; the checks below widen it
+  // again if rounding put the answer outside, so the pick is the one the full search makes.
+  const GUIDE = 512;
   function buildSampler(W) {
-    const idx = [], cum = [];
+    const idx = [], cumL = [];
     let total = 0;
     for (let k = 0; k < NUM_COMBOS; k++) {
-      if (W[k] > 0) { total += W[k]; idx.push(k); cum.push(total); }
+      if (W[k] > 0) { total += W[k]; idx.push(k); cumL.push(total); }
     }
-    return { idx: Int16Array.from(idx), cum: Float64Array.from(cum), total };
+    const cum = Float64Array.from(cumL), n = cum.length, guide = new Int32Array(GUIDE + 1);
+    for (let j = 0, i = 0; j <= GUIDE; j++) {
+      const x = (j / GUIDE) * total;
+      while (i < n - 1 && cum[i] < x) i++;
+      guide[j] = i;
+    }
+    return { idx: Int16Array.from(idx), cum, total, guide };
   }
 
   function sampleCombo(s, r) {
-    const x = r * s.total;
-    let lo = 0, hi = s.cum.length - 1;
+    const x = r * s.total, cum = s.cum, j = (r * GUIDE) | 0;
+    let lo = s.guide[j], hi = s.guide[j + 1];
+    if (lo > 0 && cum[lo - 1] >= x) lo = 0;
+    if (!(cum[hi] >= x)) hi = cum.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
       if (s.cum[mid] < x) lo = mid + 1; else hi = mid;
@@ -1707,6 +1719,29 @@ function ENGINE() {
     }
     return lo;
   }
+  // lowerBound with a guide table from lbGuide: guide[j] = lowerBound(xs, j / LB_G). For
+  // 0 <= v < 1, v * LB_G is exact (LB_G is a power of 2), so j / LB_G <= v < (j + 1) / LB_G and the
+  // answer lies in [guide[j], guide[j + 1]]: the index the full search returns, found sooner.
+  const LB_G = 512;
+  function lbGuide(xs) {
+    const n = xs.length, g = new Int32Array(LB_G + 1);
+    for (let j = 0, i = 0; j <= LB_G; j++) {
+      const v = j / LB_G;
+      while (i < n && xs[i] < v) i++;
+      g[j] = i;
+    }
+    return g;
+  }
+  function lowerBoundG(xs, g, v) {
+    const t = v * LB_G;
+    if (!(t >= 0 && t < LB_G)) return lowerBound(xs, v);
+    let lo = g[t | 0], hi = g[(t | 0) + 1];
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (xs[mid] < v) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
 
   const HERO_BET = 0.66;
   // What an opponent did on a street of the lookahead (makePlan's line masks, 2 bits per street).
@@ -1727,11 +1762,10 @@ function ENGINE() {
    * Thresholds are quantiles of their strength on random runouts, so they adapt to the
    * board. The same samples tell hero how often it is ahead of their betting range.
    */
-  function makePlan(o, ctx) {
-    const { street, dead, current, runouts, seed } = ctx;
+  // makePlan's samples: the opponent's strength on this street and on random later cards, for N
+  // hands drawn from their range.
+  function drawPlan(o, street, dead, current, runouts, seed, N, streets) {
     const rng = mulberry32(seed);
-    const N = ctx.samples || PLAN_SAMPLES;
-    const streets = street === 3 ? [3, 4, 5] : [4, 5];
     const xs = {};
     for (const s of streets) xs[s] = new Float64Array(N);
     const used = new Uint8Array(52);
@@ -1755,9 +1789,23 @@ function ENGINE() {
         xs[5][j] = runouts.river(draw(), -1)[k];
       }
     }
+    return xs;
+  }
+
+  function makePlan(o, ctx) {
+    const { street, dead, current, runouts, seed } = ctx;
+    const N = ctx.samples || PLAN_SAMPLES;
+    const streets = street === 3 ? [3, 4, 5] : [4, 5];
+    // The samples depend on the range, the board and the seed but not on the stats, so the
+    // versions of one opponent (VARIANTS) share them, sorted, through ctx.draws.
+    const draws = ctx.draws || {};
+    const xs = draws.xs || (draws.xs = drawPlan(o, street, dead, current, runouts, seed, N, streets));
+    const sorted = draws.sorted || (draws.sorted = {});
     // Thresholds for street s from the strengths x (sorted, n of them) of the hands that got there.
     const build = (s, x, n) => {
       const q = (p) => x[clamp(Math.floor(p * (n - 1)), 0, n - 1)];
+      const gd = n > 128 ? lbGuide(x) : null;
+      const lb = (h) => (gd ? lowerBoundG(x, gd, h) : lowerBound(x, h));
       const ss = streetStats(o.stats, s);
       const betFreq = clamp(ss.betFreq + (o.stats.betShift || 0), 0.05, 0.9);
       const vr = clamp(valueShare(o.stats, o.stats.betSize) - (o.stats.valueShift || 0), 0.2, 0.97);
@@ -1782,20 +1830,20 @@ function ENGINE() {
         q, rCut, pBluffR,
         // They call a raise of their bet with nearly all of their value range.
         raiseCallCut: q(1 - betFreq * vr * 0.9),
-        eqVsRaise: (h) => (cumR[n] > 0 ? cumR[lowerBound(x, h)] / cumR[n] : 1),
+        eqVsRaise: (h) => (cumR[n] > 0 ? cumR[lb(h)] / cumR[n] : 1),
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
         foldHero: aggScale * foldAtSize(o.stats, HERO_BET, s),
         callCut,
         // Hero value-bets when it beats 55% of the hands that would call.
         valueCut: c0 < n ? x[c0 + Math.floor(0.55 * (n - 1 - c0))] : 2,
-        eqVsCall: (h) => (c0 < n ? Math.max(0, lowerBound(x, h) - c0) / (n - c0) : 1),
-        eqVsBet: (h) => (cum[n] > 0 ? cum[lowerBound(x, h)] / cum[n] : 1),
-        eqAll: (h) => lowerBound(x, h) / n,
+        eqVsCall: (h) => (c0 < n ? Math.max(0, lb(h) - c0) / (n - c0) : 1),
+        eqVsBet: (h) => (cum[n] > 0 ? cum[lb(h)] / cum[n] : 1),
+        eqAll: (h) => lb(h) / n,
       };
     };
     const plan = {};
-    for (const s of streets) plan[s] = build(s, Float64Array.from(xs[s]).sort(), N);
+    for (const s of streets) plan[s] = build(s, sorted[s] || (sorted[s] = Float64Array.from(xs[s]).sort()), N);
     // The read's rates are what a player does once they get to a street, whatever got them there.
     // So on later streets of the lookahead their thresholds are quantiles of the hands that would
     // have played the line so far, not of their whole range: a range that called a bet is stronger
@@ -1807,11 +1855,15 @@ function ENGINE() {
     // bet), LINE_CHECK (could bet and checked), LINE_BET (bet or raised). Bits 4+ (lineCont) hold
     // 1 + 20 x the share of their range that continued against hero's bet or raise on ctx.street, so
     // a small bet's callers are a wider range than a big bet's (otherwise the cut is a 2/3-pot bet's).
-    const u = new Float64Array(N);
-    const urng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
-    for (let j = 0; j < N; j++) u[j] = urng();
+    let u = draws.u;
+    if (!u) {
+      u = draws.u = new Float64Array(N);
+      const urng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+      for (let j = 0; j < N; j++) u[j] = urng();
+    }
     const below = (s) => (1 << (2 * (s - 3))) - 1;
-    const memo = {}, sets = {};
+    // Keyed s * 512 + m (below 3072); arrays filled up front so lookups stay on the fast path.
+    const memo = new Array(3072).fill(undefined), sets = new Array(3072).fill(undefined);
     const canon = (s, m) => {
       const line = m & below(s);
       return line && ((line >> (2 * (street - 3))) & 3) === LINE_CALL ? line | (m & ~15) : line;
@@ -4983,7 +5035,7 @@ function ENGINE() {
     // Play out the later streets when hero ends up heads-up on the flop or turn.
     const lookahead = (street === 3 || street === 4) && input.lookahead !== false;
     const runouts = lookahead ? makeRunouts(board) : null;
-    const plans = [];
+    const plans = [], planDraws = [];
 
     const inPosition = input.inPosition !== false;
     // Hero's position against each opponent (acts after them on later streets). The tracker
@@ -5100,7 +5152,8 @@ function ENGINE() {
         const st = Object.assign({}, opps[i].statsHU || opps[i].stats, VARIANTS[v]);
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
-          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine });
+          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine,
+            draws: planDraws[i] || (planDraws[i] = {}) });
       }
       return plans[key];
     }
@@ -5332,16 +5385,32 @@ function ENGINE() {
     // Who continues against this scenario (fills oppIn), with the read's continue rates moved
     // down by `shift` (an opponent version that folds more, or less with a negative shift).
     // Returns the index of an opponent who re-raises, or -1.
-    function decide(sc, shift) {
+    // decide()'s chance that opponent i continues depends only on the rule, the shift and their
+    // hand (oppQ is a function of the hand), so each scenario keeps it per hand once worked out:
+    // contTabs(sc, shift)[i][k], NaN until hand k first comes up.
+    const contCache = new Map();
+    function contTabs(sc, shift) {
+      let per = contCache.get(sc);
+      if (!per) contCache.set(sc, (per = new Map()));
+      let t = per.get(shift);
+      if (!t) per.set(shift, (t = opps.map(() => new Float64Array(NUM_COMBOS).fill(NaN))));
+      return t;
+    }
+    function decide(sc, shift, tabs) {
       let reraisedBy = -1;
       for (let i = 0; i < opps.length; i++) {
         const rule = sc.opp[i];
         if (rule.cont >= 0.999 || (ties && ties[oppCombo[i]])) oppIn[i] = 1;
         else {
-          const cont = shift ? clamp(rule.cont - shift, 0.01, 0.99) : rule.cont;
-          const pRel = sigmoid((oppQ[i] - (1 - cont)) / 0.04);
-          const pNut = sigmoid((current.hs[oppCombo[i]] - rule.nut) / 0.015);
-          oppIn[i] = oppR[i] < Math.max(pRel, pNut) ? 1 : 0;
+          const k = oppCombo[i], tab = tabs[i];
+          let p = tab[k];
+          if (p !== p) {
+            const cont = shift ? clamp(rule.cont - shift, 0.01, 0.99) : rule.cont;
+            const pRel = sigmoid((oppQ[i] - (1 - cont)) / 0.04);
+            const pNut = sigmoid((current.hs[k] - rule.nut) / 0.015);
+            p = tab[k] = Math.max(pRel, pNut);
+          }
+          oppIn[i] = oppR[i] < p ? 1 : 0;
         }
         if (oppIn[i] && rule.reraise > 0 && oppQ[i] >= 1 - rule.reraise) reraisedBy = i;
       }
@@ -5427,6 +5496,8 @@ function ENGINE() {
 
     function runScenario(sc, start, count) {
       const rng = mulberry32((seed + start * 2654435761) >>> 0);
+      const tabs0 = contTabs(sc, 0);
+      const tabsV = VARIANTS.map((V) => (sc.stress && V.foldShift ? contTabs(sc, V.foldShift) : null));
       for (let it = 0; it < count; it++) {
         used.fill(0);
         for (const c of dead) used[c] = 1;
@@ -5447,7 +5518,7 @@ function ENGINE() {
           oppR[i] = rng();
           oppQ[i] = street === 0 && opps[i].pending ? current.hs[oppCombo[i]] : opps[i].qCont[oppCombo[i]];
         }
-        const reraisedBy = decide(sc, 0);
+        const reraisedBy = decide(sc, 0, tabs0);
         for (let i = 0; i < opps.length; i++) if (!oppIn[i]) sc.oppFolds[i]++;
         for (let i = 0; i < street; i++) cards[i + 2] = board[i];
         for (let i = street; i < 5; i++) {
@@ -5468,7 +5539,7 @@ function ENGINE() {
           inBase.set(oppIn);
           for (let v = 1; v < VARIANTS.length; v++) {
             const shift = sc.stress ? VARIANTS[v].foldShift || 0 : 0;
-            const rr = shift ? decide(sc, shift) : reraisedBy;
+            const rr = shift ? decide(sc, shift, tabsV[v]) : reraisedBy;
             let same = true;
             if (shift) for (let i = 0; i < opps.length; i++) if (oppIn[i] !== inBase[i]) { same = false; break; }
             varGain[v] = same && !looked ? gain : settle(sc, v, rng, false, rr);
