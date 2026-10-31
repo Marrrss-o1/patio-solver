@@ -31,6 +31,25 @@ for (const n of [2, 3, 4, 6]) {
   }
 }
 
+// 1b. A seat watching with its own tracker (solver opponents) records the same hand as hero's overlay would
+//     from that seat: same log, players and board as a tracker fed the hand with that seat as hero.
+for (const n of [2, 4]) {
+  const w = new T({ players: {} }), ref = new T({ players: {} });
+  const seats = [bots.baseline()].concat(Array.from({ length: n - 1 }, (_, i) => bots.makeBot(['home', 'maniac', 'station'][i])));
+  const end = (tr, me) => tr.handle('game:stage_began', { stageType: 'set_blinds' }, { tableType: 'private', heroAuthId: 'P' + me, bigBlind: 2, players: [] });
+  for (let d = 0; d < 60; d++) {
+    const deck = shuffled(d + 777);
+    const hands = []; for (let i = 0; i < n; i++) hands.push([deck[2 * i], deck[2 * i + 1]]);
+    const base = { n, btn: d % n, hands, boardAll: deck.slice(2 * n, 2 * n + 5), stacks: new Array(n).fill(300), sb: 1, bb: 2, seats, names: ['Hero', 'A', 'B', 'C'], seed: d };
+    playHand(Object.assign({ hero: 0, watchers: [{ seat: 1, onEvent: (ev, data, snapFn) => w.handle(ev, data, snapFn()) }] }, base));
+    playHand(Object.assign({ hero: 1, emit: (ev, data, snapFn) => ref.handle(ev, data, snapFn()) }, base));
+    end(w, 1); end(ref, 1);
+    const a = w.db.history[w.db.history.length - 1], b = ref.db.history[ref.db.history.length - 1];
+    const strip = (e) => JSON.stringify([e.hero, e.board, e.log.map((x) => { const o = Object.assign({}, x); delete o.ms; return o; }), e.players.map((p) => [p.name, p.position, p.folded, p.put, p.actions, p.shown])]);
+    ok(a && b && strip(a) === strip(b), `watching seat's tracker differs (n=${n}, deal ${d})`);
+  }
+}
+
 // 2. Side pots: a short all-in can only win the main pot.
 {
   const out = new Float64Array(3);
