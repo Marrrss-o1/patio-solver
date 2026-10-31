@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.7.1
+// @version      1.7.2
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1269,18 +1269,25 @@ function ENGINE() {
   // Stats for the field as one opponent (multiway solvers): it folds only if all of them fold,
   // and bets or raises if any of them does. The rest follows `base` (the aggressor or the
   // stickiest caller).
-  function fieldStats(list, base) {
-    const prod = (f) => list.reduce((a, x) => a * clamp(f(x), 0, 1), 1);
-    const st = Object.assign({}, base, { foldShift: 0, fieldOf: list });
-    st.foldToBet = prod((x) => x.foldToBet);
-    st.foldAfterAgg = prod((x) => (x.foldAfterAgg != null ? x.foldAfterAgg : x.foldToBet));
+  // `foldList`: the reads that answer a bet before anyone has called it. The field folds only if
+  // each player folds while nobody before them has stayed, and players facing a bet with no caller
+  // yet fold about as often as heads-up (logs, bets of 25-110% pot into 2+ friends: the first to
+  // answer folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two
+  // players both fold 21%, where the multiway rates multiplied gave about 38%).
+  function fieldStats(list, base, foldList) {
+    // Folds use foldList (heads-up reads); betting and raising keep the multiway ones.
+    const folds = foldList || list;
+    const prod = (f, xs = list) => xs.reduce((a, x) => a * clamp(f(x), 0, 1), 1);
+    const st = Object.assign({}, base, { foldShift: 0, fieldOf: folds });
+    st.foldToBet = prod((x) => x.foldToBet, folds);
+    st.foldAfterAgg = prod((x) => (x.foldAfterAgg != null ? x.foldAfterAgg : x.foldToBet), folds);
     st.betFreq = 1 - prod((x) => 1 - x.betFreq);
     st.raiseFreq = 1 - prod((x) => 1 - x.raiseFreq);
     st.byStreet = {};
     for (const n of [3, 4, 5]) {
-      const ss = list.map((x) => streetStats(x, n));
+      const ss = list.map((x) => streetStats(x, n)), sf = folds.map((x) => streetStats(x, n));
       st.byStreet[n] = Object.assign({}, (base.byStreet && base.byStreet[n]) || {}, {
-        foldToBet: ss.reduce((a, x) => a * clamp(x.foldToBet, 0, 1), 1),
+        foldToBet: sf.reduce((a, x) => a * clamp(x.foldToBet, 0, 1), 1),
         betFreq: 1 - ss.reduce((a, x) => a * (1 - clamp(x.betFreq, 0, 1)), 1),
         raiseFreq: 1 - ss.reduce((a, x) => a * (1 - clamp(x.raiseFreq, 0, 1)), 1),
       });
@@ -5041,6 +5048,27 @@ function ENGINE() {
       });
     }
 
+    // Multiway bets and raises after the flop: players answer in turn (those still to act, then
+    // those who acted before hero). Until someone stays, each answers with their heads-up read
+    // (a bet with no caller yet); after that with their multiway read (see fieldStats).
+    const respOrder = [];
+    for (let i = 0; i < opps.length; i++) if (opps[i].pending) respOrder.push(i);
+    for (let i = 0; i < opps.length; i++) if (!opps[i].pending) respOrder.push(i);
+    if (street >= 3 && opps.length >= 2) {
+      for (const sc of scenarios) {
+        if (!(sc.amount > toCall + 1e-9)) continue;
+        sc.oppHU = opps.map((o, i) => {
+          const r = sc.opp[i];
+          if (r.cont >= 0.999 || !o.statsHU) return r;
+          const mdf = o.pending ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
+          const hu = continueRule(Object.assign({}, o, { stats: o.statsHU }), ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor });
+          hu.reraise = sc.amount >= stack ? 0 : Math.min(hu.reraise, hu.cont);
+          hu.add = r.add;
+          return hu;
+        });
+      }
+    }
+
     const heroCombo = COMBO_INDEX[hero[0] * 52 + hero[1]];
     const heroStrength = current.ehs[heroCombo];
     const heroStandsReraise = heroStrength >= (street === 0 ? 0.9 : 0.8);
@@ -5406,16 +5434,22 @@ function ENGINE() {
       let per = contCache.get(sc);
       if (!per) contCache.set(sc, (per = new Map()));
       let t = per.get(shift);
-      if (!t) per.set(shift, (t = opps.map(() => new Float64Array(NUM_COMBOS).fill(NaN))));
+      // With heads-up rules (sc.oppHU) each opponent has a second table for them at i + opps.length.
+      if (!t) per.set(shift, (t = Array.from({ length: sc.oppHU ? 2 * opps.length : opps.length }, () => new Float64Array(NUM_COMBOS).fill(NaN))));
       return t;
     }
     function decide(sc, shift, tabs) {
       let reraisedBy = -1;
-      for (let i = 0; i < opps.length; i++) {
-        const rule = sc.opp[i];
+      const hu = sc.oppHU;
+      // Someone is already in (an all-in player): nobody faces the bet alone.
+      let anyIn = 0;
+      if (hu) for (let i = 0; i < opps.length; i++) if (sc.opp[i].cont >= 0.999) anyIn = 1;
+      for (const i of respOrder) {
+        const alone = hu && !anyIn;
+        const rule = alone ? hu[i] : sc.opp[i];
         if (rule.cont >= 0.999 || (ties && ties[oppCombo[i]])) oppIn[i] = 1;
         else {
-          const k = oppCombo[i], tab = tabs[i];
+          const k = oppCombo[i], tab = tabs[alone ? i + opps.length : i];
           let p = tab[k];
           if (p !== p) {
             const cont = shift ? clamp(rule.cont - shift, 0.01, 0.99) : rule.cont;
@@ -5426,6 +5460,7 @@ function ENGINE() {
           oppIn[i] = oppR[i] < p ? 1 : 0;
         }
         if (oppIn[i] && rule.reraise > 0 && oppQ[i] >= 1 - rule.reraise) reraisedBy = i;
+        anyIn |= oppIn[i];
       }
       return reraisedBy;
     }
@@ -5636,7 +5671,7 @@ function ENGINE() {
         const aggS = clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1);
         const ts = turnSolve({
           board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
-          oppStats: fieldStats(opps.map((x) => x.stats), o.stats), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
+          oppStats: fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats)), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroLine) ? aggS : 1, aggScaleIfAgg: aggS,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
@@ -5670,7 +5705,7 @@ function ENGINE() {
           if (pick < 0) { pick = 0; for (let i = 1; i < opps.length; i++) if (opps[i].stats.foldToBet < opps[pick].stats.foldToBet) pick = i; }
           o = opps[pick];
           oppW = field.W;
-          oppStats = fieldStats(opps.map((x) => x.stats), o.stats);
+          oppStats = fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats));
           p = Math.min(...opps.map((x) => x.stats.exploitWeight));
           multi = { kappa: field.kappa, K: opps.length, rho: input.flopFieldRho != null ? input.flopFieldRho : 0.4 };
         }
@@ -5729,7 +5764,7 @@ function ENGINE() {
           board, heroCombo, strengths: strengths[5], bigBlind,
           heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
           oppW: W,
-          oppStats: fieldStats(opps.map((x) => x.stats), o.stats),
+          oppStats: fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats)),
           overcall: (frac) => {
             let sum = 0, none = 1;
             for (const x of opps) { const c = 1 - foldAtSize(Object.assign({}, x.stats, { foldShift: 0 }), frac, 5); sum += c; none *= 1 - c; }
