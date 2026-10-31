@@ -1682,7 +1682,14 @@
         add({ kind: 'fold', amount: 0 }, { term: 'fold', winner: 1 - player, hIn, oIn });
         const c = Math.min(facing, left);
         const [h2, o2] = after(c);
-        add({ kind: c >= left ? 'allin' : 'call', amount: c }, { term: 'show', hIn: h2, oIn: o2 });
+        const leafS = { term: 'show', hIn: h2, oIn: o2 };
+        // Multiway: when the field calls hero's bet, the other callers' chips (cfg.overcall:
+        // expected callers given that someone calls) go into the pot as well.
+        if (player === 1 && oIn === 0 && cfg.overcall) {
+          const m = cfg.overcall(facing / Math.max(1e-9, potNow - facing));
+          if (m > 1) leafS.x = (m - 1) * c;
+        }
+        add({ kind: c >= left ? 'allin' : 'call', amount: c }, leafS);
         if (raisesLeft > 0 && left > facing) {
           const r = Math.min(left, round(facing + (potNow + facing)));
           const [h3, o3] = after(r);
@@ -1739,14 +1746,14 @@
     function cfr(n, trav, rH, rO, avg) {
       if (n.term) {
         const v = n.v;
-        const potF = P0 + n.hIn + n.oIn;
+        const potF = n.x ? P0 + n.hIn + n.oIn + n.x : P0 + n.hIn + n.oIn;
         if (n.term === 'fold') {
           const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
           foldValues(trav === 0 ? rO : rH, v, trav === 0 ? heroGain : P0 - heroGain);
         } else {
           // For the opponent the same formula holds from their side: they win the pot when
           // the hero hand is below theirs. (Zero-sum up to the sunk pot.)
-          showValues(trav === 0 ? rO : rH, v, potF, trav === 0 ? n.hIn : n.oIn);
+          showValues(trav === 0 ? rO : rH, v, potF, trav === 0 ? n.hIn : n.x ? n.oIn + n.x : n.oIn);
         }
         return v;
       }
@@ -1847,7 +1854,7 @@
           const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
           k.foldRiver(r.byteOffset, v.byteOffset, N, trav === 0 ? heroGain : P0 - heroGain, kv.hi, kv.lo, kv.all);
         } else {
-          k.showRiver(r.byteOffset, v.byteOffset, N, P0 + n.hIn + n.oIn, trav === 0 ? n.hIn : n.oIn,
+          k.showRiver(r.byteOffset, v.byteOffset, N, n.x ? P0 + n.hIn + n.oIn + n.x : P0 + n.hIn + n.oIn, trav === 0 ? n.hIn : n.x ? n.oIn + n.x : n.oIn,
             kv.hi, kv.lo, kv.order, kv.oHi, kv.oLo, kv.gEnd, kv.rs, kv.cum, kv.all, kv.grp);
         }
         return v;
@@ -3633,6 +3640,11 @@
           heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
           oppW: W,
           oppStats: fieldStats(opps.map((x) => x.stats), o.stats),
+          overcall: (frac) => {
+            let sum = 0, none = 1;
+            for (const x of opps) { const c = 1 - foldAtSize(Object.assign({}, x.stats, { foldShift: 0 }), frac, 5); sum += c; none *= 1 - c; }
+            return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
+          },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroLine) ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
           pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
