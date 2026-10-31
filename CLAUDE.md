@@ -30,6 +30,7 @@ npm run build            # copies src/ into extension/, builds dist/ (bumps mani
 npm test                 # node replay tests: real recorded hand + synthetic 3-handed hand
 npm run test:extension   # loads the real extension in Chromium on a fake pokerpatio page, replays a hand
 npm run test:mobile      # runs the userscript on an iPhone-sized fake table, replays a hand
+npm run sim              # heads-up simulator: solver (through the real tracker) vs bots; see test/sim.js for args
 ```
 Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebuild before the browser harnesses.
 
@@ -66,7 +67,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `fit = { top, lr, sq }` on the show. `computeStats` turns these into `accuracy`, a trust factor, and
   `strengthBias`, which tilts that player's ranges weaker or stronger in `buildRange`.
 - River solver (`riverSolve` in engine.js): heads-up river spots only. Discounted CFR over hero's range vs the
-  opponent's, with hero bets of 50/100/200% pot, the opponent's usual bet size and one raise. The opponent plays
+  opponent's, with hero bets of 33/66/100% pot, the opponent's usual bet size and one raise. The opponent plays
   their read's strategy with weight `exploitWeight` and an adaptive one with the rest. Hero's range comes from
   `input.heroActions` (passed by the tracker) run through `buildRange` with typical-player stats. When it runs, its
   frequencies and EVs replace the Monte Carlo ranking, and the Monte Carlo is cut to 6000 iterations (equity only).
@@ -82,6 +83,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Joining mid-hand: tracking starts at the next `set_blinds`.
 - Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
+- Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
+  the owner's home game: friends call big bets far more than the old fold curve assumed. `modelFold` elasticity is
+  0.8*sqrt(ftb/0.45) and `foldAtSize` grows only 30% as fast above 1.1 pot. Against a raise, opponents continue
+  only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
+- Simulator (`test/sim.js`): latest 2,000-hand runs, bb/100 vs a simple solid bot: station +114, typical +5 (a tie),
+  aggressive +68. Bots are simple; this is a regression check, not proof of an edge against real players.
 - Ideas: river solver for multiway pots, multi-street CFR on the turn, raises in the multiway lookahead.
   (Syncing reads between devices is not wanted: the owner keeps phone and computer separate.)
 

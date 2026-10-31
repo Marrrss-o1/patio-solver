@@ -225,7 +225,10 @@
   // How often a player with fold-to-bet `ftb` folds to a bet of `f` x pot, before any size-specific data.
   function modelFold(ftb, f) {
     const mdf = 1 / (1 + Math.max(0.05, f));
-    const elasticity = clamp(1.7 * Math.sqrt(ftb / 0.45), 1, 2.2);
+    // Fold rates rise only gently with bet size: home-game players call big bets far
+    // more than pot odds say they should (the old, steeper curve made overbets with
+    // weak hands look profitable, and they lost at the table).
+    const elasticity = clamp(0.8 * Math.sqrt(ftb / 0.45), 0.5, 1.1);
     return clamp(1 - (1 - ftb) * Math.pow(mdf / 0.625, elasticity), 0.03, 0.97);
   }
 
@@ -1016,8 +1019,8 @@
       for (let j = 0; j < N; j++) cumR[j + 1] = cumR[j] + (x[j] >= rCut ? 1 : x[j] < airCut ? pBluffR : 0);
       plan[s] = {
         rCut, pBluffR,
-        // They call a raise of their bet with the stronger part of their value range.
-        raiseCallCut: q(1 - betFreq * vr * 0.6),
+        // They call a raise of their bet with nearly all of their value range.
+        raiseCallCut: q(1 - betFreq * vr * 0.9),
         eqVsRaise: (h) => (cumR[N] > 0 ? cumR[lowerBound(x, h)] / cumR[N] : 1),
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
@@ -1120,7 +1123,10 @@
     const st5 = streetStats(oppStats, 5);
     const oppBetFrac = clamp(oppStats.betSize || 0.6, 0.33, 1.5);
     // The read's strategy for the opponent at one of their decisions, per hand.
-    function fixedStrategy(acts, facingFrac) {
+    // vsRaise: hero raised their bet. A player who bet keeps their value hands and gives
+    // up most bluffs, whatever their general fold-to-bet rate is.
+    function fixedStrategy(acts, facingFrac, vsRaise) {
+      const bf = clamp(st5.betFreq, 0.05, 0.9), vrB = valueShare(oppStats, oppBetFrac);
       const nA = acts.length, s = new Float64Array(nA * N);
       for (let i = 0; i < N; i++) {
         const q = qO[idx[i]];
@@ -1130,8 +1136,16 @@
           const pBet = sigmoid((q - (1 - bf * vr)) / 0.035) + (1 - sigmoid((q - (1 - bf * vr)) / 0.035)) * sigmoid((bf * (1 - vr) - q) / 0.035);
           acts.forEach((a, j) => { pr[j] = a.kind === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1); });
         } else {
-          const fold = foldAtSize(oppStats, facingFrac, 5);
-          const pCont = sigmoid((q - fold) / 0.04);
+          let pCont;
+          if (vsRaise && toCall > 0) {
+            // Their range here is their betting range: fold the weakest (1 - valueShare) of it.
+            pCont = sigmoid((q - 0.9 * (1 - vrB)) / 0.04);
+          } else if (vsRaise) {
+            // They bet inside the tree: value hands continue, bluffs mostly fold.
+            pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
+          } else {
+            pCont = sigmoid((q - foldAtSize(oppStats, facingFrac, 5)) / 0.04);
+          }
           const pRaise = sigmoid((q - (1 - clamp(st5.raiseFreq, 0.02, 0.3))) / 0.03);
           const hasRaise = acts.some((a) => a.kind === 'raise');
           acts.forEach((a, j) => {
@@ -1147,7 +1161,7 @@
       return s;
     }
 
-    function node(player, hIn, oIn, facing, raisesLeft, lastToAct) {
+    function node(player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise) {
       const potNow = P0 + hIn + oIn;
       const myIn = player === 0 ? hIn : oIn;
       const left = stack - myIn;
@@ -1163,11 +1177,11 @@
         if (raisesLeft > 0 && left > facing) {
           const r = Math.min(left, round(facing + (potNow + facing)));
           const [h3, o3] = after(r);
-          add({ kind: r >= left ? 'allin' : 'raise', amount: r, frac: (r - facing) / (potNow + facing) }, () => node(1 - player, h3, o3, r - facing, raisesLeft - 1, true));
+          add({ kind: r >= left ? 'allin' : 'raise', amount: r, frac: (r - facing) / (potNow + facing) }, () => node(1 - player, h3, o3, r - facing, raisesLeft - 1, true, true));
         }
       } else {
         add({ kind: 'check', amount: 0 }, lastToAct ? { term: 'show', hIn, oIn } : () => node(1 - player, hIn, oIn, 0, raisesLeft, true));
-        const fracs = player === 0 ? [0.5, 1, 2] : [oppBetFrac];
+        const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];
         for (const f of fracs) {
           const b = Math.min(left, round(f * potNow));
           if (b <= 0) continue;
@@ -1179,7 +1193,7 @@
       const nA = acts.length;
       n.regret = new Float64Array(nA * N);
       n.sum = new Float64Array(nA * N);
-      if (player === 1) n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null);
+      if (player === 1) n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
       return n;
     }
     const root = toCall > 0 ? node(0, 0, 0, toCall, 1, true) : node(0, 0, 0, 0, 1, !heroFirst);
@@ -1350,7 +1364,7 @@
 
     if (toCall <= 0) {
       addScenario({ kind: 'check', label: 'Check', amount: 0 });
-      const fracs = street === 0 ? [0.75, 1, 1.5] : street >= 4 ? [0.33, 0.5, 0.75, 1, 1.5, 2] : [0.33, 0.5, 0.75, 1, 1.5];
+      const fracs = street === 0 ? [0.75, 1, 1.5] : [0.33, 0.5, 0.75, 1, 1.5];
       for (const f of fracs) {
         const amt = cap(Math.max(bigBlind, roundChips(f * pot, bigBlind)));
         addScenario({ kind: amt >= stack ? 'allin' : 'bet', label: amt >= stack ? 'All-in' : 'Bet', sizeLabel: fmtFrac(f), amount: amt });
@@ -1765,7 +1779,7 @@
       if (solved) target = Math.min(target, 6000);
     }
 
-    const robustWeight = lookahead ? 0.25 * (1 - opps.reduce((a, o) => a + o.stats.exploitWeight, 0) / opps.length) : 0;
+    const robustWeight = lookahead ? 0.35 * (1 - opps.reduce((a, o) => a + o.stats.exploitWeight, 0) / opps.length) : 0;
 
     function result() {
       for (const sc of scenarios) {
