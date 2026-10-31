@@ -991,6 +991,20 @@ test('river: hands that play a straight-or-better board call, so bluffing into t
   }
 });
 
+test('multiway solves run when every shorter stack still has a few pots behind', () => {
+  const opps = (short) => [130, 335, short].map((stack, i) => ({ name: 'P' + i, tally: {}, stack, committed: 2,
+    actions: { pre: 'call', flop: 'check', turn: 'check', river: '' } }));
+  const spot = (short) => ({ hero: C('Ah Kd'), board: C('Jd 7c 4c 9h 2s'), pot: 8, toCall: 0, stack: 300, heroCommitted: 2,
+    bigBlind: 2, inPosition: false, mix: false, seed: 1, iterations: 3000, opponents: opps(short),
+    heroActions: { pre: 'call', flop: 'check', turn: 'check' } });
+  const deep = E.analyzeSync(spot(218));
+  assert.strictEqual(deep.solver && deep.solver.kind, 'river');
+  assert.strictEqual(E.solvableSpot(spot(218)), 'river');
+  // One player with less than a pot behind: side pots matter, the Monte Carlo decides.
+  assert.strictEqual(E.analyzeSync(spot(5)).solver, null);
+  assert.strictEqual(E.solvableSpot(spot(5)), null);
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
