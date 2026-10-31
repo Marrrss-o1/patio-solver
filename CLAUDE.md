@@ -174,7 +174,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Range noise (`applyAction`): each line keeps a share `rangeNoise` (home prior 0.45, MAP per player from showdown
   likelihoods `nl` over `NOISES`) of hands that take it whatever their strength; on bets it scales with bluff share
   and bet size (`rangeNoiseAgg`). Without it shown hands scored worse than a random guess.
-- Raise wars: 4-bet/5-bet ranges are the narrowed range plus ordinary hands (VPIP range) at equal mass (`WAR_MIX`).
+- Raise wars: 4-bet/5-bet ranges are the narrowed range plus ordinary hands (VPIP range); the ordinary share is
+  clamp(2.2 x PFR/VPIP, 0.1, 1) x the narrow range's mass (`WAR_MIX` 2.2), so it differs per player.
+- Turn and river raises keep only a quarter of the range noise, with no extra for small raises (8 of 10 shown river
+  raises were strong).
+- Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
+  continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
 - Read accuracy: showdowns (`scoreShow`, `FIT_VERSION` 2, stale fits rescored a few per hand by `rescoreStale`) and
