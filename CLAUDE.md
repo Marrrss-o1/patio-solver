@@ -160,7 +160,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   or every caller all-in) also shift the current fold decision in those variants; other bets don't.
 - Multiway river (2-5 opponents, no side pots): `riverSolve` against the field as one opponent whose range is the
   strongest live hand, sampled jointly; it plays like the aggressor or the stickiest caller, with `fieldStats`: the
-  field folds only if every player folds (`foldAtSize` multiplies each player's own curve; before v1.5.0 it used one
+  field folds only if every player folds (`foldAtSize` multiplies each player's own heads-up curve, see Multiway fold structure; before v1.5.0 it used one
   player's fold rate and bluffed multiway pots far too often) and bets or raises if any of them does.
 - Multiway turn (computer, 2-4 opponents, no side pots): `turnSolve` against the field (`turnField`: the live hand
   with the most turn equity, sampled jointly), with `fieldStats`. Hero's showdown share is scaled by
@@ -270,9 +270,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   cap for regulars).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
-  26%). The model multiplies each player's multiway fold rate (about 38% for two). The friend bots are off the
-  same way (57% / 69% / 48%, two fold together 38%), so a change that answers at heads-up rates until someone
-  stays (patch in the project files, notes/mwfold-heads-up-until-someone-stays.patch, not merged) lost -27 ± 20 against them; it waits for bots that match the logs.
+  26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
+  (those still to act first, then those who acted before hero): until someone stays each answers with their heads-up
+  read (`sc.oppHU`, `respOrder` in `decide`), after that with the multiway one; the field solvers fold with the
+  product of heads-up reads (`fieldStats(list, base, foldList)`). Against the old bots, which over-folded multiway
+  the same way as the model (two fold together 38%), this lost -27 ± 20; against the refit bots (#36: 53% / 53% /
+  63%, two together 31%) it gained +32.8 ± 21.2 (1,000 deals 4-handed; weak hands +30 ± 10, SB +33 ± 13).
 - Simulator results (`test/sim/run.js`: duplicate deals, luck-corrected bb/100 ± SE; the old `sim.js`/`sim-multi.js`
   figures were much noisier and are dropped). 4-handed vs friend bots, 150bb: solver 225 ± 32 vs the simple baseline
   bot 97 ± 26 (+128 ± 35, 1,000 deals, v1.4.0). Multiway preflop solver on vs off: +39 ± 18 (2,000 deals; the
