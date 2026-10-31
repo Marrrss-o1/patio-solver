@@ -1188,5 +1188,67 @@ test('seat order: the s3_v2 seat sits between s9 and s10, blinds and UTG come fr
   assert.deepStrictEqual(seatsAtFirstTurn(bare).order, x.order);
 });
 
+// ---------------------------------------------------------------------------
+// 10. Property tests: random spots and random hands (test/fuzz.js)
+// ---------------------------------------------------------------------------
+const F = require('./fuzz.js');
+
+test('fuzz: advice is legal and EVs stay within what can be lost or won (random spots)', () => {
+  const bad = [];
+  const run = (seed, n, extra) => {
+    const r = F.rng32(seed);
+    for (let k = 0; k < n;) {
+      const s = F.randomSpot(r, extra);
+      if (!s) continue;
+      k++;
+      for (const x of F.adviceProblems(s, E.analyzeSync(s))) bad.push(`seed ${seed} spot ${k} (street ${s.board.length}, ${s.opponents.length} opp): ${x}`);
+    }
+  };
+  run(11, 200);
+  // Computer mode: turn and flop solvers too.
+  run(12, 30, { turnSolver: true, turnIterations: 3, turnTimeMs: 200, flopSolver: true, flopIterations: 2, flopTimeMs: 200 });
+  assert.deepStrictEqual(bad, []);
+});
+
+test('fuzz: random hands through the tracker match the table (chips, price, stacks, seats) and get legal advice', () => {
+  const r = F.rng32(5);
+  const db = { players: {} };
+  const bad = [];
+  let turns = 0;
+  for (let h = 0; h < 150; h++) {
+    const hand = F.randomHand(r);
+    const t = new T(db);
+    t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
+    const got = [];
+    t.on((type, p) => { if (type === 'turn' && p.isHero) got.push(t.solverInput('typical')); });
+    for (const m of hand.msgs) t.handle(m.ev, m.data, m.snap);
+    if (got.length !== hand.truth.length) { bad.push(`hand ${h}: ${got.length} hero turns, expected ${hand.truth.length}`); continue; }
+    got.forEach((b, k) => {
+      turns++;
+      const w = hand.truth[k], tag = `hand ${h} turn ${k}`;
+      if (b.error) { bad.push(`${tag}: ${b.error}`); return; }
+      const i = b.input;
+      for (const f of ['pot', 'toCall', 'stack']) if (Math.abs(i[f] - w[f]) > 1e-9) bad.push(`${tag}: ${f} ${i[f]}, table says ${w[f]}`);
+      const mine = JSON.stringify(i.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP]));
+      const real = JSON.stringify(w.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP]));
+      if (mine !== real) bad.push(`${tag}: opponents ${mine}, table says ${real}`);
+      if (h % 3 === 0) {
+        const res = E.analyzeSync(Object.assign({}, i, { iterations: 400, riverIterations: 20, preflopIterations: 20, mix: false, seed: 1 }));
+        for (const x of F.adviceProblems(i, res)) bad.push(`${tag}: ${x}`);
+      }
+    });
+  }
+  assert.ok(turns > 250, String(turns));
+  assert.deepStrictEqual(bad, []);
+});
+
+test('solver bets are at least the big blind (small pots on the river)', () => {
+  // Heads-up limped pot checked to the river: 2 big blinds. A third of the pot is less than a big blind.
+  const r = E.analyzeSync({ hero: C('Ah 7d'), board: C('Kd 8h 4s 2c 7c'), pot: 20, toCall: 0, stack: 990, bigBlind: 10, mix: false, seed: 1, iterations: 3000, inPosition: true,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check', turn: 'check', river: 'check' } }] });
+  assert.ok(r.solver, 'river solver ran');
+  for (const s of r.ranked) if (s.kind === 'bet') assert.ok(s.amount >= 10, `bet ${s.amount}`);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

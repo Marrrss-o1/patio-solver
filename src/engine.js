@@ -2324,7 +2324,7 @@
         add({ kind: 'check', amount: 0 }, lastToAct ? { term: 'show', hIn, oIn } : () => node(1 - player, hIn, oIn, 0, raisesLeft, true));
         const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left ? 'allin' : 'bet', amount: b, frac: b / potNow }, () => node(1 - player, h2, o2, b, raisesLeft, true));
@@ -2842,7 +2842,7 @@
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 4 ? turnBets : riverBets) : [betFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
@@ -3462,7 +3462,7 @@
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg, nb) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 3 ? flopBets : turnBets) : [betFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
