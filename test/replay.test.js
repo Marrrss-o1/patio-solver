@@ -487,5 +487,68 @@ test('river solver: tracker passes hero\'s own line', () => {
   assert.strictEqual(x.input.heroPfAggressor, true);
 });
 
+// ---------------------------------------------------------------------------
+// 8. Everything else (PR 2)
+// ---------------------------------------------------------------------------
+test('lookahead: raises are played (a set gains from check-raising)', () => {
+  const r = E.analyzeSync(flopSpot('7h 7d', { inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: '' } }], mix: false }));
+  const check = r.ranked.find((s) => s.kind === 'check');
+  const now = E.analyzeSync(flopSpot('7h 7d', { inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: '' } }], lookahead: false, mix: false }));
+  assert.ok(check.ev > now.ranked.find((s) => s.kind === 'check').ev + 50);
+});
+
+test('lookahead: also runs with two opponents left', () => {
+  const r = E.analyzeSync(flopSpot('Ah Kd', { board: C('Kc 7s 2d'), mix: false, opponents: [
+    { name: 'V', tally: {}, actions: { pre: 'call', flop: 'check' } }, { name: 'W', tally: {}, actions: { pre: 'call', flop: 'check' } }] }));
+  const check = r.ranked.find((s) => s.kind === 'check');
+  assert.ok(check.lookedPct > 0.9, String(check.lookedPct));
+  r.ranked.forEach((s) => assert.ok(isFinite(s.ev)));
+});
+
+test('side pots: a short all-in opponent can only pay what they have', () => {
+  const spot = riverSpot('As Kc', { riverSolver: false, toCall: 0, pot: 300, inPosition: true, iterations: 4000,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'check' }, stack: 50, committed: 150 }],
+    heroCommitted: 150 });
+  const r = E.analyzeSync(spot);
+  r.ranked.filter((s) => s.kind !== 'fold').forEach((s) => assert.ok(s.ev <= 300 + 50 + 1e-6, `${s.kind} ${s.amount}: ${s.ev}`));
+  const noCap = E.analyzeSync(Object.assign({}, spot, { opponents: [Object.assign({}, spot.opponents[0], { stack: null })], heroCommitted: undefined }));
+  assert.ok(Math.max(...noCap.ranked.map((s) => s.ev)) > 400);
+});
+
+test('side pots: three-way all-in pays each pot to the best eligible hand', () => {
+  // Hero has the nuts; short opponent all-in for 100 more, deep opponent calls.
+  const r = E.analyzeSync({
+    hero: C('As Ad'), board: C('Ac Ah 7d 2c 9s'), pot: 300, toCall: 0, stack: 1000, bigBlind: 10, inPosition: true,
+    riverSolver: false, mix: false, iterations: 3000, heroCommitted: 100,
+    opponents: [
+      { name: 'Short', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'call', river: 'check' }, stack: 0, committed: 100 },
+      { name: 'Deep', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'call', river: 'check' }, stack: 2000, committed: 100 },
+    ],
+  });
+  const check = r.ranked.find((s) => s.kind === 'check');
+  assert.ok(Math.abs(check.ev - 300) < 1e-6, String(check.ev));
+});
+
+test('hero story: a strong-looking line makes opponents fold more', () => {
+  const base = flopSpot('5c 4c', { board: C('Kc 7s 2d 9h'), mix: false, lookahead: false });
+  const strong = E.analyzeSync(Object.assign({}, base, { heroActions: { pre: 'raise', flop: 'bet', turn: '' } }));
+  const weak = E.analyzeSync(Object.assign({}, base, { heroActions: { pre: 'call', flop: 'checkcall', turn: '' } }));
+  assert.ok(strong.credibility > weak.credibility);
+  const fold = (r) => r.ranked.find((s) => s.kind === 'bet').foldPct;
+  assert.ok(fold(strong) > fold(weak));
+});
+
+test('preflop: suited connectors realize more than offsuit junk', () => {
+  const pre = (h) => E.analyzeSync({ hero: C(h), board: [], pot: 15, toCall: 5, stack: 1000, bigBlind: 10, iterations: 500,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] }).realize;
+  assert.ok(pre('9h 8h') > pre('9h 3c') + 0.05);
+});
+
+test('tracker passes chips committed and behind for side pots', () => {
+  const x = replay(three).turns[1];
+  assert.strictEqual(x.input.heroCommitted, 30);
+  assert.deepStrictEqual(x.input.opponents.map((o) => [o.committed, o.stack]), [[30, 970], [30, 970]]);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

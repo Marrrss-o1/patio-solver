@@ -466,7 +466,9 @@
         }
         if (street > 0 && actions.pre === 'pending') actions.pre = 'call';
         const cbetter = h.pfRaiser === o.id;
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id) };
+        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
+          // For side pots: chips already in the pot this hand, and chips behind.
+          committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null };
       });
 
       return {
@@ -480,6 +482,7 @@
           // Hero's own line this hand, so the river solver knows what hero's range looks like.
           heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
           heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
+          heroCommitted: hero.total,
           iterations: opponents.length > 2 ? 16000 : 24000,
           // Fresh seed each decision, so close spots get mixed rather than always the same advice.
           seed: (Math.random() * 4294967296) >>> 0,

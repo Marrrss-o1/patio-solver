@@ -47,9 +47,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - **Verified heads-up only in a live lobby.** Multiway logic is covered by a synthetic 3-handed test, but the
   assumption that seats run clockwise in ascending number (s1 → s10) has not been confirmed live. If position
   looks wrong in a real 4+ player game, that is the first suspect (`solverInput` in tracker.js).
-- Side pots are not modelled (the engine treats all chips as one pot).
-- Lookahead (`makePlan` / `playOut` in engine.js) only runs on the flop and turn once hero is heads-up. Preflop and
-  multiway pots still use the `realize` fudge factor. Inside the lookahead nobody raises, and hero only bluffs the river.
+- Side pots: modelled at showdown when the tracker passes `heroCommitted` and each opponent's `committed`/`stack`
+  (`sidePotWin` in engine.js). The multiway lookahead skips spots with a short stack and falls back to that.
+- Lookahead (`makePlan`, `playOut`, `playOutMulti` in engine.js) runs on the flop and turn. Heads-up, either side
+  can raise once per street (hero raises with about 80%+ equity against the betting range); with 2+ opponents
+  there are no raises. Hero only bluffs the river. Preflop has no lookahead (a flop-by-flop playout is too slow
+  for a phone). Instead `realize` there depends on position, suitedness, connectedness, pairs, opponent count and
+  stack depth.
+- Hero's story: with `heroActions`, the engine builds hero's range as a typical player's. If that range looks
+  stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%). The river solver
+  models hero's range directly, so it does not take the shift.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin).
 - Confidence-pinned exploitation: `computeStats` blends fold rates and value shares toward balanced play with weight
@@ -75,8 +82,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Joining mid-hand: tracking starts at the next `set_blinds`.
 - Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
-- Ideas: raises inside the lookahead, lookahead for multiway pots and preflop, using hero's range on earlier streets,
-  side pots. (Syncing reads between devices is not wanted: the owner keeps phone and computer separate.)
+- Ideas: river solver for multiway pots, multi-street CFR on the turn, raises in the multiway lookahead.
+  (Syncing reads between devices is not wanted: the owner keeps phone and computer separate.)
 
 ## Testing limits in the cloud sandbox
 

@@ -952,7 +952,7 @@
   const HERO_BET = 0.66;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
-  const VARIANTS = [{}, { foldShift: 0.15, betShift: -0.08 }, { foldShift: -0.15 }, { betShift: 0.15, valueShift: 0.15 }];
+  const VARIANTS = [{}, { foldShift: 0.15, betShift: -0.08 }, { foldShift: -0.15 }, { betShift: 0.15, valueShift: 0.15, raiseShift: 0.1 }];
   const PLAN_SAMPLES = 500;
 
   /*
@@ -1008,7 +1008,17 @@
       for (let g = 0; g <= 60; g++) grid[g] = q(foldAtSize(o.stats, g * 0.05, s));
       const callCut = (f) => grid[Math.min(60, Math.round(f * 20))];
       const c0 = lowerBound(x, callCut(HERO_BET));
+      // Raises: value raises from the top of their range, plus a few bluff-raises.
+      const rf = clamp(ss.raiseFreq + (o.stats.raiseShift || 0), 0.02, 0.35);
+      const rCut = q(1 - rf * 0.85);
+      const pBluffR = clamp((rf * 0.15) / 0.35, 0, 0.3);
+      const cumR = new Float64Array(N + 1);
+      for (let j = 0; j < N; j++) cumR[j + 1] = cumR[j] + (x[j] >= rCut ? 1 : x[j] < airCut ? pBluffR : 0);
       plan[s] = {
+        rCut, pBluffR,
+        // They call a raise of their bet with the stronger part of their value range.
+        raiseCallCut: q(1 - betFreq * vr * 0.6),
+        eqVsRaise: (h) => (cumR[N] > 0 ? cumR[lowerBound(x, h)] / cumR[N] : 1),
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
         foldHero: foldAtSize(o.stats, HERO_BET, s),
@@ -1310,6 +1320,22 @@
       };
     });
 
+    // Hero's story: if hero's line this hand looks strong (as a typical player's range would
+    // with the same actions), opponents fold a little more to hero's bets, and less after a
+    // weak-looking line.
+    let credibility = 0;
+    if (street > 0 && input.heroActions) {
+      const hW = buildRange(computeStats({}, tableStyle), input.heroActions, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
+      let a = 0, aw = 0, u = 0, un = 0;
+      for (let k = 0; k < NUM_COMBOS; k++) {
+        if (current.ehs[k] < 0) continue;
+        a += hW[k] * current.ehs[k]; aw += hW[k]; u += current.ehs[k]; un++;
+      }
+      if (aw > 0 && un > 0) credibility = a / aw - u / un;
+      const shift = clamp(0.4 * credibility, -0.08, 0.08);
+      for (const o of opps) o.stats = Object.assign({}, o.stats, { foldShift: shift });
+    }
+
     const scenarios = [];
     const cap = (x) => Math.min(x, stack);
     const fmtFrac = (f) => ({ 0.33: '⅓ pot', 0.5: '½ pot', 0.75: '¾ pot', 1: 'pot', 1.5: '1½ pot', 2: '2× pot overbet' })[f] || Math.round(f * 100) + '% pot';
@@ -1398,7 +1424,20 @@
 
     const inPosition = input.inPosition !== false;
     let realize = 1;
-    if (street === 0) realize = 0.78 + 0.22 * heroStrength + (inPosition ? 0.06 : -0.04);
+    if (street === 0) {
+      // No preflop lookahead (a flop-by-flop playout is too slow for a phone), so how much of
+      // its equity a hand turns into chips is estimated from what makes hands play well:
+      // position, suitedness, connectedness, pairs, how many opponents and how deep stacks are.
+      const ra = hero[0] >> 2, rb = hero[1] >> 2, gap = Math.abs(ra - rb);
+      let play = 0;
+      if ((hero[0] & 3) === (hero[1] & 3)) play += 0.04;
+      if (ra === rb) play += 0.02;
+      else if (gap <= 2) play += 0.02;
+      else if (gap >= 4 && (hero[0] & 3) !== (hero[1] & 3)) play -= 0.04;
+      const spr = isFinite(stack) ? stack / Math.max(1, pot + toCall) : 30;
+      if (spr > 15) play *= 1.5;
+      realize = 0.78 + 0.22 * heroStrength + (inPosition ? 0.06 : -0.04) + play - 0.04 * Math.max(0, opps.length - 1);
+    }
     else if (street < 5) realize = 0.88 + 0.12 * heroStrength + (inPosition ? 0.04 : -0.04);
     realize = clamp(realize, 0.6, 1);
 
@@ -1411,6 +1450,47 @@
     const oppScore = new Int32Array(opps.length);
     const oppIn = new Uint8Array(opps.length);
     const varGain = new Float64Array(VARIANTS.length);
+    const addNow = new Float64Array(opps.length);
+
+    // Side pots. With each player's chips in the pot so far (`committed`) and behind
+    // (`stack`), an all-in player can only win what they matched from each other player.
+    const oppLeft = new Float64Array(opps.length).fill(Infinity);
+    input.opponents.forEach((o, i) => { if (o.stack != null && o.stack >= 0) oppLeft[i] = o.stack; });
+    const sidePots = input.heroCommitted != null && input.opponents.every((o) => o.committed != null) &&
+      input.opponents.some((o) => o.stack != null && o.stack < (isFinite(stack) ? stack : Infinity));
+    const contrib = new Float64Array(opps.length + 1);
+    function sidePotWin(heroAdd, heroScore) {
+      let committedSum = input.heroCommitted;
+      contrib[0] = input.heroCommitted + heroAdd;
+      for (let i = 0; i < opps.length; i++) {
+        committedSum += input.opponents[i].committed;
+        contrib[i + 1] = input.opponents[i].committed + (oppIn[i] ? addNow[i] : 0);
+      }
+      const deadMoney = Math.max(0, pot - committedSum);
+      const levels = [];
+      if (contrib[0] > 0) levels.push(contrib[0]);
+      for (let i = 0; i < opps.length; i++) if (oppIn[i]) levels.push(contrib[i + 1]);
+      levels.sort((a, b) => a - b);
+      let prev = 0, won = 0;
+      for (let li = 0; li < levels.length; li++) {
+        const L = levels[li];
+        if (L <= prev) continue;
+        let layer = 0;
+        for (let j = 0; j <= opps.length; j++) layer += Math.min(contrib[j], L) - Math.min(contrib[j], prev);
+        if (li === 0) layer += deadMoney;
+        // Eligible: hero (if it reached this level) and opponents still in who did.
+        let best = -1, n = 0, heroIn = contrib[0] >= L;
+        if (heroIn) { best = heroScore; n = 1; }
+        for (let i = 0; i < opps.length; i++) {
+          if (!oppIn[i] || contrib[i + 1] < L) continue;
+          if (oppScore[i] > best) { best = oppScore[i]; n = 1; heroIn = false; }
+          else if (oppScore[i] === best) n++;
+        }
+        if (heroIn && heroScore === best) won += layer / n;
+        prev = L;
+      }
+      return won;
+    }
     let done = 0;
 
     function strengthAt(s, k) {
@@ -1422,11 +1502,22 @@
     // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
     // this decision. Bet the remaining streets with both strategies and return hero's gain.
     // Simplifications: no raises after this decision, and hero only bluffs the river.
-    function playOut(i, P, heroIn, share, rng, startCur, v) {
+    function planFor(i, v) {
       const key = i * VARIANTS.length + v;
-      const plan = plans[key] || (plans[key] = makePlan(
-        { stats: Object.assign({}, opps[i].stats, VARIANTS[v]), sampler: opps[i].sampler },
-        { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0 }));
+      if (!plans[key]) {
+        const st = Object.assign({}, opps[i].stats, VARIANTS[v]);
+        st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
+        plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
+          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0 });
+      }
+      return plans[key];
+    }
+
+    // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
+    // this decision. Bet the remaining streets with both strategies and return hero's gain.
+    // Either side can raise once per street; hero only bluffs the river.
+    function playOut(i, P, heroIn, share, rng, startCur, v) {
+      const plan = planFor(i, v);
       const oc = oppCombo[i];
       let left = stack - heroIn, extra = 0;
       for (let s = startCur ? street : street + 1; s <= 5; s++) {
@@ -1434,34 +1525,116 @@
         const t = plan[s];
         const sh = strengthAt(s, heroCombo), so = strengthAt(s, oc);
         const oppBets = () => so >= t.vCut || (so < t.airCut && rng() < t.pBluff);
-        const heroCalls = () => {
+        // Opponent bets; hero folds (false), calls, or raises with a monster.
+        const heroFaces = () => {
           const B = Math.min(left, roundChips(t.betFrac * P, bigBlind));
-          if (t.eqVsBet(sh) < B / (P + 2 * B)) return false;
+          const eq = t.eqVsBet(sh);
+          if (eq >= 0.8 && left > B) {
+            const R = Math.min(left, roundChips(B + (P + 2 * B), bigBlind));
+            if (so < t.raiseCallCut) { P += B + B; extra += B; left -= B; return 'won'; }
+            P += 2 * R; extra += R; left -= R;
+            return true;
+          }
+          if (eq < B / (P + 2 * B)) return false;
           P += 2 * B; extra += B; left -= B;
           return true;
         };
+        // Hero bets for value or as a river bluff; the opponent folds, calls or raises.
         const heroBets = () => {
           const B = Math.min(left, roundChips(HERO_BET * P, bigBlind));
           const value = sh >= t.valueCut;
           const bluff = !value && s === 5 && t.eqVsCall(sh) < 0.2 && t.foldHero * P - (1 - t.foldHero) * B > 0.05 * P;
           if (!value && !bluff) return 'check';
-          if (so < t.callCut(B / P)) return 'won';
+          const raises = left > B && (so >= t.rCut || (so < t.airCut && rng() < t.pBluffR));
+          if (!raises && so < t.callCut(B / P)) return 'won';
+          if (raises) {
+            const R = Math.min(left, roundChips(B + (P + 2 * B), bigBlind));
+            const potBefore = P + B + R;
+            if (t.eqVsRaise(sh) < (R - B) / (potBefore + R - B)) { P += B + R; extra += B; return 'lost'; }
+            P += 2 * R; extra += R; left -= R;
+            return 'called';
+          }
           P += 2 * B; extra += B; left -= B;
           return 'called';
         };
+        let r;
         if (s === street) {
           // Hero checked; the opponent acts behind.
-          if (oppBets() && !heroCalls()) return -heroIn - extra;
-        } else if (inPosition) {
-          if (oppBets()) { if (!heroCalls()) return -heroIn - extra; }
-          else if (heroBets() === 'won') return P - heroIn - extra;
-        } else {
-          const r = heroBets();
+          if (oppBets()) r = heroFaces();
+          if (r === false) return -heroIn - extra;
           if (r === 'won') return P - heroIn - extra;
-          if (r === 'check' && oppBets() && !heroCalls()) return -heroIn - extra;
+        } else if (inPosition) {
+          if (oppBets()) {
+            r = heroFaces();
+            if (r === false) return -heroIn - extra;
+            if (r === 'won') return P - heroIn - extra;
+          } else {
+            r = heroBets();
+            if (r === 'won') return P - heroIn - extra;
+            if (r === 'lost') return -heroIn - extra;
+          }
+        } else {
+          r = heroBets();
+          if (r === 'won') return P - heroIn - extra;
+          if (r === 'lost') return -heroIn - extra;
+          if (r === 'check' && oppBets()) {
+            const f = heroFaces();
+            if (f === false) return -heroIn - extra;
+            if (f === 'won') return P - heroIn - extra;
+          }
         }
       }
       return share * P - heroIn - extra;
+    }
+
+    // Same idea with two or more opponents left: on each later street the first player
+    // whose plan says bet does so, the others call or fold, and hero calls when its chance
+    // of beating the bettor and every caller beats the price. No raises here.
+    const multiAlive = new Uint8Array(opps.length);
+    function playOutMulti(list, P, heroIn, heroScore, rng, v) {
+      let left = stack - heroIn, extra = 0;
+      multiAlive.fill(0);
+      for (const i of list) multiAlive[i] = 1;
+      for (let s = street + 1; s <= 5; s++) {
+        if (left <= 0) break;
+        const sh = strengthAt(s, heroCombo);
+        let bettor = -2, B = 0;
+        const heroValue = () => list.every((i) => !multiAlive[i] || sh >= planFor(i, v)[s].valueCut);
+        const tryOpps = () => {
+          for (const i of list) {
+            if (!multiAlive[i]) continue;
+            const t = planFor(i, v)[s], so = strengthAt(s, oppCombo[i]);
+            if (so >= t.vCut || (so < t.airCut && rng() < t.pBluff)) { bettor = i; B = Math.min(left, roundChips(t.betFrac * P, bigBlind)); return; }
+          }
+        };
+        if (!inPosition && heroValue()) { bettor = -1; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); }
+        if (bettor === -2) tryOpps();
+        if (bettor === -2 && inPosition && heroValue()) { bettor = -1; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); }
+        if (bettor === -2) continue;
+        P += B;
+        if (bettor === -1) { extra += B; left -= B; }
+        let eq = bettor >= 0 ? planFor(bettor, v)[s].eqVsBet(sh) : 1;
+        let callers = 0;
+        for (const j of list) {
+          if (!multiAlive[j] || j === bettor) continue;
+          const t = planFor(j, v)[s];
+          if (strengthAt(s, oppCombo[j]) >= t.callCut(B / Math.max(1, P - B))) { P += B; callers++; eq *= t.eqVsCall(sh); }
+          else multiAlive[j] = 0;
+        }
+        if (bettor === -1) {
+          if (!callers) return P - heroIn - extra;
+        } else {
+          if (eq < B / (P + B)) return -heroIn - extra;
+          P += B; extra += B; left -= B;
+        }
+      }
+      let best = heroScore, n = 1, heroBest = true;
+      for (const i of list) {
+        if (!multiAlive[i]) continue;
+        if (oppScore[i] > best) { best = oppScore[i]; n = 1; heroBest = false; }
+        else if (oppScore[i] === best) n++;
+      }
+      return (heroBest ? P / n : 0) - heroIn - extra;
     }
 
     function runScenario(sc, start, count) {
@@ -1518,7 +1691,8 @@
           let best = hs, nBest = 1, heroBest = true, finalPot = pot + sc.amount;
           for (let i = 0; i < opps.length; i++) {
             if (!oppIn[i]) continue;
-            finalPot += sc.opp[i].add;
+            addNow[i] = Math.min(sc.opp[i].add, oppLeft[i]);
+            finalPot += addNow[i];
             cards[0] = COMBO_HI[oppCombo[i]]; cards[1] = COMBO_LO[oppCombo[i]];
             const s = evaluate(cards, 7);
             oppScore[i] = s;
@@ -1531,11 +1705,19 @@
           const share = heroBest ? 1 / nBest : 0;
           let inCount = 0, lastIn = -1;
           for (let i = 0; i < opps.length; i++) if (oppIn[i]) { inCount++; lastIn = i; }
-          if (lookahead && inCount === 1 && sc.amount < stack) {
+          if (lookahead && inCount === 1 && sc.amount < stack && oppLeft[lastIn] > addNow[lastIn]) {
             const startCur = sc.kind === 'check' && opps[lastIn].pending;
             gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, 0);
             for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v);
             sc.looked++;
+          } else if (lookahead && inCount >= 2 && sc.amount < stack && !sidePots) {
+            const list = [];
+            for (let i = 0; i < opps.length; i++) if (oppIn[i]) list.push(i);
+            gain = playOutMulti(list, finalPot, sc.amount, hs, rng, 0);
+            for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOutMulti(list, finalPot, sc.amount, hs, rng, v);
+            sc.looked++;
+          } else if (sidePots) {
+            gain = sidePotWin(sc.amount, hs) * (sc.amount >= stack ? 1 : realize) - sc.amount;
           } else {
             gain = share * (sc.amount >= stack ? 1 : realize) * finalPot - sc.amount;
           }
@@ -1574,7 +1756,7 @@
         board, heroCombo, strengths: strengths[5], bigBlind,
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
-        oppStats: o.stats, p: o.stats.exploitWeight,
+        oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
         pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
@@ -1670,6 +1852,7 @@
       return {
         street, streetName, pot, toCall, stack, bigBlind, realize, inPosition, lookahead,
         scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight,
+        credibility,
         solver: solved ? { iterations: solved.iterations, exploitWeight: opps[0].stats.exploitWeight } : null,
         equity, potOdds, hero: heroInfo, impliedOddsNeeded,
         iterations: done,
