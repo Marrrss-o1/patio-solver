@@ -5,11 +5,12 @@
 // the computer's "full power" mode.
 const CORES = Math.max(2, Math.min(10, (navigator.hardwareConcurrency || 4) - 2));
 // Budget multipliers over the phone's settings, and the turn solver's time per worker.
-const POWER = { mc: 24, plan: 8, river: 8, preflop: 8 };
+// River 4,000 and preflop 4,800 iterations: with the kernels they take about 0.2-0.7 s and 1-2.5 s.
+const POWER = { mc: 24, plan: 8, river: 16, preflop: 16 };
 // The turn solve runs for about 30% of the time left on the game's clock (2.5-8 s; 6 s if
 // unknown). The quick read on the spare worker shows something within about a second meanwhile.
 const turnMs = (input) => (input.timeLeftMs > 0 ? Math.max(2500, Math.min(8000, 0.3 * input.timeLeftMs)) : 6000);
-const PREFLOP_MS = 1500;
+const PREFLOP_MS = 2500;
 // Flops: the flop solver (flop and turn solved together, river checked down) on every worker
 // for the same time as a turn solve, averaged like the turn. Off: the Monte Carlo decides.
 const FLOP_SOLVER = false;
