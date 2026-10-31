@@ -47,7 +47,7 @@ test/                    replay.test.js and blueprint.test.js (node), fuzz.js (r
                          (synth-showdown.json: heads-up hand that ends with the opponent's cards shown;
                          real-multiway-flops.json: three real 3-4 way flop inputs, names removed).
                          sim/exploit.js: friend bots with one tendency pushed hard (river bluffs, light 3-bets,
-                         overbets, barrels, or `adapt`: all pushed as far as hero over-folds) and what calling each
+                         overbets, barrels, `sticky`: punishes hero's postflop raises, or `adapt`: all pushed as far as hero over-folds) and what calling each
                          bet hero faced would have been worth.
 ```
 
@@ -134,7 +134,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   to the Monte Carlo.
 - Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
   one Discounted CFR. Turn: hero 33/66/100% pot, opponent their size, one raise; each line that reaches the river gets
-  a river subgame per card (built lazily; OOP first, hero 50/100%, one raise); each iteration samples 6 river cards
+  a river subgame per card (built lazily; OOP first, hero 33/66/100% (was 50/100%: +17 ± 12 bb/100 pooled over two
+  seeds of 1,000 4-handed deals, about 13% fewer iterations per second), one raise); each iteration samples 6 river cards
   (`turnRiverSamples`), the final pass uses all 48. Hero and opponent hands are indexed separately and pruned
   (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
   line. Sizes are `turnBets`/`turnRiverBets`/`turnRaises` in the input (at most 3 bets or 2 raises, so a node has
@@ -254,9 +255,24 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   strategies there stayed near uniform where hero's hand rarely goes), and turn/flop subgames no iteration sampled
   play the current strategy. Frequencies and the chosen action are unchanged; only rarely played options' EVs rise.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
-  the owner's home game: friends call big bets far more than the old fold curve assumed. `modelFold` elasticity is
-  0.8*sqrt(ftb/0.45) and `foldAtSize` grows only 30% as fast above 1.1 pot. Against a raise, opponents continue
-  only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
+  the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
+  continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
+- Fold-by-size curve (#35): `modelFold` is log-odds linear in the bet size, logit(fold) = logit(ftb) +
+  0.9 ln(min(f, 0.8) / 0.33) + 0.2 ln(f / 0.8) above 0.8 pot (`FOLD_CURVE`); `ftb` is read as the fold rate against
+  a third of the pot. Fitted on the logs' first responses to postflop bets: 20% folds to min-bets, 35% at
+  0.15-0.25, 44% at 0.25-0.4, 52% at 0.4-0.55, 67-74% at 0.55-0.9, about 68% above (the old curve, elasticity 0.8
+  around 0.6 pot, said 33% at a third and 49-56% at 0.55-0.9). Face log-loss 0.903 -> 0.894 on three logs. Size
+  buckets keep the sizes seen (`vs.<bucket>.fs`/`fn`); `stats.sizeAnchor[bucket]` = (fs + 2 x center) / (fn + 2)
+  is where the bucket's rate sits in `foldAtSize` (min-bets used to pull the small bucket down). Sim vs v1.7.0:
+  +16.8 ± 14.5. Tried and dropped: calls as noisy as `rangeNoise` (-42 ± 16); taking the best-EV bet size instead
+  of the smallest within noise (+19 ± 14 alone, but 1.5x-pot overbets went from 4% to 9% of postflop bets, some
+  with weak hands: the winner's curse of an argmax over noisy sizes); exploit-weight scaling (already at its 0.95
+  cap for regulars).
+- Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
+  folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
+  26%). The model multiplies each player's multiway fold rate (about 38% for two). The friend bots are off the
+  same way (57% / 69% / 48%, two fold together 38%), so a change that answers at heads-up rates until someone
+  stays (patch in the project files, notes/mwfold-heads-up-until-someone-stays.patch, not merged) lost -27 ± 20 against them; it waits for bots that match the logs.
 - Simulator results (`test/sim/run.js`: duplicate deals, luck-corrected bb/100 ± SE; the old `sim.js`/`sim-multi.js`
   figures were much noisier and are dropped). 4-handed vs friend bots, 150bb: solver 225 ± 32 vs the simple baseline
   bot 97 ± 26 (+128 ± 35, 1,000 deals, v1.4.0). Multiway preflop solver on vs off: +39 ± 18 (2,000 deals; the
@@ -267,7 +283,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   about +12 ± 15); multiway preflop on the refit bots (limpers fold like the
   friends) +31 ± 18; v1.4.0 vs v1.5.0 main +13 ± 21 4-handed, +12 ± 22 heads-up; side-pot gate (#21) +28 ± 16; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
   against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals); lookahead lines (v1.7.0, LINE_SOFT 0.5) +27 ± 15
-  4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22. Bots are simple; this is a regression check, not proof
+  4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22; turn solver river
+  sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds. Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
