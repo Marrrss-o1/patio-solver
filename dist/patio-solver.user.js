@@ -5224,8 +5224,9 @@ function ENGINE() {
      * the trained one keep the old advice.
      *
      * The blend is opt-in (input.blueprint === true): in the friends simulator it lost, 3-handed
-     * -10 +- 19 bb/100 and 4-handed -26 +- 14 even with a light touch (it folds the blinds too
-     * often and slow-plays big pairs against players who call too much). By default the
+     * -10 +- 19 bb/100, 4-handed -26 +- 14 even with a light touch and -32 +- 13 on the flop to
+     * river only (it folds the blinds too often and slow-plays big pairs against players who
+     * call too much). By default the
      * blueprint's frequencies are only reported (panel line, hand log), the advice is unchanged.
      */
     function blueprintBlend(ranked, engineBest) {
