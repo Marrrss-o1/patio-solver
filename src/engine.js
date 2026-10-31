@@ -4290,6 +4290,18 @@
     const bigBlind = input.bigBlind > 0 ? +input.bigBlind : 1;
     const tableStyle = input.tableStyle || 'typical';
     const streetName = ['preflop', null, null, 'flop', 'turn', 'river'][street];
+    // The pot hero can win: without the part of an opponent's bet that hero is too short to
+    // match (it goes back to them, or to a side pot between the others).
+    const potWin = Math.max(0, pot - uncalledChips(input, stack));
+    // Chips behind for each opponent (Infinity when unknown); 0 means all-in, so they can't fold.
+    const oppLeft = new Float64Array(input.opponents.length).fill(Infinity);
+    input.opponents.forEach((o, i) => { if (o.stack != null && o.stack >= 0) oppLeft[i] = o.stack; });
+    const allIn = (i) => oppLeft[i] <= 1e-9;
+    // What opponent i still has to put in for hero's `amt` now to be matched, counting chips
+    // they already put in this street (blinds, an earlier call). Null when the input lacks them.
+    const owe = (i, amt) => (input.heroBet != null && input.opponents[i].bet != null
+      ? Math.max(0, +input.heroBet + amt - input.opponents[i].bet) : null);
+    const oweOr = (i, amt, fallback) => { const x = owe(i, amt); return x == null ? fallback : x; };
 
     const strengths = { 0: boardStrength([]) };
     if (street >= 3) strengths[3] = boardStrength(board.slice(0, 3));
@@ -4381,7 +4393,8 @@
     for (const sc of scenarios) {
       sc.opp = opps.map((o, i) => {
         const stay = { cont: 1, nut: 0, add: 0 };
-        if (sc.kind === 'fold') return stay;
+        // A player who is already all-in can't fold or re-raise: their chips go to showdown.
+        if (sc.kind === 'fold' || allIn(i)) return stay;
         if (sc.kind === 'check') {
           if (street === 0 && o.pending) return Object.assign(continueRule(o, ctx, 0.6, { amount: 0 }), { add: 0 });
           return stay;
@@ -4391,7 +4404,7 @@
           if (!o.pending) return stay;
           if (i === bigBlindSeat) return { cont: 1, nut: 0, add: 0, reraise: clamp(o.stats.pfr * 0.6, 0.02, 0.2) };
           const rule = continueRule(o, ctx, pot / (pot + toCall), { amount: toCall });
-          rule.add = toCall;
+          rule.add = oweOr(i, toCall, toCall);
           rule.reraise = street === 0 ? clamp(toCall <= bigBlind ? o.stats.pfr : o.stats.pfr * 0.4, 0.02, 0.3) : Math.min(rule.reraise, rule.cont);
           if (toCall >= stack) rule.reraise = 0;
           return rule;
@@ -4401,15 +4414,15 @@
         const openTo = street === 0 && toCall <= bigBlind + 1e-9 ? sc.amount + bigBlind - toCall : 0;
         const learned = i === bigBlindSeat && openTo ? vsOpenRead(o.stats, openTo / bigBlind) : null;
         if (learned) {
-          rule = { cont: learned.cont, nut: 0.965, reraise: learned.threeBet, add: sc.amount - bigBlind };
+          rule = { cont: learned.cont, nut: 0.965, reraise: learned.threeBet, add: oweOr(i, sc.amount, sc.amount - bigBlind) };
         } else if (i === bigBlindSeat) {
           const big = clamp((sc.amount / bigBlind - 4) / 4, 0, 1);
           const cont = clamp(Math.max(o.stats.vpip * 1.6 * Math.sqrt((2.5 * bigBlind) / sc.amount), big * (o.stats.callBig != null ? o.stats.callBig : 0.25)), 0.05, 0.9);
-          rule = { cont, nut: 0.965, reraise: clamp(o.stats.pfr * 0.4, 0.02, 0.12) / Math.max(cont, 0.05), add: sc.amount - bigBlind };
+          rule = { cont, nut: 0.965, reraise: clamp(o.stats.pfr * 0.4, 0.02, 0.12) / Math.max(cont, 0.05), add: oweOr(i, sc.amount, sc.amount - bigBlind) };
         } else {
           const mdf = o.pending ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
           rule = continueRule(o, ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, openTo });
-          rule.add = o.pending ? sc.amount : sc.amount - toCall;
+          rule.add = oweOr(i, sc.amount, o.pending ? sc.amount : sc.amount - toCall);
           if (!(street === 0 && o.pending)) rule.reraise = Math.min(rule.reraise, rule.cont);
         }
         if (sc.amount >= stack) rule.reraise = 0;
@@ -4463,10 +4476,7 @@
 
     // Side pots. With each player's chips in the pot so far (`committed`) and behind
     // (`stack`), an all-in player can only win what they matched from each other player.
-    const oppLeft = new Float64Array(opps.length).fill(Infinity);
-    input.opponents.forEach((o, i) => { if (o.stack != null && o.stack >= 0) oppLeft[i] = o.stack; });
-    const sidePots = input.heroCommitted != null && input.opponents.every((o) => o.committed != null) &&
-      input.opponents.some((o) => o.stack != null && o.stack < (isFinite(stack) ? stack : Infinity));
+    const sidePots = hasSidePots(input, stack);
     const contrib = new Float64Array(opps.length + 1);
     function sidePotWin(heroAdd, heroScore) {
       let committedSum = input.heroCommitted;
@@ -4525,10 +4535,11 @@
     // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
     // this decision. Bet the remaining streets with both strategies and return hero's gain.
     // Either side can raise once per street; hero only bluffs the river.
-    function playOut(i, P, heroIn, share, rng, startCur, v, from) {
+    // `room`: the opponent's chips behind, so bets never go past what they can put in.
+    function playOut(i, P, heroIn, share, rng, startCur, v, from, room) {
       const plan = planFor(i, v);
       const oc = oppCombo[i];
-      let left = stack - heroIn, extra = 0;
+      let left = Math.min(stack - heroIn, room != null ? room : Infinity), extra = 0;
       for (let s = from != null ? from : startCur ? street : street + 1; s <= 5; s++) {
         if (left <= 0) break;
         const t = plan[s];
@@ -4628,7 +4639,7 @@
         if (aliveCount() === 1) {
           const i = lastAlive();
           const share = heroScore > oppScore[i] ? 1 : heroScore === oppScore[i] ? 0.5 : 0;
-          return playOut(i, P, heroIn + extra, share, rng, false, v, s);
+          return playOut(i, P, heroIn + extra, share, rng, false, v, s, oppLeft[i] - addNow[i] - extra);
         }
         const sh = strengthAt(s, heroCombo);
         multiState.fill(0);
@@ -4757,7 +4768,7 @@
         } else {
           cards[0] = hero[0]; cards[1] = hero[1];
           const hs = evaluate(cards, 7);
-          let best = hs, nBest = 1, heroBest = true, finalPot = pot + sc.amount;
+          let best = hs, nBest = 1, heroBest = true, finalPot = potWin + sc.amount;
           for (let i = 0; i < opps.length; i++) {
             if (!oppIn[i]) continue;
             addNow[i] = Math.min(sc.opp[i].add, oppLeft[i]);
@@ -4776,8 +4787,9 @@
           for (let i = 0; i < opps.length; i++) if (oppIn[i]) { inCount++; lastIn = i; }
           if (lookahead && inCount === 1 && sc.amount < stack && oppLeft[lastIn] > addNow[lastIn]) {
             const startCur = sc.kind === 'check' && opps[lastIn].pending;
-            gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, 0);
-            for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v);
+            const room = oppLeft[lastIn] - addNow[lastIn];
+            gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, 0, null, room);
+            for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v, null, room);
             sc.looked++;
           } else if (lookahead && inCount >= 2 && sc.amount < stack && !sidePots) {
             const list = [];
@@ -4786,10 +4798,13 @@
             gain = playOutMulti(list, finalPot, sc.amount, hs, rng, 0, startCur);
             for (let v = 1; v < VARIANTS.length; v++) varGain[v] = playOutMulti(list, finalPot, sc.amount, hs, rng, v, startCur);
             sc.looked++;
-          } else if (sidePots) {
-            gain = sidePotWin(sc.amount, hs) * (sc.amount >= stack ? 1 : realize) - sc.amount;
           } else {
-            gain = share * (sc.amount >= stack ? 1 : realize) * finalPot - sc.amount;
+            // No discount for future streets when nobody can bet any more (hero or every
+            // opponent still in is all-in): the hand just runs out.
+            let canBet = false;
+            if (sc.amount < stack) for (let i = 0; i < opps.length; i++) if (oppIn[i] && oppLeft[i] - addNow[i] > 1e-9) canBet = true;
+            const rz = canBet ? realize : 1;
+            gain = sidePots ? sidePotWin(sc.amount, hs) * rz - sc.amount : share * rz * finalPot - sc.amount;
           }
           sc.showdowns++;
           sc.shareSum += share;
@@ -4830,7 +4845,7 @@
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
         aggScale: o.aggroLine ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
-        pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+        pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
       });
@@ -4849,7 +4864,7 @@
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
         aggScale: o.aggroLine ? aggS : 1, aggScaleIfAgg: aggS,
-        pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+        pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending, heroIP: inPosition,
         iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
         turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises,
@@ -4974,7 +4989,7 @@
           },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroLine) ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
-          pot, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+          pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,
         });
@@ -5024,7 +5039,7 @@
       const pendingOpps = opps.filter((o) => o.pending);
       const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed) : null;
       const pf = preflopSolve({
-        heroW: heroCw, oppW: oppCw, heroClass: hc, pot, toCall, stack: E, bigBlind, heroIP: inPosition,
+        heroW: heroCw, oppW: oppCw, heroClass: hc, pot: potWin, toCall, stack: E, bigBlind, heroIP: inPosition,
         rootActs: raisesSc.map((s) => ({ amount: capE(s.amount) })),
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
@@ -5123,17 +5138,17 @@
         win: base.showdowns ? base.wins / base.showdowns : 1,
         tie: base.showdowns ? base.ties / base.showdowns : 0,
       } : null;
-      const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
+      const potOdds = toCall > 0 ? toCall / (potWin + toCall) : 0;
       const heroInfo = describeHero(hero, board);
 
       let impliedOddsNeeded = null;
       if (toCall > 0 && equity && street > 0 && street < 5 && passive && passive.ev < 0 && equity.share > 0) {
-        const need = toCall / equity.share - pot - toCall;
+        const need = toCall / equity.share - potWin - toCall;
         if (need > 0 && need < stack) impliedOddsNeeded = need;
       }
 
       return {
-        street, streetName, pot, toCall, stack, bigBlind, realize, inPosition, lookahead,
+        street, streetName, pot, potWin, toCall, stack, bigBlind, realize, inPosition, lookahead,
         scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight,
         credibility,
         solver: solved ? { kind: solved.kind || 'river', iterations: solved.iterations, runs: solved.runs || 1, exploitWeight: opps[0].stats.exploitWeight, field: solved.field || solved.multiway || 0 } : null,
@@ -5219,10 +5234,25 @@
     }
     if (street === 5) {
       const stack = input.stack > 0 ? +input.stack : Infinity;
-      const sidePots = input.heroCommitted != null && opps.every((o) => o.committed != null) && opps.some((o) => o.stack != null && o.stack < stack);
-      return n === 1 || (n <= 5 && !sidePots) ? 'river' : null;
+      return n === 1 || (n <= 5 && !hasSidePots(input, stack)) ? 'river' : null;
     }
     return null;
+  }
+
+  // Chips opponents have put in beyond the most hero can match (hero's chips in plus `stack`):
+  // a short hero facing a bigger bet can't win that part.
+  function uncalledChips(input, stack) {
+    if (input.heroCommitted == null || !isFinite(stack)) return 0;
+    const heroMax = +input.heroCommitted + stack;
+    let x = 0;
+    for (const o of input.opponents || []) if (o.committed != null && o.committed > heroMax + 1e-9) x += o.committed - heroMax;
+    return x;
+  }
+  // Side pots matter when someone is shorter than hero, or hero is shorter than a bet it faces.
+  function hasSidePots(input, stack) {
+    const opps = input.opponents || [];
+    return input.heroCommitted != null && opps.every((o) => o.committed != null) &&
+      (opps.some((o) => o.stack != null && o.stack < stack) || uncalledChips(input, stack) > 0);
   }
 
   function roundChips(x, bb) {

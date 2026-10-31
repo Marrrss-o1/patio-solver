@@ -763,7 +763,9 @@
         const cbetter = h.pfRaiser === o.id;
         return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
           // For side pots: chips already in the pot this hand, and chips behind.
-          committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null };
+          committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null,
+          // Chips in on this street (blinds count), so the engine knows what each still owes.
+          bet: o.stageBet };
       });
 
       return {
@@ -777,7 +779,7 @@
           // Hero's own line this hand, so the river solver knows what hero's range looks like.
           heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
           heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
-          heroCommitted: hero.total,
+          heroCommitted: hero.total, heroBet: hero.stageBet,
           // Every known opponent's counts added up, for the engine's table prior.
           pool: this.poolTally(),
           iterations: opponents.length > 2 ? 16000 : 24000,
