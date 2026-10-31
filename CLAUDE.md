@@ -137,6 +137,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   their read's strategy with weight `exploitWeight` and an adaptive one with the rest. Hero's range comes from
   `input.heroActions` (passed by the tracker) run through `buildRange` with `HERO_STYLE` stats. When it runs, its
   frequencies and EVs replace the Monte Carlo ranking, and the Monte Carlo is cut to 6000 iterations (equity only).
+- River boards that are a straight or better by themselves: hands that only play the board call any bet
+  (`boardPlayers`; Monte Carlo, river solver, turn solver's river subgames). They used to fold like air, so the
+  advice bluffed into players who could only chop (Marwin's log, 2d7h on Jd Qc Tc 9h 8c).
 - Counts decay 0.3% per hand a player is dealt into (`DECAY` = 0.997 in tracker.js, about 330 hands of memory; it
   was 1%, which forgot everything after ~100 hands), so they are floats. Round before display. Last 80 shows kept.
 - Preflop ranges are soft (`topClassWeights` uses a sigmoid edge, plus a small floor for every hand). Hard top-X%
