@@ -1229,8 +1229,11 @@ test('fuzz: random hands through the tracker match the table (chips, price, stac
       if (b.error) { bad.push(`${tag}: ${b.error}`); return; }
       const i = b.input;
       for (const f of ['pot', 'toCall', 'stack']) if (Math.abs(i[f] - w[f]) > 1e-9) bad.push(`${tag}: ${f} ${i[f]}, table says ${w[f]}`);
-      const mine = JSON.stringify(i.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP]));
-      const real = JSON.stringify(w.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP]));
+      // pending: no action yet on this street.
+      const nm = ['pre', null, null, 'flop', 'turn', 'river'][i.board.length];
+      const pending = (o) => (nm === 'pre' ? (o.actions.pre || 'pending') === 'pending' : !o.actions[nm]);
+      const mine = JSON.stringify(i.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP, pending(o)]));
+      const real = JSON.stringify(w.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP, o.pending]));
       if (mine !== real) bad.push(`${tag}: opponents ${mine}, table says ${real}`);
       if (h % 3 === 0) {
         const res = E.analyzeSync(Object.assign({}, i, { iterations: 400, riverIterations: 20, preflopIterations: 20, mix: false, seed: 1 }));
@@ -1239,6 +1242,37 @@ test('fuzz: random hands through the tracker match the table (chips, price, stac
     });
   }
   assert.ok(turns > 250, String(turns));
+  assert.deepStrictEqual(bad, []);
+});
+
+test('fuzz: extreme players (nit, maniac, station, always-raise, always-fold) keep reads finite and advice legal', () => {
+  const styles = {
+    A1: { fold: 0.85, call: 0.98, check: 0.95 }, A2: { fold: 0.02, call: 0.3, check: 0.1 }, A3: { fold: 0, call: 1, check: 0.9 },
+    A4: { fold: 0, call: 0, check: 0 }, A5: { fold: 1, call: 1, check: 1 }, A6: { fold: 0.5, call: 0.5, check: 0 },
+  };
+  const r = F.rng32(9);
+  const db = { players: {} };
+  const bad = [];
+  let checked = 0;
+  for (let h = 0; h < 120; h++) {
+    const hand = F.randomHand(r, { styles });
+    const t = new T(db);
+    t.scorer = (show, tally) => E.scoreShow(show, tally, 'home');
+    const got = [];
+    t.on((type, p) => { if (type === 'turn' && p.isHero) got.push(t.solverInput('home')); });
+    for (const m of hand.msgs) t.handle(m.ev, m.data, m.snap);
+    if (h < 60 || h % 2) continue; // reads build up first
+    got.forEach((b, k) => {
+      if (b.error) { bad.push(`hand ${h} turn ${k}: ${b.error}`); return; }
+      const i = b.input;
+      const res = E.analyzeSync(Object.assign({}, i, { iterations: 400, riverIterations: 20, preflopIterations: 20, mix: false, seed: 1,
+        turnSolver: true, turnIterations: 4, flopSolver: true, flopIterations: 2 }));
+      checked++;
+      for (const x of F.adviceProblems(i, res)) bad.push(`hand ${h} turn ${k}: ${x}`);
+      for (const o of res.opponents || []) for (const [key, v] of Object.entries(o.stats || {})) if (typeof v === 'number' && !isFinite(v)) bad.push(`hand ${h}: ${o.name} ${key} = ${v}`);
+    });
+  }
+  assert.ok(checked > 40, String(checked));
   assert.deepStrictEqual(bad, []);
 });
 

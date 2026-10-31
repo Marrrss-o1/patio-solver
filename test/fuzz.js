@@ -158,7 +158,7 @@ function randomHand(r, opts) {
   for (const [stage, cards] of stages) {
     if (alive().length < 2) break;
     if (cards) {
-      for (const p of P) p.street = 0;
+      for (const p of P) { p.street = 0; p.acted = false; }
       push('game:stage_began', { stageType: stage });
       const add = [];
       while (board.length < cards) { const c = deck.pop(); board.push(c); add.push({ emitData: { stackID: 'community_stack', cardData: cardData(c, ++uid) } }); }
@@ -183,23 +183,26 @@ function randomHand(r, opts) {
         const at0 = post.indexOf(hero);
         truth.push({ street: board.length, pot: P.reduce((a, x) => a + x.put, 0), toCall: Math.min(facing, stack), stack,
           opponents: post.slice(at0 + 1).concat(post.slice(0, at0)).filter((x) => !x.folded)
-            .map((x) => ({ name: x.name, committed: x.put, stack: x.stack, bet: x.street, heroIP: post.indexOf(x) < at0 })) });
+            .map((x) => ({ name: x.name, committed: x.put, stack: x.stack, bet: x.street, heroIP: post.indexOf(x) < at0, pending: !x.acted })) });
       }
       push('game:player_turn_started', { playerID: p.id, playerPos: p.pos, turnTimeDurationMS: 23000, turnTimeElapsedMS: 0 });
-      // A random legal action.
+      // A random legal action, by the player's style (opts.styles by auth id: cumulative chances
+      // to fold and to call facing a bet, to check otherwise; the rest raise or bet).
       const u = r();
+      const st = (o.styles && o.styles[p.auth]) || { fold: 0.25, call: 0.75, check: 0.55 };
+      p.acted = true;
       let type, amt = 0;
       const othersCanCall = alive().some((x) => x !== p && x.stack > 0);
       if (facing > 0) {
-        if (u < 0.25) type = 'fold';
-        else if (u < 0.75 || p.stack <= facing || !othersCanCall) { type = 'call'; amt = Math.min(facing, p.stack); }
+        if (u < st.fold) type = 'fold';
+        else if (u < st.call || p.stack <= facing || !othersCanCall) { type = 'call'; amt = Math.min(facing, p.stack); }
         else {
           const minTo = current + lastInc;
           const maxTo = p.street + p.stack;
           const to = Math.min(maxTo, Math.round(minTo + r() * r() * Math.max(0, maxTo - minTo)));
           type = 'raise'; amt = to - p.street;
         }
-      } else if (u < 0.55) type = 'check';
+      } else if (u < st.check) type = 'check';
       else { type = 'raise'; amt = Math.min(p.stack, Math.max(bb, Math.round(r() * r() * p.stack))); }
       if (type === 'fold') {
         push('player:game:player_play_state_changed', { newPlayState: 'folded', userId: p.auth });
