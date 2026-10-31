@@ -21,6 +21,13 @@
     const n = parseInt(String(pos).replace(/\D/g, ''), 10);
     return isNaN(n) ? 0 : n;
   }
+  // Where a seat sits going clockwise. Seats run in ascending number, except the extra seat
+  // 's3_v2' (its digits read as 32), which sits between s9 and s10 at the owner's tables
+  // (preflop action order in the live hand logs).
+  const SEAT_KEY = { s3_v2: 9.5 };
+  function seatKey(pos) {
+    return Object.prototype.hasOwnProperty.call(SEAT_KEY, pos) ? SEAT_KEY[pos] : seatNum(pos);
+  }
   const MAX_SHOWS = 80;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 10 KB a hand).
@@ -186,7 +193,12 @@
           break;
         }
         case 'game:dealer_updated':
-          if (h) h.dealerPos = data.dealerSeatPos;
+          if (h) {
+            h.dealerPos = data.dealerSeatPos;
+            h.sbPos = data.smallBlindSeatPos || null;
+            h.bbPos = data.bigBlindSeatPos || null;
+            h.utgPos = data.underTheGunSeatPos || null;
+          }
           break;
         case 'game:small_blind_paid':
         case 'game:big_blind_paid': {
@@ -619,12 +631,21 @@
     }
 
     // Players in postflop order: small blind first, button last.
-    // (Assumes seats run clockwise in ascending number; see CLAUDE.md.)
+    // The server names the dealer, both blinds and UTG each hand, so those are pinned; only
+    // players between UTG and the dealer (6+ handed) rely on the seat order (seatKey).
     seatOrder() {
       const h = this.hand;
-      const all = Object.values(h.players).sort((a, b) => seatNum(a.pos) - seatNum(b.pos));
-      const dealerN = seatNum(h.dealerPos);
-      return all.filter((p) => seatNum(p.pos) > dealerN).concat(all.filter((p) => seatNum(p.pos) <= dealerN));
+      const all = Object.values(h.players).sort((a, b) => seatKey(a.pos) - seatKey(b.pos));
+      const dealerK = seatKey(h.dealerPos);
+      const ring = all.filter((p) => seatKey(p.pos) > dealerK).concat(all.filter((p) => seatKey(p.pos) <= dealerK));
+      if (ring.length < 3) return ring;
+      const at = (pos) => (pos ? ring.find((p) => p.pos === pos) : null);
+      const dealer = at(h.dealerPos);
+      const head = [];
+      for (const p of [at(h.sbPos), at(h.bbPos), at(h.utgPos)]) if (p && p !== dealer && !head.includes(p)) head.push(p);
+      if (!head.length) return ring;
+      const rest = ring.filter((p) => p !== dealer && !head.includes(p));
+      return head.concat(rest, dealer ? [dealer] : []);
     }
 
     // 'blinds', 'late' (button and cutoff) or 'early'. Heads-up the button is 'late'.

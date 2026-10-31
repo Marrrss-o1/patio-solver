@@ -1125,5 +1125,32 @@ test('multiway: position is taken against each opponent, not the whole table', (
   assert.ok(bet(ip) > bet(oop) + 3, `${bet(ip)} vs ${bet(oop)}`);
 });
 
+// Real 5-handed hand (names anonymized). Seats s1, s7, s8, s3_v2, s10; the server's blinds
+// and preflop action order put s3_v2 between s8 and s10, although its digits read as 32.
+const fiveV2 = require(path.join(__dirname, 'fixtures/real-5handed-seat-v2.json'));
+function seatsAtFirstTurn(msgs) {
+  const t = new T({ players: {} });
+  let first = null;
+  t.on((type, p) => {
+    if (type === 'turn' && p.isHero && !first) first = { order: t.seatOrder().map((x) => x.pos), b: t.solverInput('typical') };
+  });
+  for (const m of msgs) t.handle(m.ev, m.data, m.snap);
+  return first;
+}
+
+test('seat order: the s3_v2 seat sits between s9 and s10, blinds and UTG come from the server', () => {
+  const x = seatsAtFirstTurn(fiveV2);
+  assert.deepStrictEqual(x.order, ['s10', 's1', 's7', 's8', 's3_v2']);
+  const i = x.b.input;
+  assert.strictEqual(i.heroPosition, 'early');
+  assert.strictEqual(i.inPosition, false);
+  assert.deepStrictEqual(i.opponents.map((o) => [o.name, o.position, o.heroIP]),
+    [['P2', 'late', false], ['P4', 'late', false], ['P3', 'blinds', true], ['P1', 'blinds', true]]);
+  // Without the blinds and UTG in dealer_updated (older recordings), the seat order alone
+  // gives the same ring.
+  const bare = fiveV2.map((m) => (m.ev === 'game:dealer_updated' ? Object.assign({}, m, { data: { dealerSeatPos: m.data.dealerSeatPos } }) : m));
+  assert.deepStrictEqual(seatsAtFirstTurn(bare).order, x.order);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
