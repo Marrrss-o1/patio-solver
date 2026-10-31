@@ -58,6 +58,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Read accuracy: when an opponent shows cards, `tracker.scorer` (set by both UIs to `PokerEngine.scoreShow`) stores
   `fit = { top, lr, sq }` on the show. `computeStats` turns these into `accuracy`, a trust factor, and
   `strengthBias`, which tilts that player's ranges weaker or stronger in `buildRange`.
+- River solver (`riverSolve` in engine.js): heads-up river spots only. Discounted CFR over hero's range vs the
+  opponent's, with hero bets of 50/100/200% pot, the opponent's usual bet size and one raise. The opponent plays
+  their read's strategy with weight `exploitWeight` and an adaptive one with the rest. Hero's range comes from
+  `input.heroActions` (passed by the tracker) run through `buildRange` with typical-player stats. When it runs, its
+  frequencies and EVs replace the Monte Carlo ranking, and the Monte Carlo is cut to 6000 iterations (equity only).
 - Counts decay 1% per hand a player is dealt into (`DECAY` in tracker.js), so they are floats. Round before display.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
@@ -70,8 +75,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Joining mid-hand: tracking starts at the next `set_blinds`.
 - Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
-- Ideas: real-time river range-vs-range solver (CFR), raises inside the lookahead, lookahead for multiway pots and
-  preflop, a model of hero's own range, side pots, syncing reads between devices.
+- Ideas: raises inside the lookahead, lookahead for multiway pots and preflop, using hero's range on earlier streets,
+  side pots. (Syncing reads between devices is not wanted: the owner keeps phone and computer separate.)
 
 ## Testing limits in the cloud sandbox
 

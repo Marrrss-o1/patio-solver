@@ -45,7 +45,10 @@ Also works with Tampermonkey / Violentmonkey on desktop browsers and Firefox for
    highest average result is recommended. It also checks each option against versions of the opponent who fold,
    call or bluff more than the read says, and prefers options that hold up. When two options are close it shows a
    mix (for example "Bet 60% · Check 40%") and picks one at random, so your play doesn't become predictable.
-5. **Review.** "Hand log" downloads your last 150 hands with everyone's actions, shown cards and the advice given.
+5. **River solve.** On the river against one player, it solves your whole range against theirs (the same kind of
+   real-time solving the strongest poker bots use), with their tendencies built in. The panel shows how often to
+   play each option, so it can tell you to bluff some hands and call down with the right bluff-catchers.
+6. **Review.** "Hand log" downloads your last 150 hands with everyone's actions, shown cards and the advice given.
 
 See `docs/protocol.md` for the game's message format and `CLAUDE.md` for developer notes.
 
