@@ -24,7 +24,9 @@ const NAMES_OUT = opt('names', null);
 const BB = 2, STACK = 300;
 
 // ---------- targets ----------
-const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+// Exports overlap (each holds the last 150 hands), so hands are taken once by their time stamp.
+const seenT = new Set();
+const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8'))).filter((h) => (h.t == null || !seenT.has(h.t)) && (seenT.add(h.t), true));
 const tallies = prof.profileEntries(entries);
 const names = Object.keys(tallies).filter((n) => tallies[n].hands >= MIN_HANDS).sort((a, b) => tallies[b].hands - tallies[a].hands);
 const pool = prof.summarize(prof.mergeTallies(Object.values(tallies)));
@@ -39,6 +41,7 @@ const STATS = [
   ['vsOpen3b', (s) => s.vsOpen3b, (s) => s.vsOpenN, 0.12, 10],
   ['callBig', (s) => s.callBig, (s) => s.callBigN, 0.45, 10],
   ['openSize', (s) => s.openSize, (s) => s.unopenedN * (s.openRaise || 0), 4, 6],
+  ['openShove', (s) => s.openShove, (s) => s.openShoveN, 0.02, 8],
   ['betPct', (s) => s.betPct, (s) => s.betPctN, 0.5, 8],
 ];
 for (const st of ['flop', 'turn', 'river']) {
@@ -51,6 +54,13 @@ const poolT = {};
 for (const [k, get, nOf, prior, K] of STATS) {
   const x = get(pool), n = nOf(pool) || 0;
   poolT[k] = x == null ? prior : prior == null ? x : (n * x + K * prior) / (n + K);
+}
+// Shove-opening is one or two players' habit, not the table's: for players without their own numbers it
+// comes from the average friend (each shrunk toward the prior), not from everyone's opens lumped together.
+{
+  const [k, get, nOf, prior, K] = STATS.find((x) => x[0] === 'openShove');
+  const per = names.map((nm) => real[nm]).filter((s) => nOf(s) > 0).map((s) => (nOf(s) * get(s) + K * prior) / (nOf(s) + K));
+  if (per.length) poolT[k] = per.reduce((a, b) => a + b, 0) / per.length;
 }
 function targetsFor(s) {
   const t = {};
@@ -67,9 +77,10 @@ targets.pool = Object.assign({}, poolT);
 // The hero (Marwin following the advice) is calibrated too and sits in the fourth seat, so the
 // friends face bets about as often as they did at the real table.
 const heroTallies = prof.profileEntries(entries, { includeHero: true });
-const heroName = (entries.find((h) => h.players.some((p) => p.hero)) || { players: [] }).players.find((p) => p.hero);
-if (heroName && heroTallies[heroName.name]) {
-  real.__hero = prof.summarize(heroTallies[heroName.name]);
+// Hero's screen name changes between sessions: pool every name hero played under.
+const heroNames = [...new Set(entries.flatMap((h) => h.players.filter((p) => p.hero).map((p) => p.name)))];
+if (heroNames.some((n) => heroTallies[n])) {
+  real.__hero = prof.summarize(prof.mergeTallies(heroNames.filter((n) => heroTallies[n]).map((n) => heroTallies[n])));
   ids.push('hero');
   targets.hero = targetsFor(real.__hero);
 }
@@ -84,7 +95,7 @@ for (const id of ids) {
   const t = targets[id];
   const p = clone(bots.HOME_DEFAULT);
   p.vpip = t.vpip; p.pfr = t.pfr; p.cont = 1 - t.vsOpenFold; p.threeBet = t.vsOpen3b; p.callBig = t.callBig;
-  p.openBB = t.openSize; p.betSize = t.betPct;
+  p.openBB = t.openSize; p.betSize = t.betPct; p.openShove = t.openShove;
   params[id] = p;
 }
 // [stat, param, index or null, direction, step, lo, hi, mode]
@@ -95,6 +106,7 @@ const CTRL = [
   ['vsOpen3b', 'threeBet', null, 1, 0.8, 0.005, 0.5],
   ['callBig', 'callBig', null, 1, 0.6, 0.05, 0.9],
   ['openSize', 'openBB', null, 1, 0.7, 2, 10, 'ratio'],
+  ['openShove', 'openShove', null, 1, 0.8, 0, 0.8],
   ['betPct', 'betSize', null, 1, 0.7, 0.15, 1.2, 'ratio'],
 ];
 ['flop', 'turn', 'river'].forEach((st, i) => {

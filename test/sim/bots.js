@@ -142,6 +142,7 @@ const HOME_DEFAULT = {
   rrDecay: 0.55,     // each further raise multiplies the re-raise share by this
   callBig: 0.4,      // continues vs a raise of 8bb or more (or a shove) with this share
   openBB: 4.4,       // open size in big blinds (plus one per limper)
+  openShove: 0,      // share of their open-raises that are all-in instead
   rrMin: 0.5,        // share of re-raises that are min-raises (min-raise wars); the rest ~2.2x
   // Postflop, per street [flop, turn, river]; thresholds are made-hand percentiles vs all hands
   val: [0.78, 0.8, 0.8],      // value-bet threshold when checked to
@@ -184,7 +185,9 @@ function homeBot(params) {
           const out = [];
           const open = Math.max(2, P.openBB) * bb + bb * v.limpers;
           // Open sizes spread around their usual size.
-          for (const [m, q] of [[0.6, 0.2], [1, 0.55], [1.5, 0.25]]) out.push({ t: 'raise', to: Math.max(2 * bb, Math.round(open * m / bb) * bb), p: pR * q });
+          const sh = P.openShove || 0;
+          for (const [m, q] of [[0.6, 0.2], [1, 0.55], [1.5, 0.25]]) out.push({ t: 'raise', to: Math.max(2 * bb, Math.round(open * m / bb) * bb), p: pR * q * (1 - sh) });
+          if (sh > 0) out.push({ t: 'raise', to: allinTo, p: pR * sh });
           out.push({ t: toCall > 0 ? 'call' : 'check', p: pPlay - pR });
           out.push({ t: toCall > 0 ? 'fold' : 'check', p: 1 - pPlay });
           return out;

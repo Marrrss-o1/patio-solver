@@ -77,6 +77,9 @@ function srcForRef(ref) {
   execSync(`git archive ${ref} src | tar -x -C ${JSON.stringify(dir)}`, { cwd: ROOT });
   return path.join(dir, 'src');
 }
+function commitOf(ref) {
+  try { return execSync(`git rev-parse ${ref || 'HEAD'}`, { cwd: ROOT }).toString().trim() + (ref ? '' : '+worktree'); } catch (e) { return String(ref); }
+}
 
 function buildConfig(args) {
   const n = +(args.players || 2);
@@ -87,9 +90,9 @@ function buildConfig(args) {
   const env = envSolverOpts();
   const parse = (s) => (s ? JSON.parse(s) : {});
   const bp = (k) => (args[k] === true ? '' : args[k] != null ? String(args[k]) : undefined);
-  const variants = [{ name: 'A', agent: String(args.agent || 'solver'), src: srcForRef(args['a-ref']), ref: args['a-ref'] || 'working tree', solver: Object.assign({}, env, parse(args['a-opts'])), bp: bp('a-bp') }];
+  const variants = [{ name: 'A', agent: String(args.agent || 'solver'), src: srcForRef(args['a-ref']), ref: args['a-ref'] || 'working tree', commit: commitOf(args['a-ref']), solver: Object.assign({}, env, parse(args['a-opts'])), bp: bp('a-bp') }];
   if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null) {
-    variants.push({ name: 'B', agent: String(args['b-agent'] || args.agent || 'solver'), src: srcForRef(args['b-ref']), ref: args['b-ref'] || 'working tree', solver: Object.assign({}, env, parse(args['b-opts'])), bp: bp('b-bp') });
+    variants.push({ name: 'B', agent: String(args['b-agent'] || args.agent || 'solver'), src: srcForRef(args['b-ref']), ref: args['b-ref'] || 'working tree', commit: commitOf(args['b-ref']), solver: Object.assign({}, env, parse(args['b-opts'])), bp: bp('b-bp') });
   }
   return {
     n, bots: botsSpec, bb, sb: bb / 2, stack: Math.round(+(args.stack || (home ? 150 : 100)) * bb),
@@ -216,12 +219,34 @@ function summarize(cfg, results, sec) {
   return { sum, deals };
 }
 
+// Finished blocks are appended to test/out/sim-<tag>.blocks.jsonl, keyed by everything that affects them, so a
+// run that was cut off (the cloud container can be reclaimed) picks up where it stopped when started again.
+function blockKey(cfg) {
+  const crypto = require('crypto');
+  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp]);
+  const k = [cfg.n, cfg.bots, cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
+  return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
+}
 function runMain(cfg) {
   const blocks = Math.ceil(cfg.hands / cfg.block);
-  const queue = Array.from({ length: blocks }, (_, i) => i);
   const results = [];
+  let saveFile = null;
+  const key = blockKey(cfg);
+  if (cfg.tag) {
+    saveFile = path.join(ROOT, 'test', 'out', `sim-${cfg.tag}.blocks.jsonl`);
+    fs.mkdirSync(path.dirname(saveFile), { recursive: true });
+    if (fs.existsSync(saveFile)) {
+      for (const line of fs.readFileSync(saveFile, 'utf8').split('\n')) {
+        if (!line) continue;
+        try { const r = JSON.parse(line); if (r.key === key && r.block < blocks && !results.some((x) => x.block === r.block)) results.push(r); } catch (e) { /* torn line */ }
+      }
+      if (results.length && !cfg.quiet) process.stderr.write(`resuming: ${results.length} blocks already done\n`);
+    }
+  }
+  const queue = Array.from({ length: blocks }, (_, i) => i).filter((b) => !results.some((x) => x.block === b));
+  if (!queue.length) return Promise.resolve(summarize(cfg, results, 0));
   const t0 = Date.now();
-  const nw = Math.min(cfg.workers, blocks);
+  const nw = Math.min(cfg.workers, queue.length);
   return new Promise((resolve, reject) => {
     let live = nw;
     for (let w = 0; w < nw; w++) {
@@ -229,6 +254,7 @@ function runMain(cfg) {
       const feed = () => { if (queue.length) worker.postMessage(queue.shift()); else worker.postMessage(null); };
       worker.on('message', (m) => {
         results.push(m);
+        if (saveFile) fs.appendFileSync(saveFile, JSON.stringify(Object.assign({ key }, m)) + '\n');
         if (!cfg.quiet) {
           const done = results.reduce((a, b) => a + b.deals.length, 0);
           const partial = summarize(cfg, results, (Date.now() - t0) / 1000).sum;

@@ -1,9 +1,25 @@
 // Where does an A/B difference come from? Splits the paired, luck-corrected difference B - A by hero's
 // position and by starting-hand group, using the per-hand records in test/out/sim-<tag>.json.
 //   node test/sim/diff.js test/out/sim-<tag>.json
+//   node test/sim/diff.js <file>:<A|B> <file>:<A|B>   compares variants from two runs of the same deals
+//                                                     (same players, bots, seed, block and deal count)
 'use strict';
 const fs = require('fs');
-const { deals, sum } = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+let deals, sum;
+if (process.argv[3]) {
+  const pick = (arg) => { const m = /^(.*?)(?::([AB]))?$/.exec(arg); const r = JSON.parse(fs.readFileSync(m[1], 'utf8')); return { r, v: m[2] || 'A' }; };
+  const x = pick(process.argv[2]), y = pick(process.argv[3]);
+  for (const k of ['players', 'bots', 'stackBB', 'dup', 'aivat', 'warm', 'seed', 'block']) {
+    if (JSON.stringify(x.r.sum[k]) !== JSON.stringify(y.r.sum[k])) { console.log(`the runs differ in ${k}: ${JSON.stringify(x.r.sum[k])} vs ${JSON.stringify(y.r.sum[k])}`); process.exit(1); }
+  }
+  const nd = Math.min(x.r.deals.length, y.r.deals.length);
+  deals = []; for (let i = 0; i < nd; i++) {
+    const a = x.r.deals[i][x.v], b = y.r.deals[i][y.v];
+    if (a.rots && b.rots && a.rots.some((r, j) => r[0] !== b.rots[j][0] || r[1] !== b.rots[j][1])) { console.log(`deal ${i} holds different cards in the two runs`); process.exit(1); }
+    deals.push({ A: a, B: b });
+  }
+  sum = Object.assign({}, x.r.sum, { variants: { A: x.r.sum.variants[x.v], B: y.r.sum.variants[y.v] } });
+} else ({ deals, sum } = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')));
 if (!deals.length || !deals[0].B) { console.log('not an A/B run'); process.exit(0); }
 if (!deals[0].A.rots) { console.log('this run has no per-hand records (made before they were added)'); process.exit(0); }
 const n = sum.players;

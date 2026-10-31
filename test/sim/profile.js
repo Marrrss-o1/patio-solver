@@ -9,6 +9,9 @@ const E = require('../../src/engine.js');
 const STREETS = ['flop', 'turn', 'river'];
 const BOARD_N = { flop: 3, turn: 4, river: 5 };
 const r2 = (x) => Math.round(x * 1000) / 1000;
+// Opens this big (in bb) are shoves: counted apart, so a few all-in opens do not set the open size
+// or turn 'facing an open' into 'facing a shove'. Each bet's size is capped at 2x pot for the same reason.
+const SHOVE_BB = 12, BET_CAP = 2;
 
 function blank() {
   const st = () => ({ check: 0, bet: 0, fold: 0, call: 0, raise: 0 });
@@ -16,7 +19,7 @@ function blank() {
   return {
     hands: 0, vpip: 0, pfr: 0, pos: { early: pos(), late: pos(), blinds: pos() },
     // Preflop details (need the full action log, v1.2.2+):
-    pfLogHands: 0, unopened: 0, open: 0, limp: 0, unopenedFold: 0,
+    pfLogHands: 0, unopened: 0, open: 0, openShove: 0, limp: 0, unopenedFold: 0,
     vsOpen: 0, vsOpenFold: 0, vsOpenCall: 0, vsOpen3b: 0,
     vs3b: 0, vs3bFold: 0, vsBig: 0, vsBigCont: 0,
     openSizes: [], threeBetRatio: [],
@@ -86,10 +89,10 @@ function addLog(prof, h, bb, opts) {
     if (t) {
       if (raises === 0 && first && e.act !== 'check') {
         t.unopened++;
-        if (e.act === 'raise') { t.open++; t.openSizes.push(r2(e.to / bb)); }
+        if (e.act === 'raise') { t.open++; if (e.to >= SHOVE_BB * bb) t.openShove++; else t.openSizes.push(r2(e.to / bb)); }
         else if (e.act === 'call') t.limp++;
         else if (e.act === 'fold') t.unopenedFold++;
-      } else if (raises === 1 && !seen[e.who + ':vo'] && e.facing > 0) {
+      } else if (raises === 1 && lastTo < SHOVE_BB * bb && !seen[e.who + ':vo'] && e.facing > 0) {
         seen[e.who + ':vo'] = true;
         t.vsOpen++;
         if (e.act === 'fold') t.vsOpenFold++; else if (e.act === 'call') t.vsOpenCall++; else t.vsOpen3b++;
@@ -112,7 +115,7 @@ function addLog(prof, h, bb, opts) {
     if (e.st !== street) { street = e.st; betMade = false; for (const k of Object.keys(checked)) delete checked[k]; }
     const t = (e.who !== heroName || opts.includeHero) ? prof[e.who] : null;
     if (t) {
-      if ((e.act === 'bet') && e.potPct != null) t.betPct.push(e.potPct / 100);
+      if ((e.act === 'bet') && e.potPct != null) t.betPct.push(Math.min(BET_CAP, e.potPct / 100));
       if (e.act === 'raise' && e.facing > 0) t.raiseRatio.push(r2(e.to / Math.max(1, e.to - e.amt + e.facing)));
       if (e.facing > 0 && (e.act === 'fold' || e.act === 'call' || e.act === 'raise')) {
         const f = e.facing / Math.max(1, e.pot - e.facing);
@@ -141,7 +144,7 @@ function summarize(t) {
     vsOpenFold: ratio(t.vsOpenFold, t.vsOpen), vsOpen3b: ratio(t.vsOpen3b, t.vsOpen), vsOpenN: t.vsOpen,
     vs3bFold: ratio(t.vs3bFold, t.vs3b), vs3bN: t.vs3b,
     callBig: ratio(t.vsBigCont, t.vsBig), callBigN: t.vsBig,
-    openSize: mean(t.openSizes), threeBetRatio: mean(t.threeBetRatio),
+    openSize: mean(t.openSizes), openShove: ratio(t.openShove, t.open), openShoveN: t.open, threeBetRatio: mean(t.threeBetRatio),
     betPct: mean(t.betPct), betPctN: t.betPct.length, raiseRatio: mean(t.raiseRatio),
     cbet: ratio(t.cbet, t.cbetOpp), cbetN: t.cbetOpp, donk: ratio(t.donk, t.donkOpp), xr: ratio(t.xr, t.xrOpp),
     wtsd: ratio(t.wtsd, t.sawFlop), sawFlop: ratio(t.sawFlop, t.hands), sawFlopN: t.sawFlop, showdowns: t.showdowns,
