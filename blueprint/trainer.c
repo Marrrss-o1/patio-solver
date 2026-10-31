@@ -1,5 +1,5 @@
 /*
- * Patio Solver blueprint trainer: heads-up no-limit hold'em, self-play.
+ * Patio Solver blueprint trainer: no-limit hold'em for 2-6 players (equal stacks), self-play.
  *
  * External-sampling Monte Carlo CFR (the Pluribus recipe):
  *   - Linear CFR: regrets and strategy sums are discounted by k/(k+1) at regular intervals

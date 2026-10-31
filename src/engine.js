@@ -3446,6 +3446,11 @@
       const r = startBB / bpBB;
       const depth = r < 0.65 ? clamp((r - 0.35) / 0.3, 0, 1) : r > 1.5 ? clamp((2.2 - r) / 0.7, 0, 1) : 1;
       if (depth <= 0) return { used: false, info: { used: false, why: 'stack depth' } };
+      // Tuning switches: blueprintStreets ('0123' = preflop..river) limits the streets it is used on,
+      // blueprintOverSolver: false keeps a solver's answer (preflop, turn, river) where one ran.
+      const bpStreet = board.length ? board.length - 2 : 0;
+      if (input.blueprintStreets != null && String(input.blueprintStreets).indexOf(String(bpStreet)) < 0) return { used: false, info: { used: false, why: 'street' } };
+      if (solved && input.blueprintOverSolver === false) return { used: false, info: { used: false, why: 'solver' } };
       const adv = BP.advise({ hero, board, history: input.history, seats: input.seats, heroName: input.heroName, bigBlind, stack: isFinite(stack) ? stack : Infinity });
       if (adv.error) return { used: false, info: { used: false, why: adv.error } };
       const K = input.blueprintTemp || {};
