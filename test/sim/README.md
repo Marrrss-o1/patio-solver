@@ -77,7 +77,10 @@ bots, seed and block size), so a third arm can be added later without replaying 
   about 4.5x, and bet sizes shrink as the pot grows (about pot-size in pots under 6bb, a fifth of the pot above 25bb;
   log size on log pot slope -0.52, spread 0.63 around it), and a bettor who gets raised re-raises about 15% of
   the time (3 of 21 in the logs; the bots did 26% before this was fitted) and folds about 29% (not fitted; real 29%),
-  so the solver faces the cheap big-pot bets and the big
+  multiway, a first bet (25-110% pot) that nobody has called yet is answered about as heads-up (first to answer
+  folds 53%, last after the others folded 53-57%) and a player folds more once someone has called (63%; the bots
+  before this was fitted did the opposite: 62%, 65% and 44%, so two bots folded together 40% of the time against
+  the friends' 24%; now 31%), so the solver faces the cheap big-pot bets and the big
   small-pot bets the real table makes. Checked with `validate.js` (below): on all 278 hands every stat, fitted or
   not, is within the logs' sampling noise (RMS z 0.69 fitted, 0.94 pooled, 1.0 unfitted); fitted on half the
   hands, each friend's own bot predicts the other half better than the average friend's (+0.009 to +0.012

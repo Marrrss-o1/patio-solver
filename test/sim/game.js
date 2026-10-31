@@ -168,7 +168,7 @@ function playHand(cfg) {
   const g = {
     n, btn: cfg.btn, hands: cfg.hands, boardAll: cfg.boardAll, board: [], bb, sb,
     stack: cfg.stacks.slice(), start: cfg.stacks.slice(), bet: new Array(n).fill(0), put: new Array(n).fill(0),
-    folded: new Array(n).fill(false), cur: 0, lastRaise: bb, raises: 0, street: 0, pfAgg: -1, limpers: 0, limped: new Array(n).fill(false),
+    folded: new Array(n).fill(false), cur: 0, lastRaise: bb, raises: 0, street: 0, callsNow: 0, foldsNow: 0, pfAgg: -1, limpers: 0, limped: new Array(n).fill(false),
     seq: Array.from({ length: n }, () => ({ pre: [], flop: [], turn: [], river: [] })), nAct: 0,
     vseed: (cfg.seed ^ 0x5bd1e995) >>> 0, lastAgg: -1, potAtStreet: 0,
   };
@@ -244,6 +244,9 @@ function playHand(cfg) {
       isBtn: i === g.btn, pfAgg: g.pfAgg, lastAgg: g.lastAgg, limpers: g.limpers, limped: g.limped[i], seq: g.seq[i], potAtStreet: g.potAtStreet,
       // How many live players act after this seat on this street (0 = last to act).
       behind: (() => { const order = seatOrderFrom(g.btn, n).filter((j) => !g.folded[j]); return order.length - 1 - order.indexOf(i); })(),
+      // Facing a bet: who has called it, who has folded to it, and how many still have to answer it after this seat.
+      callsNow: g.callsNow, foldsNow: g.foldsNow,
+      toAnswer: lv.filter((j) => j !== i && g.bet[j] < g.cur && g.stack[j] > 0).length,
       maxOppStack: Math.max(0, ...lv.filter((j) => j !== i).map((j) => g.stack[j] + g.bet[j] - g.bet[i])),
       rk: cfg.seed, nAct: g.nAct,
     };
@@ -251,7 +254,7 @@ function playHand(cfg) {
 
   for (const [name, nb] of STREET_NAMES) {
     if (nb > 0) {
-      g.bet.fill(0); g.cur = 0; g.raises = 0; g.lastRaise = bb; g.lastAgg = -1;
+      g.bet.fill(0); g.cur = 0; g.raises = 0; g.lastRaise = bb; g.lastAgg = -1; g.callsNow = 0; g.foldsNow = 0;
       const prevNb = g.board.length;
       const heroLive = vf && !g.folded[hero] && live().length > 1;
       const vBefore = heroLive ? vf.value(prevNb, stateNow()) : 0;
@@ -316,6 +319,8 @@ function playHand(cfg) {
       if (na.t === 'raise') kind = nb === 0 ? (g.raises >= 1 ? '3bet' : 'raise') : (g.cur > 0 ? 'raise' : 'bet');
       // Socket event first, with the snapshot from before the action (onAny fires before the game updates).
       ev('player:game:action_taken', { playerID: actor + 1, actionType: na.t, makeBetValue: na.add });
+      // Answers to the current bet so far: calls and folds since the last bet or raise.
+      if (na.t === 'raise') { g.callsNow = 0; g.foldsNow = 0; } else if (na.t === 'call') g.callsNow++; else if (na.t === 'fold') g.foldsNow++;
       if (na.t === 'fold') g.folded[actor] = true;
       else {
         g.stack[actor] -= na.add; g.bet[actor] += na.add; g.put[actor] += na.add;

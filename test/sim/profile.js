@@ -32,6 +32,11 @@ function blank() {
     rrN: 0, rrMin: 0, rrShove: 0, praN: 0, praMin: 0, praShove: 0, praOther: [], betN: 0, minBetN: 0, betLog: [], betLogPot: [],
     // After the flop, raised after betting or raising on the same street: fold / re-raise (once per street).
     vsRaiseN: 0, vsRaiseFold: 0, vsRaiseRe: 0,
+    // Answering the first bet of a street after the flop (25-110% pot): heads-up, and multiway as the first to
+    // answer, the last after everyone before folded, the last after someone stayed; plus whole answers (all fold) with
+    // 2 and 3 to answer, kept on the first answerer.
+    huAnsN: 0, huAnsFold: 0, mwFirstN: 0, mwFirstFold: 0, mwLastFoldedN: 0, mwLastFoldedFold: 0, mwLastStayedN: 0, mwLastStayedFold: 0,
+    mw2N: 0, mw2Fold: 0, mw3N: 0, mw3Fold: 0,
     sawFlop: 0, wtsd: 0, showdowns: 0,
     // Shown hands: strength (percentile vs all hands, no draws) on each street they acted.
     shows: [],
@@ -128,8 +133,41 @@ function addLog(prof, h, bb, opts) {
   const checked = {};
   let street = null, betMade = false, flopBet = false, cur = 0, inc = bb;
   const aggr = {}, faced = {};
+  // Who is still in, for answers to the first bet of each street.
+  const out = {};
+  for (const e of h.log) if (e.st === 'pre' && e.act === 'fold') out[e.who] = true;
+  const names = h.players.map((p) => p.name);
+  let fb = null; // the first bet being answered: { m, ans: [[who, act]], open }
+  const closeBet = () => {
+    if (!fb || fb.m < 2 || fb.ans.length !== fb.m || fb.ans.some(([w, a]) => w === heroName || a === 'raise')) { fb = null; return; }
+    const t0 = prof[fb.ans[0][0]];
+    if (t0 && (fb.m === 2 || fb.m === 3)) { const allF = fb.ans.every(([, a]) => a === 'fold'); if (fb.m === 2) { t0.mw2N++; if (allF) t0.mw2Fold++; } else { t0.mw3N++; if (allF) t0.mw3Fold++; } }
+    fb = null;
+  };
   for (const e of h.log) {
     if (e.st === 'pre') continue;
+    if (fb && (e.st !== fb.st || !(e.facing > 0) || e.act === 'raise' || e.act === 'bet')) {
+      // A raise ends the answers to the first bet (the raiser's own answer counts).
+      if (e.st === fb.st && e.facing > 0 && e.act === 'raise' && fb.open) fb.ans.push([e.who, 'raise']);
+      fb.open = false;
+      if (e.st !== fb.st || !(e.facing > 0)) closeBet();
+    }
+    if (fb && fb.open && e.facing > 0 && (e.act === 'fold' || e.act === 'call')) {
+      const t = (e.who !== heroName || opts.includeHero) ? prof[e.who] : null;
+      const i = fb.ans.length, stayed = fb.ans.some(([, a]) => a !== 'fold');
+      if (t) {
+        const f = e.act === 'fold' ? 1 : 0;
+        if (fb.m === 1) { t.huAnsN++; t.huAnsFold += f; }
+        else if (i === 0) { t.mwFirstN++; t.mwFirstFold += f; }
+        else if (i === fb.m - 1 && !stayed) { t.mwLastFoldedN++; t.mwLastFoldedFold += f; }
+        else if (i === fb.m - 1) { t.mwLastStayedN++; t.mwLastStayedFold += f; }
+      }
+      fb.ans.push([e.who, e.act]);
+    }
+    if (e.act === 'bet' && !(e.facing > 0) && e.potPct >= 25 && e.potPct <= 110 && (!fb || fb.st !== e.st)) {
+      fb = { st: e.st, m: names.filter((nm) => !out[nm] && nm !== e.who).length, ans: [], open: true };
+    }
+    if (e.act === 'fold') out[e.who] = true;
     if (e.st !== street) { street = e.st; betMade = false; cur = 0; inc = bb; for (const o of [checked, aggr, faced]) for (const k of Object.keys(o)) delete o[k]; }
     const t = (e.who !== heroName || opts.includeHero) ? prof[e.who] : null;
     if (t && aggr[e.who] && e.facing > 0 && !faced[e.who] && (e.act === 'fold' || e.act === 'call' || e.act === 'raise')) {
@@ -164,6 +202,7 @@ function addLog(prof, h, bb, opts) {
     if (e.act === 'check') checked[e.who] = true;
     if (e.act === 'bet' || e.act === 'raise') { betMade = true; if (street === 'flop') flopBet = true; }
   }
+  closeBet();
 }
 
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -206,6 +245,9 @@ function summarize(t) {
   s.rrMinShare = ratio(t.rrMin, t.rrN); s.rrShoveShare = ratio(t.rrShove, t.rrN); s.rrN = t.rrN;
   s.raiseMinShare = ratio(t.praMin, t.praN); s.raiseShoveShare = ratio(t.praShove, t.praN); s.raiseN = t.praN; s.raiseOtherRatio = mean(t.praOther);
   s.minBetShare = ratio(t.minBetN, t.betN); s.betN = t.betN;
+  s.huAnsFold = ratio(t.huAnsFold, t.huAnsN); s.mwFirstFold = ratio(t.mwFirstFold, t.mwFirstN); s.mwLastFoldedFold = ratio(t.mwLastFoldedFold, t.mwLastFoldedN);
+  s.mwLastStayedFold = ratio(t.mwLastStayedFold, t.mwLastStayedN); s.mw2Fold = ratio(t.mw2Fold, t.mw2N); s.mw3Fold = ratio(t.mw3Fold, t.mw3N);
+  Object.assign(s, { huAnsN: t.huAnsN, mwFirstN: t.mwFirstN, mwLastFoldedN: t.mwLastFoldedN, mwLastStayedN: t.mwLastStayedN, mw2N: t.mw2N, mw3N: t.mw3N });
   s.vsRaiseFold = ratio(t.vsRaiseFold, t.vsRaiseN); s.vsRaiseRe = ratio(t.vsRaiseRe, t.vsRaiseN); s.vsRaiseN = t.vsRaiseN;
   const bl = t.betLog, bm = mean(bl);
   s.betLogSd = bl.length > 2 ? Math.sqrt(bl.reduce((a, x) => a + (x - bm) ** 2, 0) / (bl.length - 1)) : null; s.betLogN = bl.length;

@@ -112,8 +112,13 @@ const SIZING = [
   ['betSizeResid', 'sizeSd', 0.6, 8, 0.8, 0.1, 1.2],
   // Raised after betting on the same street: friends re-raise 3 of 21 (the bots, before this was fitted, 26%).
   ['vsRaiseRe', 'reRaise', 0.2, 8, 3, 0.1, 1.5],
+  // Answering a first bet multiway (25-110% pot): friends answer a bet nobody has called about as heads-up and fold
+  // more once someone has called; the bots with one shift per opponent did the opposite.
+  ['mwFirstFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 0],
+  ['mwLastFoldedFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 1],
+  ['mwLastStayedFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 2],
 ];
-const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN' };
+const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN', mwFirstFold: 'mwFirstN', mwLastFoldedFold: 'mwLastFoldedN', mwLastStayedFold: 'mwLastStayedN' };
 const SIZING_T = {};
 for (const [k, , prior, K] of SIZING) SIZING_T[k] = shrink(pool[k], pool[sizingN[k]], prior, K);
 // River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
@@ -127,6 +132,7 @@ for (const id of ids) {
   const p = clone(bots.HOME_DEFAULT);
   p.vpip = t.vpip; p.pfr = t.pfr; p.cont = 1 - t.vsOpenFold; p.threeBet = t.vsOpen3b; p.callBig = t.callBig;
   p.openBB = t.openSize; p.betSize = t.betPct; p.openShove = t.openShove;
+  if (id !== 'hero') p.callMw = [0, 0, 0];
   params[id] = p;
 }
 // [stat, param, index or null, direction, step, lo, hi, mode]
@@ -219,13 +225,13 @@ for (let round = 1; round <= ROUNDS; round++) {
   }
   // Pool-wide sizing parameters, each toward the friends' pooled number.
   const simPoolS = prof.summarize(simVs);
-  for (const [k, key, , , step, lo, hi, mode] of SIZING) {
+  for (const [k, key, , , step, lo, hi, mode, idx] of SIZING) {
     const x = simPoolS[k], T = SIZING_T[k];
     if (x == null || T == null) continue;
-    const cur = params[ids[0]][key];
+    const cur = idx == null ? params[ids[0]][key] : params[ids[0]][key][idx];
     let nx = mode === 'ratio' ? cur * Math.pow(T / Math.max(1e-3, x), step * damp) : cur + step * damp * (T - x);
     nx = Math.max(lo, Math.min(hi, nx));
-    for (const id of ids) if (id !== 'hero') params[id][key] = nx;
+    for (const id of ids) if (id !== 'hero') { if (idx == null) params[id][key] = nx; else params[id][key][idx] = nx; }
   }
   for (const id of ids) if (id !== 'hero' && params[id].raiseMin + params[id].raiseShove > 0.95) params[id].raiseMin = 0.95 - params[id].raiseShove;
   process.stderr.write(`round ${round}: sizing ${SIZING.map(([k]) => `${k} ${simPoolS[k] == null ? '-' : simPoolS[k].toFixed(2)}/${SIZING_T[k].toFixed(2)}`).join(' ')}\n`);

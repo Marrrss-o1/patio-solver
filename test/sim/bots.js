@@ -158,6 +158,7 @@ const HOME_DEFAULT = {
   raise: [0.9, 0.92, 0.93],   // raise threshold facing a bet
   raiseProb: 0.55,            // raises this often above the threshold
   bluffRaise: 0.04,           // raises with a draw or nothing
+  callMw: null,               // facing a bet multiway: threshold shift [first to answer, last after folds, after a call] (fitted, pooled)
   reRaise: 1,                 // after betting or raising on the street and being raised: re-raise share x this (fitted, pooled)
   betSize: 0.5,               // typical bet, fraction of the pot
   sizeTell: 0.6,              // bigger bets with stronger hands (log-size per strength)
@@ -258,7 +259,11 @@ function homeBot(params) {
         return out;
       }
       const f = toCall / Math.max(1, pot - toCall);
-      const tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + P.mw * k + (v.raises >= 2 ? 0.06 : 0);
+      // Multiway: the old bots raise the threshold by mw per extra opponent. Fitted bots (callMw set) answer by the
+      // spot instead, like the friends: first to answer with others behind, last after everyone else folded, or
+      // after someone has already called (overcall); heads-up has no shift.
+      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : 0;
+      const tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + mwShift + (v.raises >= 2 ? 0.06 : 0);
       let pCont = sig((hp - tc) / P.wc);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);
       else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? P.drawCall / 2 : 0.1);
