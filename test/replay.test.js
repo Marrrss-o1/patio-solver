@@ -781,5 +781,30 @@ test('tracker passes chips committed and behind for side pots', () => {
   assert.deepStrictEqual(x.input.opponents.map((o) => [o.committed, o.stack]), [[30, 970], [30, 970]]);
 });
 
+// ---------------------------------------------------------------------------
+// WebAssembly kernels: the same numbers as the JS loops
+// ---------------------------------------------------------------------------
+test('kernels: river and preflop solves give bit-identical results with and without WebAssembly', () => {
+  if (!E.kernelsActive()) { console.log('     (no WebAssembly SIMD here, JS loops only)'); return; }
+  const spots = [
+    riverSpot('As Kc', { riverIterations: 60 }),
+    riverSpot('7c 6d', { toCall: 0, inPosition: true, riverIterations: 60,
+      opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'check' } }, { name: 'W', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'call', river: 'check' } }] }),
+    { hero: C('Ah Qd'), board: [], pot: 15, toCall: 5, stack: 1000, bigBlind: 10, inPosition: true, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+      opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] },
+    { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60,
+      opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) },
+  ];
+  const json = (x) => JSON.stringify(x, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
+  for (const sp of spots) {
+    const withK = E.analyzeSync(sp);
+    E.useKernels(false);
+    let noK;
+    try { noK = E.analyzeSync(sp); } finally { E.useKernels(true); }
+    assert.ok(withK.solver, 'a solver ran');
+    assert.strictEqual(json(withK), json(noK));
+  }
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

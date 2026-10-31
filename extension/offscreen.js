@@ -52,7 +52,7 @@ async function analyze(input) {
       preflopIterations: 300 * POWER.preflop, preflopTimeMs: PREFLOP_MS, power: true,
     }),
   });
-  if (fin.ok) { fin.ms = Date.now() - t0; fin.workers = CORES; fin.iterationsTotal = per * CORES; }
+  if (fin.ok) { fin.ms = Date.now() - t0; fin.workers = CORES; fin.iterationsTotal = per * CORES; fin.kernels = !!fin.kernels && parts.every((p) => p.kernels); }
   return fin;
 }
 
