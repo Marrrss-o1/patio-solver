@@ -96,12 +96,13 @@ answer where one ran.
 ### What the simulator says
 
 Paired A/B in `test/sim/run.js` against the bots fitted to the friends (150bb, duplicate deals, AIVAT), blend on
-minus off, with the first exports (80-90M iterations each):
+minus off (the first two rows with the 80-90M iteration exports, the last with the shipped 270-320M ones):
 
 | table     | blend                                  | deals | B - A (bb/100) | where it loses               |
 |-----------|----------------------------------------|-------|----------------|------------------------------|
 | 3-handed  | default (thin 0.15, solid 0.03)        | 3,000 | -9.6 ± 18.9    | small blind -17, premiums -6 |
 | 4-handed  | light (thin 0.05, solid 0.01, floor 0.05) | 3,000 | -25.5 ± 13.7 | blinds -34, premiums -8      |
+| 4-handed  | default, flop to river only (`blueprintStreets: '123'`) | 3,000 | -31.5 ± 13.1 | blinds -33 |
 
 The blueprint is balanced play for a 150bb game among equals. The friends limp, call and defend far wider than
 that, and the reads already exploit it; pulling toward balance folds the blinds more than these opponents

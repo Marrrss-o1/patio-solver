@@ -1036,7 +1036,7 @@ test('tracker passes chips committed and behind for side pots', () => {
 // ---------------------------------------------------------------------------
 // WebAssembly kernels: the same numbers as the JS loops
 // ---------------------------------------------------------------------------
-test('kernels: river, preflop and turn solves give bit-identical results with and without WebAssembly', () => {
+test('kernels: river, preflop, turn and flop solves give bit-identical results with and without WebAssembly', () => {
   if (!E.kernelsActive()) { console.log('     (no WebAssembly SIMD here, JS loops only)'); return; }
   const spots = [
     riverSpot('As Kc', { riverIterations: 60 }),
@@ -1057,6 +1057,19 @@ test('kernels: river, preflop and turn solves give bit-identical results with an
     riverSpot('As Qd', { riverIterations: 60, board: C('Ts 9d 8c 7h 6s') }),
     turnSpot('4c 4h', { turnSolver: true, turnIterations: 6, pot: 30, toCall: 15, stack: 150,
       opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }] }),
+    // Flop solver: facing a bet, first to act, river bets (flopRiverBet), all-ins on the flop
+    // (short stack), and against the field with and without river bets.
+    ...[
+      { hero: C('Ah 5h'), extra: {} },
+      { hero: C('Ah 5h'), extra: { flopRiverBet: 0.5 } },
+      { hero: C('Qs Jd'), extra: { toCall: 0, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' } }], heroActions: { pre: 'raise' } } },
+      { hero: C('9h 9d'), extra: { stack: 25, flopRiverBet: 0.5 } },
+      { hero: C('Ah 5h'), extra: { pot: 34, opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call' } }] } },
+      { hero: C('7c 7d'), extra: { pot: 30, toCall: 0, inPosition: false, flopRiverBet: 0.5,
+        opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: '' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: '' } }] } },
+    ].map(({ hero, extra }) => Object.assign({ hero, board: C('Kh 8h 4c'), pot: 20, toCall: 8, stack: 100, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+      iterations: 2000, flopSolver: true, flopIterations: 4, heroActions: { pre: 'call' },
+      opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }] }, extra)),
   ];
   const json = (x) => JSON.stringify(x, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   for (const sp of spots) {
