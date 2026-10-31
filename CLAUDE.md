@@ -254,6 +254,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Solver EVs: when the root EVs are read, hero plays its best action at every decision below the root (average
   strategies there stayed near uniform where hero's hand rarely goes), and turn/flop subgames no iteration sampled
   play the current strategy. Frequencies and the chosen action are unchanged; only rarely played options' EVs rise.
+- Re-raises in the Monte Carlo (v1.7.3, after the flop): when an opponent re-raises hero's bet, raise or call
+  (`decide`'s `reraisedBy`), hero calls a pot-size re-raise (capped by both stacks) and the hand goes to showdown,
+  or folds, whichever wins more over the deals that got re-raised (`rrN`/`rrCall` tallies, picked in `result()`;
+  hero's hand is fixed, so it is one choice; `sc.callsReraise`). Before, hero folded everything under 0.8 strength
+  (`heroStandsReraise`, still used preflop and with side pots) and played the rest as if just called, so a re-raise
+  could only cost hero chips. A player who bet and gets raised re-raises at 2x their raise rate (`ctx.rrAgg`,
+  `input.reraiseAgg`; logs: 3 of 11 flop bettors and 4 of 22 overall re-raised, against about 8% facing a first bet).
+  Found by the audit thread: blocking flop raises with under 50% showdown share when called was +29 ± 12 on an older
+  main, about +13 ± 10 pooled on d8e866e. This fix instead: 4-handed +40.5 ± 22.9 and +14.9 ± 22.2 on two seeds of
+  1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). `input.reraiseModel: false` turns
+  it off.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
