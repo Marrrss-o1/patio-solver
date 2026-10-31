@@ -1,9 +1,10 @@
 # Blueprint (self-play strategy for 3, 4 and 5-handed 150bb)
 
 A blueprint is a strategy for the whole game computed by self-play, the way Pluribus started: the solver plays
-millions of hands against copies of itself and keeps the average of what it learns. In the overlay it is the
-**starting point** on the computer: the blueprint says how often a balanced player takes each action in hero's
-spot, and the existing reads move hero away from that toward whatever earns more against these friends.
+millions of hands against copies of itself and keeps the average of what it learns. On the computer the panel
+shows what the blueprint would do in hero's spot (how often a balanced player folds, calls or raises there). It
+can also be blended into the advice as a base strategy that the reads move away from, but that is off by default
+because it lost against the friends in the simulator (see the end of this file).
 
 ```
 blueprint/trainer.c   the trainer (C, no dependencies)
@@ -73,17 +74,37 @@ blueprint/publish.sh                  # copy blueprint/out/*.bin into the extens
 
 ## How the overlay uses it
 
-Computer mode only (the offscreen solver loads `blueprint-<n>max.bin.gz` on the first full analysis; the phone
-userscript does not load them). In `createAnalysis` (engine.js, `blueprintBlend`), when the table size has a
-blueprint, the stacks are near 150bb and the hand so far maps onto the tree:
+Computer mode only (the offscreen solver loads `blueprint-<n>max.bin.gz` on the first full analysis, about a
+second each; the phone userscript does not load them). When the table size has a blueprint, the stacks are near
+150bb and the hand so far maps onto the tree, the panel shows the blueprint's own frequencies on the
+"Blueprint (self-play)" line, and the hand log keeps them with each advice (`advice[].bp`). The advice itself is
+**not** changed by default, because blending it in lost in the simulator (below).
+
+The blend is there for experiments: `input.blueprint = true` turns it on (`false` skips the lookup entirely). In
+`createAnalysis` (engine.js, `blueprintBlend`):
 
 ```
-freq(option) ~ blueprint(option) x exp((EV(option) - best EV) / tau)
-tau = (pot + to call) x (0.15 with thin reads ... 0.03 with solid reads)
+freq(option) ~ (blueprint(option) + floor) x exp((EV(option) - best EV) / tau)
+tau = (pot + to call) x (thin 0.15 with thin reads ... solid 0.03 with solid reads)
 ```
 
-EV is the existing Monte Carlo / solver EV against the reads. Thin reads (few hands) stay close to the blueprint;
-solid reads exploit. Blueprint spots that were visited rarely in training get a small tau, so the reads decide.
-`input.blueprint = false` turns it off, `input.blueprintTemp = { thin, solid }` sets the two constants,
+EV is the existing Monte Carlo / solver EV against the reads. `input.blueprintTemp = { thin, solid, floor }` sets
+the constants (floor 0.01: the blueprint can overrule an EV edge of up to tau x ln(1 / floor)),
 `input.blueprintStreets` ('0123') limits the streets, and `input.blueprintOverSolver = false` keeps a solver's
-answer where one ran. The panel shows the blueprint's own frequencies on the "Blueprint (self-play)" line.
+answer where one ran.
+
+### What the simulator says
+
+Paired A/B in `test/sim/run.js` against the bots fitted to the friends (150bb, duplicate deals, AIVAT), blend on
+minus off, with the first exports (80-90M iterations each):
+
+| table     | blend                                  | deals | B - A (bb/100) | where it loses               |
+|-----------|----------------------------------------|-------|----------------|------------------------------|
+| 3-handed  | default (thin 0.15, solid 0.03)        | 3,000 | -9.6 ± 18.9    | small blind -17, premiums -6 |
+| 4-handed  | light (thin 0.05, solid 0.01, floor 0.05) | 3,000 | -25.5 ± 13.7 | blinds -34, premiums -8      |
+
+The blueprint is balanced play for a 150bb game among equals. The friends limp, call and defend far wider than
+that, and the reads already exploit it; pulling toward balance folds the blinds more than these opponents
+deserve and slow-plays big pairs against players who would have paid off a raise. It could still help against
+tougher or adapting players, which the bots don't model; the hand log's `bp` field makes that checkable on real
+hands later.

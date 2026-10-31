@@ -5120,6 +5120,11 @@
      * blueprint spot saw little training, so thin reads stay close to the blueprint and solid
      * reads exploit. Off-tree lines, table sizes without a blueprint and stack depths far from
      * the trained one keep the old advice.
+     *
+     * The blend is opt-in (input.blueprint === true): in the friends simulator it lost, 3-handed
+     * -10 +- 19 bb/100 and 4-handed -26 +- 14 even with a light touch (it folds the blinds too
+     * often and slow-plays big pairs against players who call too much). By default the
+     * blueprint's frequencies are only reported (panel line, hand log), the advice is unchanged.
      */
     function blueprintBlend(ranked, engineBest) {
       if (input.blueprint === false || !Array.isArray(input.history) || !ranked.length) return null;
@@ -5140,6 +5145,9 @@
       if (solved && input.blueprintOverSolver === false) return { used: false, info: { used: false, why: 'solver' } };
       const adv = BP.advise({ hero, board, history: input.history, seats: input.seats, heroName: input.heroName, bigBlind, stack: isFinite(stack) ? stack : Infinity });
       if (adv.error) return { used: false, info: { used: false, why: adv.error } };
+      const shown = { used: false, why: 'shown only', visits: adv.visits, street: adv.street, bucket: adv.bucket,
+        actions: adv.actions.map((a) => ({ kind: a.kind, amount: a.add, p: Math.round(a.p * 1000) / 1000 })) };
+      if (input.blueprint !== true) return { used: false, info: shown };
       const K = input.blueprintTemp || {};
       const kThin = K.thin != null ? K.thin : 0.15, kSolid = K.solid != null ? K.solid : 0.03;
       const t = clamp((Math.min(...opps.map((o) => o.stats.exploitWeight)) - 0.5) / 0.4, 0, 1);

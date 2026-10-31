@@ -142,9 +142,18 @@ if (bp) {
     assert.strictEqual(bp.tree.nodes[0].kind[loc.path[0].action], 'r');
   });
 
-  test('engine: 3-handed spot is blended toward the blueprint', () => {
+  test('engine: by default the blueprint is reported and the advice is unchanged', () => {
     const x = replay(threeHanded())[0].input;
     const r = E.analyzeSync(Object.assign({}, x, { blueprintObj: bp, iterations: 3000, seed: 7 }));
+    const plain = E.analyzeSync(Object.assign({}, x, { iterations: 3000, seed: 7 }));
+    assert.ok(r.blueprint && !r.blueprint.used && r.blueprint.actions.length >= 2, JSON.stringify(r.blueprint));
+    assert.deepStrictEqual(r.ranked.map((q) => [q.kind, q.amount, q.ev]), plain.ranked.map((q) => [q.kind, q.amount, q.ev]));
+    assert.strictEqual(r.best.kind, plain.best.kind);
+  });
+
+  test('engine: blueprint: true blends the advice toward the blueprint', () => {
+    const x = replay(threeHanded())[0].input;
+    const r = E.analyzeSync(Object.assign({}, x, { blueprintObj: bp, blueprint: true, iterations: 3000, seed: 7 }));
     assert.ok(r.blueprint && r.blueprint.used, r.blueprint && r.blueprint.why);
     const tot = r.ranked.reduce((a, q) => a + (q.freq || 0), 0);
     assert.ok(Math.abs(tot - 1) < 1e-6, String(tot));
@@ -166,7 +175,7 @@ if (bp) {
 
   test('engine: no blend for other table sizes or stacks far from 150bb', () => {
     const x = replay(threeHanded(200))[0].input;
-    const r = E.analyzeSync(Object.assign({}, x, { blueprintObj: bp, iterations: 2000, seed: 7 }));
+    const r = E.analyzeSync(Object.assign({}, x, { blueprintObj: bp, blueprint: true, iterations: 2000, seed: 7 }));
     assert.ok(r.blueprint && !r.blueprint.used && r.blueprint.why === 'stack depth');
     const four = E.analyzeSync(Object.assign({}, replay(threeHanded())[0].input, { seats: ['a', 'b', 'c', 'd'], blueprintObj: bp, iterations: 2000, seed: 7 }));
     assert.ok(!four.blueprint);
