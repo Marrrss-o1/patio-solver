@@ -247,6 +247,10 @@
       kv.push(['Position', r.inPosition ? 'In position (you act last)' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (r.solver) kv.push([{ preflop: 'Preflop solve', turn: 'Turn + river solve', river: 'River solve' }[r.solver.kind] || 'Solve', r.solver.field ? 'Your range vs the field' : 'Your range vs theirs']);
+      if (r.blueprint && r.blueprint.used) {
+        const top = r.blueprint.actions.slice().sort((a, b) => b.p - a.p).filter((a) => a.p >= 0.1).map((a) => ({ fold: 'Fold', check: 'Check', call: 'Call', bet: 'Bet', raise: 'Raise', allin: 'All-in' }[a.kind] + ' ' + pct(a.p)));
+        kv.push(['Blueprint (self-play)', esc(top.join(' · ') || '—')]);
+      }
       if (advice.ms != null) kv.push(['Thinking', `${(advice.ms / 1000).toFixed(1)}s on ${advice.workers || 1} core${advice.workers > 1 ? 's' : ''}`]);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += `<div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
