@@ -5,6 +5,7 @@
 const fs = require('fs');
 const { deals, sum } = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (!deals.length || !deals[0].B) { console.log('not an A/B run'); process.exit(0); }
+if (!deals[0].A.rots) { console.log('this run has no per-hand records (made before they were added)'); process.exit(0); }
 const n = sum.players;
 const POS = n === 2 ? ['button (SB)', 'big blind'] : ['button', 'small blind', 'big blind', 'early 1', 'early 2', 'early 3'].slice(0, n);
 // Hand groups by preflop order rank (0 = AA): roughly top 3%, 3-10%, 10-25%, 25-50%, bottom half.
