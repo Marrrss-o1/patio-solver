@@ -1095,7 +1095,7 @@
     return w;
   }
 
-  const WAR_MIX = 1;
+  const WAR_MIX = 2.2;
   function preflopRange(stats, action, sizePre) {
     const cw = new Float64Array(169);
     let raiseWidth = 1; // re-raising range width, for the floor below
@@ -1113,12 +1113,15 @@
       else if (action === '5bet') w = Math.max(0.015, w * fb * fb);
       cw.set(topClassWeights(w));
       raiseWidth = w;
-      // Raise wars (4-bets and 5-bets) are half premiums, half ordinary hands: of 9 hands shown
-      // from them in the logs, 4 were AA-JJ and 5 were K4s, Q9o, KTo, QJo and A8o. So the
-      // narrow range gets the same mass again spread over the hands they play.
+      // Raise wars (4-bets and 5-bets) mix premiums with ordinary hands: of 9 hands shown from
+      // them in the logs, 4 were AA-JJ and 5 were K4s, Q9o, KTo, QJo and A8o, nearly all from the
+      // players who raise a lot of what they play. So the narrow range gets up to the same mass
+      // again spread over the hands they play, scaled by how aggressive their preflop play is
+      // (PFR / VPIP): a passive player's raise war is mostly premiums.
       if (action === '4bet' || action === '5bet') {
         const v = Math.max(0.05, stats.vpip), ord = topClassWeights(v);
-        for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + WAR_MIX * (w / v) * ord[i]);
+        const mix = clamp(WAR_MIX * stats.pfr / v, 0.1, 1);
+        for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + mix * (w / v) * ord[i]);
       }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
@@ -1317,7 +1320,10 @@
     // Big bets are seldom made at random: on bets and raises the noise shrinks as the size grows.
     const aggr = action === 'bet' || action === 'raise';
     const noise = aggr && stats.rangeNoiseAgg != null ? stats.rangeNoiseAgg : stats.rangeNoise;
-    const eps = noise > 0 ? Math.min(0.9, noise * (aggr && size > 0 ? clamp(0.6 / size, 0.4, 1.3) : 1)) : 0;
+    let eps = noise > 0 ? Math.min(0.9, noise * (aggr && size > 0 ? clamp(0.6 / size, 0.4, 1.3) : 1)) : 0;
+    // Turn and river raises are seldom random, even small ones: 8 of 10 shown river raises in the
+    // logs were strong hands. A quarter of the noise, and no extra for a small raise.
+    if (action === 'raise' && st.street >= 4) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
     if (eps > 0) {
       let sw = 0, sp = 0;
       for (let k = 0; k < NUM_COMBOS; k++) if (W[k] > 0) { sw += W[k]; sp += W[k] * P[k]; }
