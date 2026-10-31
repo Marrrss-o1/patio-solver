@@ -21,13 +21,13 @@
     const n = parseInt(String(pos).replace(/\D/g, ''), 10);
     return isNaN(n) ? 0 : n;
   }
-  const MAX_SHOWS = 40;
+  const MAX_SHOWS = 80;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 10 KB a hand).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
   // Each hand a player is dealt into shrinks their older counts by 1%, so the last
   // hundred or so hands carry most of the weight and reads follow players who change.
-  const DECAY = 0.99;
+  const DECAY = 0.997;
   function decayTally(t) {
     for (const k of Object.keys(t)) {
       if (k === 'shows') continue;
@@ -51,6 +51,8 @@
       donkOpp: 0, donk: 0, xrOpp: 0, xr: 0,
       // Pots won after a showdown and without one (from stack changes between hands).
       wonSD: 0, wonNoSD: 0,
+      // Facing a bet after they had already bet or raised earlier in the hand: times, and folds.
+      aggVsN: 0, aggVsFold: 0,
       // Think time per action kind: count and total seconds (capped at 60 per action).
       tt: { check: { n: 0, sum: 0 }, bet: { n: 0, sum: 0 }, call: { n: 0, sum: 0 }, raise: { n: 0, sum: 0 }, fold: { n: 0, sum: 0 } },
       // Continuation bets: preflop raiser's first flop decision, and how others react to it.
@@ -422,6 +424,7 @@
         const raiser = h.players[h.pfRaiser];
         if (raiser && !raiser.folded && raiser.seq.flop.length === 0) { p.donkSeen = true; t.donkOpp++; if (kind === 'bet') t.donk++; }
       }
+      if (facing > 0 && p.agg.length > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) { t.aggVsN++; if (kind === 'fold') t.aggVsFold++; }
       const seqSt = p.seq[key] || [];
       if (facing > 0 && seqSt.slice(0, -1).includes('check') && !(p.xrSeen || (p.xrSeen = {}))[key]) {
         p.xrSeen[key] = true; t.xrOpp++; if (kind === 'raise') t.xr++;
@@ -670,6 +673,7 @@
   }
 
   PatioTracker.blankTally = blankTally;
+  PatioTracker.DECAY = DECAY;
   PatioTracker.accuracySummary = accuracySummary;
   PatioTracker.upgradeTally = upgradeTally;
   PatioTracker.cardStr = cardStr;

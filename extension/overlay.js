@@ -247,6 +247,7 @@
       kv.push(['Position', r.inPosition ? 'In position (you act last)' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (r.solver) kv.push(['River solve', 'Your range vs theirs']);
+      if (advice.ms != null) kv.push(['Thinking', `${(advice.ms / 1000).toFixed(1)}s on ${advice.workers || 1} core${advice.workers > 1 ? 's' : ''}`]);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += `<div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
 
@@ -283,7 +284,7 @@
     if (id !== reqId) return;
     thinking = false;
     if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
-    advice = { result: res.result, ctx: built, stale: false };
+    advice = { result: res.result, ctx: built, stale: false, ms: res.ms, workers: res.workers };
     tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0, res.result, function (sc) { return actionText(sc, built.heroStageBet, res.result.toCall); });
     render();
   }

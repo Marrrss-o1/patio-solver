@@ -1,39 +1,49 @@
 // Runs the solver off the page's main thread so the table never stutters.
-importScripts('engine.js');
+// On a computer it hands the work to an offscreen page with a pool of Web Workers (one per
+// spare CPU core), so each decision gets many times the phone's thinking budget.
+importScripts('engine.js', 'slim.js');
 
-function slim(r) {
-  const sc = (s) => s && {
-    kind: s.kind, label: s.label, sizeLabel: s.sizeLabel || '', amount: s.amount,
-    ev: s.ev, se: s.se, foldPct: s.foldPct || 0, reraisedPct: s.reraisedPct || 0,
-    equityWhenCalled: s.equityWhenCalled, freq: s.freq,
-  };
-  return {
-    street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
-    bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
-    best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver,
-    equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
-    opponents: r.opponents.map((o) => ({
-      name: o.name, pending: o.pending, aggressor: o.aggressor,
-      type: { key: o.type.key, label: o.type.label, tip: o.type.tip },
-      stats: {
-        hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af,
-        foldToBet: o.stats.foldToBet, confidence: o.stats.confidence,
-      },
-      topClasses: o.grid.topClasses.slice(0, 8).map((c) => c.name),
-      heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance,
-    })),
-  };
+let offscreenReady = null;
+async function ensureOffscreen() {
+  if (!chrome.offscreen) return false;
+  if (!offscreenReady) {
+    offscreenReady = (async () => {
+      try {
+        const has = chrome.runtime.getContexts ? (await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] })).length > 0 : false;
+        if (!has) {
+          await chrome.offscreen.createDocument({
+            url: 'offscreen.html', reasons: ['WORKERS'], justification: 'Run the poker solver on several CPU cores.',
+          });
+        }
+        return true;
+      } catch (e) {
+        return /single offscreen/i.test(String(e && e.message));
+      }
+    })();
+  }
+  const ok = await offscreenReady;
+  if (!ok) offscreenReady = null;
+  return ok;
+}
+
+function runHere(input) {
+  const t0 = Date.now();
+  const r = PokerEngine.analyzeSync(input);
+  return { ok: true, result: slim(r), ms: Date.now() - t0, workers: 1 };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
-  if (!msg || msg.type !== 'analyze') return false;
-  try {
-    const t0 = Date.now();
-    const r = PokerEngine.analyzeSync(msg.input);
-    reply({ ok: true, result: slim(r), ms: Date.now() - t0 });
-  } catch (e) {
-    reply({ ok: false, error: String(e && e.message || e) });
-  }
+  if (!msg || msg.type !== 'analyze' || msg.target === 'offscreen') return false;
+  (async () => {
+    try {
+      if (await ensureOffscreen()) {
+        const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input });
+        if (r && r.ok) { reply(r); return; }
+      }
+      reply(runHere(msg.input));
+    } catch (e) {
+      try { reply(runHere(msg.input)); } catch (e2) { reply({ ok: false, error: String((e2 && e2.message) || e2) }); }
+    }
+  })();
   return true;
 });

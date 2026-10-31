@@ -14,7 +14,11 @@ src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker
 extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
-  background.js          Service worker that runs engine.analyzeSync (keeps the page thread free).
+  background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
+  offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
+                         share with `partial: true`; one final analysis with `merge` adds the tallies and runs the
+                         river solver. Budget = POWER x the phone's (24x MC, 8x plan samples, 8x river iterations).
+  slim.js                Shrinks a result for the overlay (used by background and workers).
   engine.js, tracker.js  COPIES of src/ written by the build. Edit src/, then run the build.
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
 dist/patio-solver-extension.zip Built extension zip.
@@ -31,6 +35,8 @@ npm test                 # node replay tests: real recorded hand + synthetic 3-h
 npm run test:extension   # loads the real extension in Chromium on a fake pokerpatio page, replays a hand
 npm run test:mobile      # runs the userscript on an iPhone-sized fake table, replays a hand
 npm run sim              # heads-up simulator: solver (through the real tracker) vs bots; see test/sim.js for args
+node test/sim-multi.js <hands> <solver|baseline> <3-6 players> <station|typical|maniac|mixed> <seed>
+                         # multiway simulator; DUP=1 (default) replays each deal from every seat, DIAG=1 logs decisions
 ```
 Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebuild before the browser harnesses.
 
@@ -51,8 +57,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Side pots: modelled at showdown when the tracker passes `heroCommitted` and each opponent's `committed`/`stack`
   (`sidePotWin` in engine.js). The multiway lookahead skips spots with a short stack and falls back to that.
 - Lookahead (`makePlan`, `playOut`, `playOutMulti` in engine.js) runs on the flop and turn. Heads-up, either side
-  can raise once per street (hero raises with about 80%+ equity against the betting range); with 2+ opponents
-  there are no raises. Hero only bluffs the river. Preflop has no lookahead (a flop-by-flop playout is too slow
+  can raise once per street (hero raises with about 80%+ equity against the betting range). Multiway is a betting
+  round in seat order (hero first OOP, last IP) with one raise per street; after hero checks with players still to
+  act, the current street is played first (checking is not a free card); once one opponent is left it hands over to
+  `playOut` (with `from`). Hero only bluffs the river. Preflop has no lookahead (a flop-by-flop playout is too slow
   for a phone). Instead `realize` there depends on position, suitedness, connectedness, pairs, opponent count and
   stack depth.
 - Hero's story: with `heroActions`, the engine builds hero's range as a typical player's. If that range looks
@@ -66,12 +74,24 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Read accuracy: when an opponent shows cards, `tracker.scorer` (set by both UIs to `PokerEngine.scoreShow`) stores
   `fit = { top, lr, sq }` on the show. `computeStats` turns these into `accuracy`, a trust factor, and
   `strengthBias`, which tilts that player's ranges weaker or stronger in `buildRange`.
-- River solver (`riverSolve` in engine.js): heads-up river spots only. Discounted CFR over hero's range vs the
+- Multiway river (2-5 opponents, no side pots): `riverSolve` against the field as one opponent whose range is the
+  strongest live hand, sampled jointly; it plays like the aggressor or the stickiest caller.
+- River solver (`riverSolve` in engine.js): heads-up river spots (and multiway as above). Discounted CFR over hero's range vs the
   opponent's, with hero bets of 33/66/100% pot, the opponent's usual bet size and one raise. The opponent plays
   their read's strategy with weight `exploitWeight` and an adaptive one with the rest. Hero's range comes from
   `input.heroActions` (passed by the tracker) run through `buildRange` with typical-player stats. When it runs, its
   frequencies and EVs replace the Monte Carlo ranking, and the Monte Carlo is cut to 6000 iterations (equity only).
-- Counts decay 1% per hand a player is dealt into (`DECAY` in tracker.js), so they are floats. Round before display.
+- Counts decay 0.3% per hand a player is dealt into (`DECAY` = 0.997 in tracker.js, about 330 hands of memory; it
+  was 1%, which forgot everything after ~100 hands), so they are floats. Round before display. Last 80 shows kept.
+- Preflop ranges are soft (`topClassWeights` uses a sigmoid edge, plus a small floor for every hand). Hard top-X%
+  cut-offs gave zero weight to hands people really play (KQo raises at 8% PFR), which made reads predict shown
+  hands worse than a random guess in the simulator and led to bad turn/river calls.
+- Learned range tilt: `scoreShow` stores `tl` (log-likelihood of the shown hand under each `TILTS` step) and `agg`.
+  `computeStats` picks `tiltAgg` / `tiltPas` (max likelihood with a 6*t^2 penalty, 3+ shows) and `buildRange` uses
+  them by line type, falling back to `strengthBias`.
+- `foldAfterAgg` (tally `aggVsN`/`aggVsFold`): folding to a bet after having bet or raised earlier in the hand.
+  When an opponent has an aggressive line (`aggroLine`), plans and the river solver scale fold rates by
+  foldAfterAgg / foldToBet. Without it the solver floated turn bets with air planning river bluffs.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
 - `db.history` keeps the last 150 hands for the "Hand log" export. Each entry has `log` (every action in order with
@@ -102,9 +122,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the owner's home game: friends call big bets far more than the old fold curve assumed. `modelFold` elasticity is
   0.8*sqrt(ftb/0.45) and `foldAtSize` grows only 30% as fast above 1.1 pot. Against a raise, opponents continue
   only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
-- Simulator (`test/sim.js`): latest 2,000-hand runs, bb/100 vs a simple solid bot: station +114, typical +5 (a tie),
-  aggressive +68. Bots are simple; this is a regression check, not proof of an edge against real players.
-- Ideas: river solver for multiway pots, multi-street CFR on the turn, raises in the multiway lookahead.
+- Simulator (`test/sim.js`): latest 2,000-hand runs, solver minus a simple solid bot (paired, bb/100): typical +1 and
+  -4 (a tie), aggressive +18, station +147. Multiway 4-handed mixed bots (`sim-multi.js`, DUP): +7 ± 40 (it was
+  about -30 before v1.3.0). Bots are simple; this is a regression check, not proof of an edge against real players.
+- Ideas: solved/self-generated preflop charts adjusted by reads, multi-street CFR on the turn (computer mode only).
   (Syncing reads between devices is not wanted: the owner keeps phone and computer separate.)
 
 ## Testing limits in the cloud sandbox
