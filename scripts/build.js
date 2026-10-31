@@ -48,8 +48,10 @@ write('dist/patio-solver.user.js', userscript);
 try {
   const zipPath = path.join(root, 'dist/patio-solver-extension.zip');
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  // The trained blueprints (35 MB) stay out of the zip: it is rebuilt and committed with every change, and
+  // they only feed the panel's "Blueprint (self-play)" line. Load unpacked from extension/ to get them.
   const files = ['manifest.json', 'hook.js', 'tracker.js', 'overlay.js', 'background.js', 'engine.js', 'slim.js', 'offscreen.html', 'offscreen.js', 'solver-worker.js', 'blueprint.js',
-    'blueprint-3max.bin.gz', 'blueprint-4max.bin.gz', 'blueprint-5max.bin.gz', 'icon128.png'].filter((f) => fs.existsSync(path.join(root, 'extension', f)));
+    'icon128.png'].filter((f) => fs.existsSync(path.join(root, 'extension', f)));
   execSync(`zip -q -r "${zipPath}" ${files.join(' ')}`, { cwd: path.join(root, 'extension'), stdio: 'ignore' });
 } catch (e) {
   console.warn('zip not available; skipped dist/patio-solver-extension.zip');

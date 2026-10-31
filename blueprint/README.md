@@ -11,7 +11,7 @@ blueprint/trainer.c   the trainer (C, no dependencies)
 blueprint/run.sh      trains one table size in chunks that save and resume
 blueprint/publish.sh  copies finished blueprints into the extension and rebuilds
 src/blueprint.js      the lookup (rebuilds the same betting tree and card buckets, follows a real hand down it)
-extension/blueprint-3max.bin.gz ...   the trained files the extension loads
+extension/blueprint-3max.bin.gz ...   the trained files the extension loads (Load unpacked; the dist zip leaves them out)
 ```
 
 ## How it learns
