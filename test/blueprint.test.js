@@ -153,6 +153,17 @@ if (bp) {
     assert.ok(!off.blueprint);
   });
 
+  test('tracker: the hand log keeps the blueprint frequencies with the advice', () => {
+    const t = new T({ players: {} });
+    let x = null;
+    t.on((type, p) => { if (type === 'turn' && p.isHero) x = t.solverInput('typical').input; });
+    for (const m of threeHanded()) t.handle(m.ev, m.data, m.snap);
+    const r = E.analyzeSync(Object.assign({}, x, { blueprintObj: bp, iterations: 2000, seed: 7 }));
+    t.noteAdvice('Call', r.best.ev, r);
+    const a = t.hand.advice[t.hand.advice.length - 1];
+    assert.ok(a.bp && Array.isArray(a.bp.acts) && a.bp.acts.length > 0, JSON.stringify(a.bp));
+  });
+
   test('engine: no blend for other table sizes or stacks far from 150bb', () => {
     const x = replay(threeHanded(200))[0].input;
     const r = E.analyzeSync(Object.assign({}, x, { blueprintObj: bp, iterations: 2000, seed: 7 }));
