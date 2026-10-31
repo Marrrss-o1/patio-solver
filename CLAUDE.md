@@ -8,7 +8,8 @@ never add code that clicks, sends `player:game:perform_action`, or otherwise pla
 ## Layout
 
 ```
-src/engine.js            The solver (exploitative Monte Carlo). Pure JS, no deps. Shared by both builds.
+src/engine.js            The solver (exploitative Monte Carlo + CFR solvers). Pure JS, no deps. Shared by both builds.
+                         Holds the 169x169 preflop equity table (`PF_EQ_B64`, written by scripts/preflop-equity.js).
 src/tracker.js           Socket events -> hand state, opponent tallies, solver input. Pure JS, unit-tested.
 src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
@@ -16,8 +17,10 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
-                         share with `partial: true`; one final analysis with `merge` adds the tallies and runs the
-                         river solver. Budget = POWER x the phone's (24x MC, 8x plan samples, 8x river iterations).
+                         share with `partial: true` (and, heads-up on the turn, its own turn solve for TURN_MS with
+                         its own river-card samples); one final analysis with `merge` adds the tallies, averages the
+                         turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
+                         phone's (24x MC, 8x plan samples, 8x river and preflop iterations).
   slim.js                Shrinks a result for the overlay (used by background and workers).
   engine.js, tracker.js  COPIES of src/ written by the build. Edit src/, then run the build.
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
@@ -31,12 +34,15 @@ test/                    replay.test.js (node), Playwright harnesses, recorded +
 
 ```
 npm run build            # copies src/ into extension/, builds dist/ (bumps manifest version from package.json)
+node scripts/preflop-equity.js   # rebuilds the preflop equity table in src/engine.js (~1 min on 4 cores)
 npm test                 # node replay tests: real recorded hand + synthetic 3-handed hand
 npm run test:extension   # loads the real extension in Chromium on a fake pokerpatio page, replays a hand
 npm run test:mobile      # runs the userscript on an iPhone-sized fake table, replays a hand
 npm run sim              # heads-up simulator: solver (through the real tracker) vs bots; see test/sim.js for args
 node test/sim-multi.js <hands> <solver|baseline> <3-6 players> <station|typical|maniac|mixed> <seed>
                          # multiway simulator; DUP=1 (default) replays each deal from every seat, DIAG=1 logs decisions
+                         # both sims: PF=0 (preflop solver off), PFIT=n, TURN=1 (turn solver on, TURNIT=n), TAG=name;
+                         # sim.js DUP=1 plays every deal twice with seats and cards swapped
 ```
 Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebuild before the browser harnesses.
 
@@ -60,9 +66,27 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   can raise once per street (hero raises with about 80%+ equity against the betting range). Multiway is a betting
   round in seat order (hero first OOP, last IP) with one raise per street; after hero checks with players still to
   act, the current street is played first (checking is not a free card); once one opponent is left it hands over to
-  `playOut` (with `from`). Hero only bluffs the river. Preflop has no lookahead (a flop-by-flop playout is too slow
-  for a phone). Instead `realize` there depends on position, suitedness, connectedness, pairs, opponent count and
-  stack depth.
+  `playOut` (with `from`). Hero only bluffs the river. Preflop has no lookahead; the preflop solver (below) covers
+  the spots it can, and the Monte Carlo's `realize` (position, suitedness, connectedness, pairs, opponent count and
+  stack depth) the rest.
+- Preflop solver (`preflopSolve`): heads-up preflop spots (one opponent left, any action so far) and opens with
+  2-8 players still to act (all pending; they are one "field" whose hand is the strongest continuing one,
+  `fieldMax`; no open-limp option there). Discounted CFR over the 169 classes, compatible-pair counts from
+  `preflopCompat`, O(169) blocker totals in `classMass`. Tree: hero's scenario sizes at the root, then pot-size
+  raises and all-ins, up to 4 raises. Leaves: fold, all-in (table equity), flop (pot split by realized shares,
+  `shares`: equity x 0.92 + strength, suited/connected/pair bonus, +-0.06 position, faded toward raw equity below SPR
+  4). The opponent's fixed strategy uses the Monte Carlo's `sc.opp` cont rates at the first response and
+  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations (~1 ms each), computer 2400 / 1.5 s.
+  `vsOpenRead` reads `stats.vsOpen` ({small <=2.5bb, medium <=3.5bb, large} x {cont, threeBet}) when the tracker
+  provides it, so learned defence by open size feeds both the Monte Carlo (`continueRule` via `kind.openTo`) and the
+  preflop solver's first response. Without it the old size-blind rule (VPIP-based) is used.
+  Limpers plus players behind, or a raise plus players behind, still use the Monte Carlo.
+- Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
+  one Discounted CFR. Turn: hero 50/100% pot, opponent their size, one raise; each line that reaches the river gets
+  a river subgame per card (built lazily; OOP first, hero 66%, one raise); each iteration samples 6 river cards
+  (`turnRiverSamples`), the final pass uses all 48. Hero and opponent hands are indexed separately and pruned
+  (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
+  line. ~15-30 ms per iteration; each offscreen worker solves for 4 s and the results are averaged.
 - Hero's story: with `heroActions`, the engine builds hero's range as a typical player's. If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%). The river solver
   models hero's range directly, so it does not take the shift.
@@ -122,11 +146,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the owner's home game: friends call big bets far more than the old fold curve assumed. `modelFold` elasticity is
   0.8*sqrt(ftb/0.45) and `foldAtSize` grows only 30% as fast above 1.1 pot. Against a raise, opponents continue
   only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
-- Simulator (`test/sim.js`): latest 2,000-hand runs, solver minus a simple solid bot (paired, bb/100): typical +1 and
-  -4 (a tie), aggressive +18, station +147. Multiway 4-handed mixed bots (`sim-multi.js`, DUP): +7 ± 40 (it was
-  about -30 before v1.3.0). Bots are simple; this is a regression check, not proof of an edge against real players.
-- Ideas: solved/self-generated preflop charts adjusted by reads, multi-street CFR on the turn (computer mode only).
-  (Syncing reads between devices is not wanted: the owner keeps phone and computer separate.)
+- Simulator (`test/sim.js`, v1.4.0, DUP=1, 2,000 hands, seed 1, bb/100 won from the bot): typical 46 ± 24 with the
+  preflop solver (23 ± 25 with PF=0), maniac 61 ± 35 (104 ± 36 with PF=0), station 171 ± 36 (PF=0). The simple
+  solid baseline bot in the same seat: 8 / 41 / 60. Paired PF on minus off: typical +22 ± 20, maniac -44 ± 32 (the
+  solver opens 4bb wide and defends the BB less vs limps; the bots' size-blind BB defence is the suspect). Multiway
+  4-handed mixed bots (`sim-multi.js`, DUP): +7 ± 40 at v1.3.0. Bots are simple; this is a regression check, not
+  proof of an edge against real players.
+- Ideas: a flop solver on the computer (three streets; would need card abstraction or much coarser sampling),
+  preflop solving for limped/raised pots with players behind. (Syncing reads between devices is not wanted: the
+  owner keeps phone and computer separate.)
 
 ## Testing limits in the cloud sandbox
 

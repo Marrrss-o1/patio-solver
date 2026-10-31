@@ -25,6 +25,11 @@ const out = path.join(__dirname, 'out'); fs.mkdirSync(out, { recursive: true });
     if (m.ev === 'hook:attached') continue;
     await page.evaluate(m => { GameManager.state.players = m.snap.players; __L.forEach(f => f(m.ev, m.data)); }, m);
     await page.waitForTimeout(m.ev === 'game:player_turn_started' ? 3000 : 30);
+    // PANELS=1 opens the panel and prints it after each turn (to see the advice).
+    if (process.env.PANELS && m.ev === 'game:player_turn_started') {
+      console.log('--- after message ' + i + ' ---');
+      console.log(await page.evaluate(() => { const r = document.getElementById('patio-solver-host').shadowRoot; const p = r.querySelector('.panel'); if (p && p.innerText.length < 80) { const b = r.querySelector('.bar'); if (b) b.click(); } return r.querySelector('.panel').innerText; }));
+    }
     if (shots.includes(i)) { await page.screenshot({ path: path.join(out, `mobile_${i}.png`) }); const bb = await page.evaluate(() => { const r = document.getElementById("patio-solver-host").shadowRoot.querySelector(".bar").getBoundingClientRect(); return [r.left + 60, r.top + r.height/2]; }); await page.touchscreen.tap(bb[0], bb[1]); await page.waitForTimeout(300); await page.screenshot({ path: path.join(out, `mobile_${i}_open.png`) }); }
   }
   // expand and screenshot the last advice state
