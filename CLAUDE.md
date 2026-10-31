@@ -88,7 +88,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `vsOpenRead` reads `stats.vsOpen` ({small <=2.5bb, medium <=3.5bb, large} x {cont, threeBet}) when the tracker
   provides it, so learned defence by open size feeds both the Monte Carlo (`continueRule` via `kind.openTo`) and the
   preflop solver's first response. Without it the old size-blind rule (VPIP-based) is used.
-  Limpers plus players behind, or a raise plus players behind, still use the Monte Carlo.
+  Every other multiway spot (limpers, a raise with callers, players behind; `fieldOther`) is solved against the field
+  too: `preflopMulti` samples boards and opponents' hands once per decision and gives `kappa` per hero class (hero's
+  K-way showdown share over the share against the field's strongest hand, same samples). At a flop or all-in leaf
+  with k of K players in (kCall after hero's call, kRaise(amount) after hero's first raise, 1 deeper) hero's share is
+  scaled by kappa^((k-1)/(K-1)) and the field's chips count k times. `preflopMultiway: false` sends those spots back
+  to the Monte Carlo.
 - Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
   one Discounted CFR. Turn: hero 33/66/100% pot, opponent their size, one raise; each line that reaches the river gets
   a river subgame per card (built lazily; OOP first, hero 50/100%, one raise); each iteration samples 6 river cards
@@ -109,7 +114,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `fit = { top, lr, sq }` on the show. `computeStats` turns these into `accuracy`, a trust factor, and
   `strengthBias`, which tilts that player's ranges weaker or stronger in `buildRange`.
 - Multiway river (2-5 opponents, no side pots): `riverSolve` against the field as one opponent whose range is the
-  strongest live hand, sampled jointly; it plays like the aggressor or the stickiest caller.
+  strongest live hand, sampled jointly; it plays like the aggressor or the stickiest caller, with `fieldStats`: the
+  field folds only if every player folds (`foldAtSize` multiplies each player's own curve; before v1.5.0 it used one
+  player's fold rate and bluffed multiway pots far too often) and bets or raises if any of them does.
+- Multiway turn (computer, 2-4 opponents, no side pots): `turnSolve` against the field (`turnField`: the live hand
+  with the most turn equity, sampled jointly), with `fieldStats`. Hero's showdown share is scaled by
+  kappa^(0.4^bets) (`cfg.multi`, `showMulti`): kappa is hero's river share against every live hand over the share
+  against the field's hand, and each bet or raise on the way leaves only part of the other players in.
 - River solver (`riverSolve` in engine.js): heads-up river spots (and multiway as above). Discounted CFR over hero's range vs the
   opponent's, with hero bets of 33/66/100% pot, the opponent's usual bet size and one raise. The opponent plays
   their read's strategy with weight `exploitWeight` and an adaptive one with the rest. Hero's range comes from
@@ -162,9 +173,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   solver opens 4bb wide and defends the BB less vs limps; the bots' size-blind BB defence is the suspect). Multiway
   4-handed mixed bots (`sim-multi.js`, DUP): +7 ± 40 at v1.3.0. Bots are simple; this is a regression check, not
   proof of an edge against real players.
-- Ideas: a flop solver on the computer (three streets; would need card abstraction or much coarser sampling),
-  preflop solving for limped/raised pots with players behind. (Syncing reads between devices is not wanted: the
-  owner keeps phone and computer separate.)
+- Ideas: a flop solver on the computer (three streets; would need card abstraction or much coarser sampling);
+  multiway flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing
+  reads between devices is not wanted: the owner keeps phone and computer separate.)
 
 ## Testing limits in the cloud sandbox
 
