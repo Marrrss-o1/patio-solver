@@ -429,7 +429,9 @@ test('lookahead: an open-ended draw can call a pot-size bet on implied odds', ()
   const now = E.analyzeSync(Object.assign({}, spot, { lookahead: false }));
   const ahead = E.analyzeSync(spot);
   const call = (r) => r.ranked.find((s) => s.kind === 'call').ev;
-  assert.ok(call(ahead) > call(now) + 15, `${call(ahead)} vs ${call(now)}`);
+  // 12, not 15: with medium hands in the betting range the draw has a little more equity right
+  // away, so the lookahead adds slightly less (the call itself is worth more than before).
+  assert.ok(call(ahead) > call(now) + 12, `${call(ahead)} vs ${call(now)}`);
 });
 
 test('lookahead: real hand flop decision stays sane', () => {

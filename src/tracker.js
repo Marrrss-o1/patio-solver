@@ -46,7 +46,8 @@
       // Facing a big preflop raise or shove (8+ big blinds to them): times faced, and how often they called or re-raised.
       pfBigOpp: 0, pfBigCall: 0,
       // Limping (calling the big blind first in), folding to a 3-bet after raising.
-      limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0,
+      // Re-raising again (4-bet or more) after raising and facing a re-raise; opportunities are f3betOpp.
+      limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0,
       // Donk bets (leading the flop into the preflop raiser) and check-raises (any street after the flop).
       donkOpp: 0, donk: 0, xrOpp: 0, xr: 0,
       // Pots won after a showdown and without one (from stack changes between hands).
@@ -83,7 +84,8 @@
   // range that ranked above the hand they showed (low = we expected hands like it); `hits` counts
   // shown hands that sat in the likelier half of our range, so a calibrated read hits about half.
   function accuracySummary(t) {
-    const fits = (t.shows || []).map((x) => x && x.fit).filter((f) => f && f.top != null);
+    const folded = (x) => x.folded || Object.values(x.actions || {}).some((a) => a === 'fold');
+    const fits = (t.shows || []).filter((x) => x && !folded(x)).map((x) => x.fit).filter((f) => f && f.top != null);
     if (!fits.length) return null;
     const hits = fits.filter((f) => f.top < 0.5).length;
     const avg = (k) => Math.round((fits.reduce((a, f) => a + (f[k] || 0), 0) / fits.length) * 100) / 100;
@@ -261,6 +263,7 @@
       let potBefore = 0;
       for (const x of Object.values(h.players)) potBefore += x.total;
       const facing = Math.max(0, h.currentBet - p.stageBet);
+      h.currentBetBefore = h.currentBet;
       let kind = d.actionType;
       if (kind === 'raise') {
         if (street === 0) kind = h.preRaises >= 1 ? '3bet' : 'raise';
@@ -291,7 +294,16 @@
           r.tally.pfBigOpp++;
           if (kind !== 'fold') r.tally.pfBigCall++;
         }
-        if (kind === 'raise' || kind === '3bet') { h.preRaises++; h.pfRaiser = p.id; }
+        if (kind === 'raise' || kind === '3bet') {
+          h.preRaises++; h.pfRaiser = p.id;
+          // Which raise this was (1 = open, 2 = 3-bet, 3 = 4-bet, ...) and how big compared with the
+          // raise before it: friends often min-reraise back and forth, which says less than a real 4-bet.
+          const inc = p.stageBet - (h.currentBetBefore || 0);
+          const prevInc = h.lastRaiseInc || bb || inc;
+          p.preTop = h.preRaises;
+          p.sizes.pre = prevInc > 0 ? Math.round((inc / prevInc) * 100) / 100 : 1;
+          h.lastRaiseInc = inc;
+        }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
         const cat = rank === 2 ? 'pfRaise' : rank === 1 ? 'pfCall' : 'pfFold';
         const order = { pfFold: 0, pfCall: 1, pfRaise: 2 };
@@ -416,7 +428,7 @@
       if (h.street === 0) {
         if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') t.limp++; }
         if (h.preRaises >= 2 && facing > 0 && !p.faced3bet && p.seq.pre.slice(0, -1).some((k) => k === 'raise' || k === '3bet')) {
-          p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++;
+          p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++; else if (kind === 'raise' || kind === '3bet') t.pf4bet++;
         }
         return;
       }
@@ -550,7 +562,7 @@
       if (h.board.length < 3) return;
       const r = this.record(p.auth, p.name);
       if (!r) return;
-      const actions = { pre: PatioTracker.streetAction(p.seq.pre, 0) };
+      const actions = { pre: PatioTracker.preAction(p) };
       for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (h.board.length >= n) actions[k] = PatioTracker.streetAction(p.seq[k], n);
       if (actions.pre === 'pending') actions.pre = 'call';
       const show = {
@@ -558,7 +570,9 @@
         actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
       };
       // How well the range we would have put them on matches what they showed.
-      if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
+      // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.
+      if (p.folded) show.folded = true;
+      else if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
       r.tally.shows.push(show);
       // Hand log: how well this read fit, and the player's running accuracy.
       if (show.fit) {
@@ -569,6 +583,14 @@
       }
       if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
+    }
+
+    // A player's preflop line for the solver: like streetAction, but a re-raise once the pot already
+    // had two raises is a '4bet', and three or more a '5bet'.
+    static preAction(p) {
+      const a = PatioTracker.streetAction(p.seq.pre, 0);
+      if ((a === '3bet' || a === 'raise') && p.preTop >= 3) return p.preTop >= 4 ? '5bet' : '4bet';
+      return a;
     }
 
     // Summarize what a player did on one street for the solver.
@@ -632,14 +654,14 @@
 
       const street = h.board.length;
       const lineOf = (o) => {
-        const a = { pre: PatioTracker.streetAction(o.seq.pre, 0) };
+        const a = { pre: PatioTracker.preAction(o) };
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (street >= n) a[k] = PatioTracker.streetAction(o.seq[k], n);
         if (street > 0 && a.pre === 'pending') a.pre = 'call';
         return a;
       };
       const opponents = opps.map((o) => {
         const r = this.record(o.auth, o.name);
-        const actions = { pre: PatioTracker.streetAction(o.seq.pre, 0) };
+        const actions = { pre: PatioTracker.preAction(o) };
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) {
           if (street >= n) actions[k] = PatioTracker.streetAction(o.seq[k], n);
         }
