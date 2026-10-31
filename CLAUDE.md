@@ -112,7 +112,21 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   hands worse than a random guess in the simulator and led to bad turn/river calls.
 - Learned range tilt: `scoreShow` stores `tl` (log-likelihood of the shown hand under each `TILTS` step) and `agg`.
   `computeStats` picks `tiltAgg` / `tiltPas` (max likelihood with a 6*t^2 penalty, 3+ shows) and `buildRange` uses
-  them by line type, falling back to `strengthBias`.
+  them by line type, falling back to `strengthBias` (on betting lines only when it is negative: showdowns after a
+  bet are the bets that got called, so they look stronger than the bets were).
+- Re-raise wars: the tracker labels a preflop line `'4bet'` when the player re-raises once the pot already has two
+  raises and `'5bet'` for three or more (`PatioTracker.preAction`, from `p.preTop`), and `sizes.pre` is that raise's
+  increment over the previous raise's. `preflopRange` narrows the 3-bet range by `stats.fourBet` (share of raises
+  that re-raise again when re-raised; 0.45 until computeStats has it, tally `pf4bet` out of `f3betOpp`) per extra
+  raise; a min-reraise (`sizes.pre` <= 1.25) narrows by its square root, once. The floor of a re-raise range is
+  min(0.008, 0.06 x width). With one '3bet' range for every re-raise it told KQs to shove into a 5-bet and a 6-bet.
+  `PRE_RAISED` in engine.js matches all raised preflop lines.
+- Hands shown after a fold (`show.folded`; friends often show folded hands) are not scored by `scoreShow`, but
+  their bets still count as bluffs in `classifyShows`.
+- Postflop line reading, checked on 107 real showdowns with `test/calibrate-reads.js`: calls rank hands by
+  hs + `DRAW_CALL` (2) x draw potential, so chasing draws stay in calling ranges; bets give medium hands
+  (hs >= 0.35) at least `MEDIUM_BET` (0.3) x betFreq; bets under 45% pot widen up to 1.9x (tiny bets came with
+  K4s and Q9o). Only flop raises get that extra width: a turn min-raise was a flush, a small river raise was AA.
 - `foldAfterAgg` (tally `aggVsN`/`aggVsFold`): folding to a bet after having bet or raised earlier in the hand.
   When an opponent has an aggressive line (`aggroLine`), plans and the river solver scale fold rates by
   foldAfterAgg / foldToBet. Without it the solver floated turn bets with air planning river bluffs.
@@ -134,6 +148,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
+- `node test/replay-log.js <export.json> [all|9,25] [--vs <other checkout>]` rebuilds the reads from a log's raw
+  events and re-runs every hero decision with this version (deterministic). With `--vs` (e.g. a `git worktree` of
+  main) it lists only the decisions that changed. Run it on the owner's latest log before merging engine changes.
+  Advice entries carry `sizeRatio` (hero's chips added / advised) for bets and raises.
 - Showdown reads only see hands that were shown, so they over-sample hands that got called. Bluffs that won
   uncontested are invisible unless the player shows voluntarily.
 - Tally format (tracker.js `blankTally`): flat counts plus `st` (per street), `vs` (reaction by facing-bet size),

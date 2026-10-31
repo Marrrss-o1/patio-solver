@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.4.0
+// @version      1.4.1
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -324,6 +324,13 @@ function ENGINE() {
   // A bet counts as value when the hand was in the top 30% of all hands on that board,
   // a bluff when it was in the bottom 45% (semi-bluffs with draws count as bluffs).
   const showCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  // A hand shown after its owner folded never reached the end of the line it would be scored
+  // against, so it says nothing about that line's range (friends often show folded hands).
+  // It still counts in classifyShows: bets made before the fold are real bluffs.
+  function foldedShow(sh) {
+    return !!(sh && (sh.folded || Object.values(sh.actions || {}).some((a) => a === 'fold')));
+  }
+
   function classifyShows(shows) {
     const out = { value: 0, bluff: 0, mid: 0, bigValue: 0, bigBluff: 0, bigMid: 0, hands: 0 };
     for (const sh of shows || []) {
@@ -546,6 +553,7 @@ function ENGINE() {
   function scoreShow(show, tally, tableStyle) {
     const hole = show.cards.map(parseCard), board = show.board.map(parseCard);
     if (hole.length !== 2 || hole.some((x) => x < 0) || board.some((x) => x < 0) || board.length < 3) return null;
+    if (foldedShow(show)) return null;
     const stats = computeStats(tally, tableStyle);
     const strengths = { 0: boardStrength([]) };
     for (const n of [3, 4, 5]) if (board.length >= n) strengths[n] = boardStrength(board.slice(0, n));
@@ -673,12 +681,23 @@ function ENGINE() {
     return w;
   }
 
-  function preflopRange(stats, action) {
+  function preflopRange(stats, action, sizePre) {
     const cw = new Float64Array(169);
+    let raiseWidth = 1; // re-raising range width, for the floor below
     if (action === 'raise') {
       cw.set(topClassWeights(stats.pfr));
-    } else if (action === '3bet') {
-      cw.set(topClassWeights(clamp(stats.threeBet != null ? stats.threeBet : stats.pfr * 0.4, 0.025, 0.25)));
+    } else if (action === '3bet' || action === '4bet' || action === '5bet') {
+      // Each further re-raise keeps the share of the previous raising range that re-raises again
+      // (`fourBet`). A min-reraise (raising by no more than the raise before, `sizePre` <= 1.25)
+      // narrows half as much, once: these friends click min-raise back and forth with K4s and Q9o.
+      let w = clamp(stats.threeBet != null ? stats.threeBet : stats.pfr * 0.4, 0.025, 0.25);
+      // `fourBet` (share of raises that re-raise again when re-raised) comes from computeStats; 0.45 until then.
+      const fb = stats.fourBet != null ? stats.fourBet : 0.45;
+      const cheap = sizePre != null && sizePre <= 1.25;
+      if (action === '4bet' || (action === '5bet' && cheap)) w = Math.max(0.02, w * (cheap ? Math.sqrt(fb) : fb));
+      else if (action === '5bet') w = Math.max(0.015, w * fb * fb);
+      cw.set(topClassWeights(w));
+      raiseWidth = w;
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
       const trap = 0.15 + 0.35 * (1 - stats.pfr / Math.max(stats.vpip, 0.01));
@@ -690,7 +709,9 @@ function ENGINE() {
       cw.fill(1);
     }
     // Nobody's range is airtight: keep a little weight on every hand they could have played.
-    const floor = action === 'call' ? 0.02 : action === 'raise' || action === '3bet' ? 0.008 : 0;
+    // For narrow re-raising ranges the floor shrinks with the range, or junk would be a third
+    // of a top-1.5% 5-bet range (KQs was told to shove into a 5-bet and a 6-bet).
+    const floor = action === 'call' ? 0.02 : /raise|bet/.test(action) ? Math.min(0.008, 0.06 * raiseWidth) : 0;
     if (floor) for (let i = 0; i < 169; i++) cw[i] = Math.max(cw[i], floor);
     return expandClassWeights(cw);
   }
@@ -796,21 +817,33 @@ function ENGINE() {
     if (opts && opts.cbet && action === 'check') stats = Object.assign({}, stats, { betFreq: stats.cbet });
     const vr = valueShare(stats, size);
     // Big bets come from a narrower, more polarized range; small bets from a wider one
-    // that includes more medium hands.
-    const sizeScale = !(size > 0) ? 1 : size >= 1 ? 0.8 : size >= BIG_BET ? 0.9 : size < 0.45 ? 1.2 : 1;
+    // that includes more medium hands. Tiny bets and min-raises (under about a third of the pot)
+    // are wider still: at the owner's table they came with K4s, K8o, Q9o and draws, not the nuts.
+    const sizeScale = !(size > 0) ? 1 : size >= 1 ? 0.8 : size >= BIG_BET ? 0.9 : size < 0.45 ? Math.min(1.9, 1.2 + 2 * (0.45 - size)) : 1;
     let P;
     if (action === 'bet') {
       P = aggressionProbs(W, st, clamp(stats.betFreq * sizeScale, 0.03, 0.95), vr);
-      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k]);
+      // Home players also bet medium hands (second pair, weak top pair) "to see where they are".
+      // Without this slice, mkorn's TT betting the flop and turn on J-J-Q was ruled out of his range.
+      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? MEDIUM_BET * stats.betFreq * sizeScale : 0);
     } else if (action === 'check') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
       const slow = clamp(0.5 - 0.1 * stats.af, 0.1, 0.45);
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(slow, 1 - P[k]);
     } else if (action === 'raise') {
-      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * sizeScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
+      // Only flop min-raises get the extra width (K8o and a flush draw at the owner's table). Turn and
+      // river raises stay value-heavy even when small: Tad's turn min-raise was a flush, mkorn's 23%
+      // river raise was AA.
+      const rScale = st.street === 3 ? sizeScale : Math.min(sizeScale, 1.2);
+      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * rScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.02, P[k]);
     } else if (action === 'call') {
-      const q = rangeQuantiles(W, st.ehs);
+      // Calls are ranked with draws counted at twice their one-card gain: home players chase.
+      // Ranked by plain strength, open-enders and flush draws were folded out of turn calling
+      // ranges, and those were exactly the hands friends showed after calling.
+      const callScore = new Float64Array(NUM_COMBOS);
+      for (let k = 0; k < NUM_COMBOS; k++) callScore[k] = st.hs[k] < 0 ? -1 : Math.min(1, st.hs[k] + DRAW_CALL * st.pot[k]);
+      const q = rangeQuantiles(W, callScore);
       const ftb = stats.foldToBet, rf = stats.raiseFreq;
       P = new Float64Array(NUM_COMBOS);
       for (let k = 0; k < NUM_COMBOS; k++) {
@@ -834,6 +867,10 @@ function ENGINE() {
   }
 
   const TILTS = [-0.75, -0.5, -0.3, -0.15, 0, 0.15, 0.3, 0.5, 0.75];
+  const DRAW_CALL = 2;
+  const MEDIUM_BET = 0.3;
+  // Preflop lines where the player raised: 'raise', '3bet', '4bet', '5bet'.
+  const PRE_RAISED = /^(raise|\dbet)$/;
   const STREET_ACTION_MAP = {
     check: 'check', bet: 'bet', call: 'call', raise: 'raise',
     checkcall: 'call', checkraise: 'raise',
@@ -847,7 +884,7 @@ function ENGINE() {
 
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
     const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
-    let W = preflopRange(pre, actions.pre || 'pending');
+    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre);
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
@@ -857,7 +894,7 @@ function ENGINE() {
       const st = strengths[len];
       const act = STREET_ACTION_MAP[actions[name]];
       if (!st || !act) continue;
-      const cbet = name === 'flop' && (pfAggressor || (pfAggressor == null && (actions.pre === 'raise' || actions.pre === '3bet')));
+      const cbet = name === 'flop' && (pfAggressor || (pfAggressor == null && PRE_RAISED.test(actions.pre || '')));
       const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet });
       if (sumWeights(next) > 1e-9) W = next;
       W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
@@ -869,7 +906,9 @@ function ENGINE() {
     // middle of the range we predicted, tilt the range weaker (or stronger) to match.
     const aggLine = ['flop', 'turn', 'river'].some((n) => { const a = STREET_ACTION_MAP[actions[n]]; return a === 'bet' || a === 'raise'; });
     const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
-    const bias = learned != null ? learned : stats.strengthBias || 0;
+    // Without a learned tilt for betting lines, only a weaker-than-expected average is used:
+    // showdowns after bets are the ones that got called, so they look stronger than the bets were.
+    const bias = learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0;
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -1004,7 +1043,7 @@ function ENGINE() {
         cont = Math.max(Math.min(s.vpip, cont), big * callBig);
         return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
-      const raised = opp.actions.pre === 'raise' || opp.actions.pre === '3bet';
+      const raised = PRE_RAISED.test(opp.actions.pre || '');
       const base = raised ? 0.55 : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const floor = big * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
@@ -2183,7 +2222,7 @@ function ENGINE() {
       const qCont = rangeQuantiles(W, current.ehs);
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
-        ? actions.pre === 'raise' || actions.pre === '3bet'
+        ? PRE_RAISED.test(actions.pre || '')
         : currentAction === 'bet' || currentAction === 'raise' || currentAction === 'checkraise';
       return {
         name: o.name, stats, type: classifyPlayer(stats), actions, pending, aggressor,
@@ -3072,7 +3111,8 @@ ENGINE();
       // Facing a big preflop raise or shove (8+ big blinds to them): times faced, and how often they called or re-raised.
       pfBigOpp: 0, pfBigCall: 0,
       // Limping (calling the big blind first in), folding to a 3-bet after raising.
-      limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0,
+      // Re-raising again (4-bet or more) after raising and facing a re-raise; opportunities are f3betOpp.
+      limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0,
       // Donk bets (leading the flop into the preflop raiser) and check-raises (any street after the flop).
       donkOpp: 0, donk: 0, xrOpp: 0, xr: 0,
       // Pots won after a showdown and without one (from stack changes between hands).
@@ -3109,7 +3149,8 @@ ENGINE();
   // range that ranked above the hand they showed (low = we expected hands like it); `hits` counts
   // shown hands that sat in the likelier half of our range, so a calibrated read hits about half.
   function accuracySummary(t) {
-    const fits = (t.shows || []).map((x) => x && x.fit).filter((f) => f && f.top != null);
+    const folded = (x) => x.folded || Object.values(x.actions || {}).some((a) => a === 'fold');
+    const fits = (t.shows || []).filter((x) => x && !folded(x)).map((x) => x.fit).filter((f) => f && f.top != null);
     if (!fits.length) return null;
     const hits = fits.filter((f) => f.top < 0.5).length;
     const avg = (k) => Math.round((fits.reduce((a, f) => a + (f[k] || 0), 0) / fits.length) * 100) / 100;
@@ -3287,6 +3328,7 @@ ENGINE();
       let potBefore = 0;
       for (const x of Object.values(h.players)) potBefore += x.total;
       const facing = Math.max(0, h.currentBet - p.stageBet);
+      h.currentBetBefore = h.currentBet;
       let kind = d.actionType;
       if (kind === 'raise') {
         if (street === 0) kind = h.preRaises >= 1 ? '3bet' : 'raise';
@@ -3317,7 +3359,16 @@ ENGINE();
           r.tally.pfBigOpp++;
           if (kind !== 'fold') r.tally.pfBigCall++;
         }
-        if (kind === 'raise' || kind === '3bet') { h.preRaises++; h.pfRaiser = p.id; }
+        if (kind === 'raise' || kind === '3bet') {
+          h.preRaises++; h.pfRaiser = p.id;
+          // Which raise this was (1 = open, 2 = 3-bet, 3 = 4-bet, ...) and how big compared with the
+          // raise before it: friends often min-reraise back and forth, which says less than a real 4-bet.
+          const inc = p.stageBet - (h.currentBetBefore || 0);
+          const prevInc = h.lastRaiseInc || bb || inc;
+          p.preTop = h.preRaises;
+          p.sizes.pre = prevInc > 0 ? Math.round((inc / prevInc) * 100) / 100 : 1;
+          h.lastRaiseInc = inc;
+        }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
         const cat = rank === 2 ? 'pfRaise' : rank === 1 ? 'pfCall' : 'pfFold';
         const order = { pfFold: 0, pfCall: 1, pfRaise: 2 };
@@ -3427,6 +3478,9 @@ ENGINE();
       adv.did = kind + (added > 0 ? ' ' + r2(added) : '');
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind) adv.followed = group(adv.kind) === group(kind) || (adv.kind === 'allin' && kind === 'call');
+      // How far hero's bet or raise was from the advised size (1 = as advised; a min-raise against
+      // "raise to 7x" shows as about 0.3). `followed` only checks the kind of action.
+      if (adv.amount > 0 && added > 0 && group(adv.kind) === 'aggr' && group(kind) === 'aggr') adv.sizeRatio = r2(added / adv.amount);
     }
 
     // More tendencies, counted before this action updates the hand state:
@@ -3442,7 +3496,7 @@ ENGINE();
       if (h.street === 0) {
         if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') t.limp++; }
         if (h.preRaises >= 2 && facing > 0 && !p.faced3bet && p.seq.pre.slice(0, -1).some((k) => k === 'raise' || k === '3bet')) {
-          p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++;
+          p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++; else if (kind === 'raise' || kind === '3bet') t.pf4bet++;
         }
         return;
       }
@@ -3576,7 +3630,7 @@ ENGINE();
       if (h.board.length < 3) return;
       const r = this.record(p.auth, p.name);
       if (!r) return;
-      const actions = { pre: PatioTracker.streetAction(p.seq.pre, 0) };
+      const actions = { pre: PatioTracker.preAction(p) };
       for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (h.board.length >= n) actions[k] = PatioTracker.streetAction(p.seq[k], n);
       if (actions.pre === 'pending') actions.pre = 'call';
       const show = {
@@ -3584,7 +3638,9 @@ ENGINE();
         actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
       };
       // How well the range we would have put them on matches what they showed.
-      if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
+      // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.
+      if (p.folded) show.folded = true;
+      else if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
       r.tally.shows.push(show);
       // Hand log: how well this read fit, and the player's running accuracy.
       if (show.fit) {
@@ -3595,6 +3651,14 @@ ENGINE();
       }
       if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
+    }
+
+    // A player's preflop line for the solver: like streetAction, but a re-raise once the pot already
+    // had two raises is a '4bet', and three or more a '5bet'.
+    static preAction(p) {
+      const a = PatioTracker.streetAction(p.seq.pre, 0);
+      if ((a === '3bet' || a === 'raise') && p.preTop >= 3) return p.preTop >= 4 ? '5bet' : '4bet';
+      return a;
     }
 
     // Summarize what a player did on one street for the solver.
@@ -3658,14 +3722,14 @@ ENGINE();
 
       const street = h.board.length;
       const lineOf = (o) => {
-        const a = { pre: PatioTracker.streetAction(o.seq.pre, 0) };
+        const a = { pre: PatioTracker.preAction(o) };
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (street >= n) a[k] = PatioTracker.streetAction(o.seq[k], n);
         if (street > 0 && a.pre === 'pending') a.pre = 'call';
         return a;
       };
       const opponents = opps.map((o) => {
         const r = this.record(o.auth, o.name);
-        const actions = { pre: PatioTracker.streetAction(o.seq.pre, 0) };
+        const actions = { pre: PatioTracker.preAction(o) };
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) {
           if (street >= n) actions[k] = PatioTracker.streetAction(o.seq[k], n);
         }
