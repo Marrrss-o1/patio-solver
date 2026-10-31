@@ -63,6 +63,12 @@ bots, seed and block size), so a third arm can be added later without replaying 
   over all friends (too few showdowns each), how strong river callers are at showdown sets how loosely they call
   (they call with weaker hands than a strict threshold would, and fold some better ones). WTSD and the share of weak
   hands among shown bets come out close without being fitted.
+* `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
+  watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
+  the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
+  a change does not only exploit the bots. It costs a solve per decision in every solver seat, and its decisions
+  get no luck correction (its strategy isn't known in closed form), so expect more noise. Each A/B variant plays
+  against its own copy, since the copies learn from hero's play.
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 
@@ -71,9 +77,9 @@ Stacks default to 150bb with friend bots (like the real lobby) and 100bb otherwi
 ## Speed
 
 All cores by default (`--workers`). Results depend only on `--seed` and `--block`, not on the number of workers.
-The solver costs ~0.2-0.3 s per decision at sim settings (`--iters 3000`, `--river-iters 120`, preflop solver at its
-phone default), so 4 cores play about 6 hands/s: 2,000 deals 4-handed (8,000 hands) take ~20 minutes, an A/B twice
-that. With `--tag name`, every finished block is appended to `test/out/sim-name.blocks.jsonl`; starting the same
+With the WebAssembly kernels the solver costs ~50-150 ms per decision at sim settings (`--iters 3000`,
+`--river-iters 120`, preflop solver at its phone default; the preflop solver is most of it). On 4 cores a paired
+A/B of 2,000 deals takes about 18 minutes 4-handed (16,000 hands) and 7 minutes heads-up. With `--tag name`, every finished block is appended to `test/out/sim-name.blocks.jsonl`; starting the same
 command again (same settings, solver commit and profiles) skips those blocks, so a run cut off by a container
 restart loses at most one block per worker. The old flags PF=0, PFIT=n, TURN=1, TURNIT=n work as environment variables (they apply to both variants;
 `--a-opts`/`--b-opts` override).

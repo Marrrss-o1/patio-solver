@@ -160,7 +160,9 @@ class ValueFn {
 
 // ---------- the hand ----------
 // cfg: { n, btn, hands, boardAll, stacks, sb, bb, seats, hero, emit(ev, data, snapFn), seed, aivat: { pending, pfSamples } | null,
-//        names, ids, log: true to build a hand-log entry }
+//        names, ids, log: true to build a hand-log entry,
+//        watchers: [{ seat, onEvent(ev, data, snapFn) }] for other seats with their own tracker (solver opponents):
+//        each gets the events as that seat's overlay would, with its own hole cards and itself as hero }
 function playHand(cfg) {
   const n = cfg.n, bb = cfg.bb, sb = cfg.sb;
   const g = {
@@ -175,9 +177,12 @@ function playHand(cfg) {
   const names = cfg.names || g.hands.map((_, i) => 'P' + i);
   const sbP = n === 2 ? g.btn : (g.btn + 1) % n, bbP = n === 2 ? (g.btn + 1) % n : (g.btn + 2) % n;
   const live = () => { const o = []; for (let i = 0; i < n; i++) if (!g.folded[i]) o.push(i); return o; };
-  const snap = () => ({ tableType: 'private', heroAuthId: 'P' + hero, bigBlind: bb, players: g.hands.map((_, i) => (
+  const snapFor = (me) => ({ tableType: 'private', heroAuthId: 'P' + me, bigBlind: bb, players: g.hands.map((_, i) => (
     { id: i + 1, authUserId: 'P' + i, name: names[i], stack: g.stack[i], posType: 's' + (i + 1), playState: g.folded[i] ? 'folded' : 'playing' })) });
-  const ev = (e, d) => { if (emit) emit(e, d, snap); };
+  // Everyone listening: hero's overlay, then any other seats' (each sees the table as its own hero).
+  const listeners = (emit ? [{ seat: hero, fn: emit }] : []).concat((cfg.watchers || []).map((w) => ({ seat: w.seat, fn: w.onEvent })));
+  const evTo = (l, e, d) => l.fn(e, d, () => snapFor(l.seat));
+  const ev = (e, d) => { for (const l of listeners) evTo(l, e, d); };
   const pos = g.hands.map((_, i) => posGroup(i, g.btn, n));
   g.pos = pos;
   const vf = cfg.aivat ? new ValueFn(g, hero, cfg.aivat) : null;
@@ -195,8 +200,10 @@ function playHand(cfg) {
   const uidBase = cfg.uidBase || 0;
   const uids = g.hands.map((_, i) => [uidBase + 2 * i + 1, uidBase + 2 * i + 2]);
   ev('game:cards_dealt_to_player', g.hands.flatMap((_, i) => [{ playerPos: 's' + (i + 1), cardData: { uniqueID: uids[i][0] } }, { playerPos: 's' + (i + 1), cardData: { uniqueID: uids[i][1] } }]));
-  ev('game:update_card_data', { cardData: cardData(g.hands[hero][0], uids[hero][0]) });
-  ev('game:update_card_data', { cardData: cardData(g.hands[hero][1], uids[hero][1]) });
+  for (const l of listeners) {
+    evTo(l, 'game:update_card_data', { cardData: cardData(g.hands[l.seat][0], uids[l.seat][0]) });
+    evTo(l, 'game:update_card_data', { cardData: cardData(g.hands[l.seat][1], uids[l.seat][1]) });
+  }
   let uidN = uidBase + 2 * n + 10;
 
   // Applies a normalized action. Returns the tracker-style kind.
@@ -342,10 +349,13 @@ function playHand(cfg) {
   if (lv.length >= 2) {
     g.board = g.boardAll;
     for (const i of lv) {
-      if (i === hero) continue;
-      shown[i] = g.hands[i].map(E.cardToString);
-      ev('game:update_card_data', { cardData: cardData(g.hands[i][0], uids[i][0]) });
-      ev('game:update_card_data', { cardData: cardData(g.hands[i][1], uids[i][1]) });
+      if (i !== hero) shown[i] = g.hands[i].map(E.cardToString);
+      // Each listener sees the others' cards turned over (not its own again).
+      for (const l of listeners) {
+        if (l.seat === i) continue;
+        evTo(l, 'game:update_card_data', { cardData: cardData(g.hands[i][0], uids[i][0]) });
+        evTo(l, 'game:update_card_data', { cardData: cardData(g.hands[i][1], uids[i][1]) });
+      }
     }
   }
   ev('game:game_ended', {});
