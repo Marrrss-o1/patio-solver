@@ -158,6 +158,7 @@ const HOME_DEFAULT = {
   raise: [0.9, 0.92, 0.93],   // raise threshold facing a bet
   raiseProb: 0.55,            // raises this often above the threshold
   bluffRaise: 0.04,           // raises with a draw or nothing
+  reRaise: 1,                 // after betting or raising on the street and being raised: re-raise share x this (fitted, pooled)
   betSize: 0.5,               // typical bet, fraction of the pot
   sizeTell: 0.6,              // bigger bets with stronger hands (log-size per strength)
   minBet: 0.15,               // share of bets that are one big blind
@@ -175,6 +176,7 @@ const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
 const SIZES_WIDE = [0.08, 0.12, 0.18, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2];
 
+const STREET_OF = { 3: 'flop', 4: 'turn', 5: 'river' };
 function homeBot(params) {
   const P = Object.assign({}, HOME_DEFAULT, params || {});
   const posMul = { early: 0.85, late: 1.15, blinds: 1.0 };
@@ -260,8 +262,9 @@ function homeBot(params) {
       let pCont = sig((hp - tc) / P.wc);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);
       else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? P.drawCall / 2 : 0.1);
-      const pRv = v.raises < 4 ? Math.min(pCont, P.raiseProb * sig((hp - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
-      const pRb = v.raises < 3 ? P.bluffRaise * (strongDraw ? 2 : air ? 1 : 0.5) : 0;
+      const reR = P.reRaise !== 1 && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? P.reRaise : 1;
+      const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hp - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
+      const pRb = v.raises < 3 ? reR * P.bluffRaise * (strongDraw ? 2 : air ? 1 : 0.5) : 0;
       const pRaise = pRv + (1 - pCont) * pRb;
       const to = Math.round(v.cur * P.raiseX);
       const out = [{ t: 'call', p: pCont - pRv }, { t: 'fold', p: (1 - pCont) * (1 - pRb) }];
