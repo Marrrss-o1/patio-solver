@@ -3184,7 +3184,9 @@
     // ----- tree -----
     const maxIn = (pl) => (pl === 0 ? stack : Math.max(0, stack - toCall));
     // Hero's sizes (fractions of the pot). At most 3 bets or 2 raises, so a node has at most 4 actions.
-    const turnBets = (cfg.turnBets || [0.33, 0.66, 1]).slice(0, 3), riverBets = (cfg.riverBets || [0.5, 1]).slice(0, 3);
+    // River subgames get three sizes too (they had 50/100%; 33/66/100% was +17 +- 12 bb/100 in the
+    // simulator, 4-handed, two seeds of 1,000 deals, for about 13% fewer iterations per second).
+    const turnBets = (cfg.turnBets || [0.33, 0.66, 1]).slice(0, 3), riverBets = (cfg.riverBets || [0.33, 0.66, 1]).slice(0, 3);
     const raiseFracs = (cfg.raiseFracs || [1]).slice(0, 2);
     let nodes = 0;
     function makeNode(n5, card, player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise, fr, oppAgg, q, nb = 0) {

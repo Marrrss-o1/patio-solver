@@ -134,7 +134,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   to the Monte Carlo.
 - Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
   one Discounted CFR. Turn: hero 33/66/100% pot, opponent their size, one raise; each line that reaches the river gets
-  a river subgame per card (built lazily; OOP first, hero 50/100%, one raise); each iteration samples 6 river cards
+  a river subgame per card (built lazily; OOP first, hero 33/66/100% (was 50/100%: +17 ± 12 bb/100 pooled over two
+  seeds of 1,000 4-handed deals, about 13% fewer iterations per second), one raise); each iteration samples 6 river cards
   (`turnRiverSamples`), the final pass uses all 48. Hero and opponent hands are indexed separately and pruned
   (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
   line. Sizes are `turnBets`/`turnRiverBets`/`turnRaises` in the input (at most 3 bets or 2 raises, so a node has
@@ -282,7 +283,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   about +12 ± 15); multiway preflop on the refit bots (limpers fold like the
   friends) +31 ± 18; v1.4.0 vs v1.5.0 main +13 ± 21 4-handed, +12 ± 22 heads-up; side-pot gate (#21) +28 ± 16; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
   against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals); lookahead lines (v1.7.0, LINE_SOFT 0.5) +27 ± 15
-  4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22. Bots are simple; this is a regression check, not proof
+  4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22; turn solver river
+  sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds. Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
