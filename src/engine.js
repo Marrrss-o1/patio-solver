@@ -1000,6 +1000,28 @@
     }
   }
 
+  // On a river board that is a straight or better by itself, the hands that only play the board
+  // (they tie it) get flag 1. Those hands do not fold to a bet: calling wins back their share
+  // of the pot, and a bluff into them can only lose. null when the board is weaker or no hand ties.
+  function boardPlayers(board) {
+    if (board.length !== 5) return null;
+    const b = new Int32Array(7);
+    for (let i = 0; i < 5; i++) b[i] = board[i];
+    const own = evaluate(b, 5);
+    if ((own >> 20) < 4) return null;
+    const onBoard = new Uint8Array(52);
+    for (const c of board) onBoard[c] = 1;
+    const out = new Uint8Array(NUM_COMBOS);
+    let any = 0;
+    for (let k = 0; k < NUM_COMBOS; k++) {
+      const x = COMBO_HI[k], y = COMBO_LO[k];
+      if (onBoard[x] || onBoard[y]) continue;
+      b[5] = x; b[6] = y;
+      if (evaluate(b, 7) === own) { out[k] = 1; any++; }
+    }
+    return any ? out : null;
+  }
+
   function boardStrength(board) {
     const n = board.length;
     const hs = new Float64Array(NUM_COMBOS).fill(-1);
@@ -2018,6 +2040,7 @@
 
     // Opponent's strength quantile inside their own range (for the read's strategy).
     const qO = rangeQuantiles(oppW, strengths.hs);
+    const ties = boardPlayers(board);
 
     // Blocker-aware showdown masses: for each hand, the other side's reach that is below,
     // tied with and above it, and the total, skipping hands that share a card.
@@ -2109,6 +2132,7 @@
           } else {
             pCont = sigmoid((q - foldCut) / 0.04);
           }
+          if (ties && ties[idx[i]]) pCont = 1;
           const pRaise = sigmoid((q - raiseCut) / 0.03);
           for (let j = 0; j < nA; j++) {
             if (kinds[j] === 'fold') pr[j] = 1 - pCont;
@@ -2570,7 +2594,22 @@
       }
       return q;
     }
-    function fixedStrategy(acts, facingFrac, vsRaise, rootRaise, q, n5, aggS) {
+    // River cards that make the board a straight or better: the opponent's hands that only play
+    // the board call any bet (boardPlayers).
+    const tieCache = new Array(52);
+    function riverTies(c) {
+      if (tieCache[c] !== undefined) return tieCache[c];
+      const all = boardPlayers(board.concat([c]));
+      let out = null;
+      if (all) {
+        out = new Uint8Array(O.n);
+        let any = 0;
+        for (let i = 0; i < O.n; i++) if (all[O.idx[i]]) { out[i] = 1; any++; }
+        if (!any) out = null;
+      }
+      return (tieCache[c] = out);
+    }
+    function fixedStrategy(acts, facingFrac, vsRaise, rootRaise, q, n5, aggS, ties) {
       const st = streetStats(oppStats, n5);
       const bf = clamp(st.betFreq, 0.05, 0.9), vr = valueShare(oppStats, betFrac);
       const N = O.n, nA = acts.length, s = new Float32Array(nA * N), pr = new Float64Array(nA);
@@ -2589,6 +2628,7 @@
           if (rootRaise) pCont = sigmoid((qi - 0.9 * (1 - vr)) / 0.04);
           else if (vsRaise) pCont = qi >= 1 - bf * vr ? 1 : qi < bf * (1 - vr) ? 0.1 : 0.5;
           else pCont = sigmoid((qi - foldQ) / 0.04);
+          if (ties && ties[i]) pCont = 1;
           const pRaise = sigmoid((qi - rq) / 0.03);
           for (let j = 0; j < nA; j++) {
             const a = acts[j];
@@ -2657,7 +2697,7 @@
         const aggS = n5 === 4 ? aggAlways : (oppAgg ? aggIfBet : aggAlways);
         // Hero raising the bet the opponent made before this decision: their range is their betting range.
         const rootRaise = !!vsRaise && n5 === 4 && toCall > 0 && oIn === 0;
-        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, rootRaise, q, n5, aggS);
+        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, rootRaise, q, n5, aggS, n5 === 5 ? riverTies(card) : null);
         // Reach under the read's strategy, so river subgames know the read's range there.
         n.kids = kids.map((k, j) => {
           if (typeof k !== 'function') return k;
@@ -4300,6 +4340,8 @@
       return (heroBest ? P / n : 0) - heroIn - extra;
     }
 
+    // River boards that are a straight or better: hands that play the board never fold to a bet.
+    const ties = street === 5 ? boardPlayers(board) : null;
     function runScenario(sc, start, count) {
       const rng = mulberry32((seed + start * 2654435761) >>> 0);
       for (let it = 0; it < count; it++) {
@@ -4323,7 +4365,7 @@
           const r = rng();
           const rule = sc.opp[i];
           const q = street === 0 && opps[i].pending ? current.hs[oppCombo[i]] : opps[i].qCont[oppCombo[i]];
-          if (rule.cont >= 0.999) oppIn[i] = 1;
+          if (rule.cont >= 0.999 || (ties && ties[oppCombo[i]])) oppIn[i] = 1;
           else {
             const pRel = sigmoid((q - (1 - rule.cont)) / 0.04);
             const pNut = sigmoid((current.hs[oppCombo[i]] - rule.nut) / 0.015);

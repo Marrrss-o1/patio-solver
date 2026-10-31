@@ -972,6 +972,20 @@ test('flop solver: computer mode only; heads-up and against the field', () => {
   assert.ok(field.ranked.every((x) => isFinite(x.ev)));
 });
 
+test('river: hands that play a straight-or-better board call, so bluffing into them is no edge', () => {
+  // Marwin's log, hand 93: three passive players, board 8-Q straight, hero 2d7h plays the board.
+  const opps = ['A', 'B', 'C'].map((name) => ({ name, tally: {}, actions: { pre: 'call', flop: 'check', turn: 'check', river: '' } }));
+  const spot = (extra) => E.analyzeSync(Object.assign({ hero: C('2d 7h'), board: C('Jd Qc Tc 9h 8c'), pot: 8, toCall: 0, stack: 300,
+    bigBlind: 2, inPosition: false, mix: false, seed: 1, iterations: 6000, opponents: opps,
+    heroActions: { pre: 'call', flop: 'check', turn: 'check' } }, extra));
+  assert.strictEqual(spot({ riverSolver: false }).best.kind, 'check');
+  assert.strictEqual(spot({ riverSolver: false, opponents: [opps[0]] }).best.kind, 'check');
+  for (const r of [spot({}), spot({ opponents: [opps[0]] })]) {
+    const ev = (k) => Math.max(...r.ranked.filter((a) => a.kind === k).map((a) => a.ev));
+    assert.ok(ev('bet') - ev('check') < 0.25, `bet ${ev('bet')} vs check ${ev('check')}`);
+  }
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
