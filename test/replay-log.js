@@ -21,13 +21,19 @@ const only = which && which !== 'all' ? which.split(',').map(Number) : null;
 function run(repo) {
   const E = require(path.join(repo, 'src/engine.js'));
   const T = require(path.join(repo, 'src/tracker.js'));
-  // authUserId by name from the chat log (reads are keyed by it); the hero comes from the log.
-  const auth = {};
+  // authUserId by name from the chat log (reads are keyed by it): the id seen most often with each
+  // name, because admin lines in the game log carry the target's nick with the admin's id. The hero
+  // comes from each hand (screen names can change mid-session).
+  const votes = {};
   for (const x of hands) for (const r of x.raw || []) {
-    if (r.ev === 'chat_message' && r.d && r.d.username && r.d.userId && r.d.userId !== -1) auth[r.d.username] = r.d.userId;
+    if (r.ev === 'chat_message' && r.d && r.d.username && r.d.userId && r.d.userId !== -1) {
+      const v = votes[r.d.username] || (votes[r.d.username] = {});
+      v[r.d.userId] = (v[r.d.userId] || 0) + 1;
+    }
   }
+  const auth = {};
+  for (const [name, v] of Object.entries(votes)) auth[name] = Object.entries(v).sort((a, b) => b[1] - a[1])[0][0];
   for (const x of hands) for (const p of x.players) if (!auth[p.name]) auth[p.name] = 'name:' + p.name;
-  const heroName = (hands[0].players.find((p) => p.hero) || {}).name;
   const t = new T({ players: {} });
   t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
   const fmt = (sc) => (sc.label || sc.kind) + (sc.amount ? ' ' + Math.round(sc.amount * 100) / 100 : '');
@@ -50,6 +56,7 @@ function run(repo) {
   });
   hands.forEach((x, i) => {
     cur = i;
+    const heroName = (x.players.find((p) => p.hero) || {}).name;
     for (const r of x.raw || []) {
       if (r.s) {
         snap = {
