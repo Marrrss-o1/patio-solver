@@ -435,5 +435,57 @@ test('hand log: hands are kept with actions, shown cards and advice', () => {
   assert.deepStrictEqual(vic.actions.river, ['bet']);
 });
 
+// ---------------------------------------------------------------------------
+// 7. River solver (PR 2)
+// ---------------------------------------------------------------------------
+const riverSpot = (hero, extra) => Object.assign({
+  hero: C(hero), board: C('Kd 8h 2s 3c Ac'), pot: 320, toCall: 120, stack: 1000, bigBlind: 10, inPosition: false, mix: false,
+  opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 0.6 } }],
+  heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, iterations: 2000, riverIterations: 150,
+}, extra);
+
+test('river solver: runs heads-up on the river only', () => {
+  assert.ok(E.analyzeSync(riverSpot('As Kc')).solver);
+  assert.strictEqual(E.analyzeSync(riverSpot('As Kc', { board: C('Kd 8h 2s 3c') })).solver, null);
+  const multi = riverSpot('As Kc');
+  multi.opponents = multi.opponents.concat([{ name: 'W', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'call' } }]);
+  assert.strictEqual(E.analyzeSync(multi).solver, null);
+});
+
+test('river solver: raises the nuts-ish hand, folds the bluff-catcher that cannot win', () => {
+  const big = E.analyzeSync(riverSpot('As Kc'));
+  assert.strictEqual(big.best.kind, 'raise');
+  const weak = E.analyzeSync(riverSpot('7c 6d', { opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 1.5 } }] }));
+  assert.strictEqual(weak.best.kind, 'fold');
+  const total = big.ranked.reduce((a, s) => a + s.freq, 0);
+  assert.ok(Math.abs(total - 1) < 1e-6);
+});
+
+test('river solver: checking it down is worth equity x pot (showdown math with blockers)', () => {
+  const spot = riverSpot('Ah Qd', { toCall: 0, pot: 200, inPosition: true, iterations: 20000,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'check' } }] });
+  const r = E.analyzeSync(spot);
+  const check = r.ranked.find((s) => s.kind === 'check');
+  const expect = r.equity.share * 200;
+  assert.ok(Math.abs(check.ev - expect) < 0.04 * 200, `${check.ev} vs ${expect}`);
+});
+
+test('river solver: calls a known bluffer more often than an honest bettor', () => {
+  const callFreq = (shows) => {
+    const tally = Object.assign(T.blankTally(), { pfFold: 60, pfCall: 45, pfRaise: 25, check: 60, bet: 36, call: 30, raise: 6, fold: 36, shows });
+    const r = E.analyzeSync(riverSpot('Kh Qh', { opponents: [{ name: 'V', tally, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 1 } }] }));
+    return r.ranked.filter((s) => s.kind === 'call').reduce((a, s) => a + s.freq, 0);
+  };
+  const bluffer = callFreq(Array(10).fill(0).map(() => ({ ...bluffShow })));
+  const honest = callFreq(Array(10).fill(0).map(() => ({ ...valueShow })));
+  assert.ok(bluffer > honest + 0.2, `${bluffer} vs ${honest}`);
+});
+
+test('river solver: tracker passes hero\'s own line', () => {
+  const x = replay(sd).turns[3];
+  assert.deepStrictEqual(x.input.heroActions, { pre: 'raise', flop: 'bet', turn: 'call', river: '' });
+  assert.strictEqual(x.input.heroPfAggressor, true);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

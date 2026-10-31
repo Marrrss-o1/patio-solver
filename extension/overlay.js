@@ -246,13 +246,14 @@
       kv.push(['Pot', money(r.pot)]);
       kv.push(['Position', r.inPosition ? 'In position (you act last)' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
+      if (r.solver) kv.push(['River solve', 'Your range vs theirs']);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += `<div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
 
       html += `<div><div class="sec" style="cursor:pointer" data-a="toggleOpts">All options ${ui.showOptions ? '▾' : '▸'}</div>`;
       if (ui.showOptions) {
         html += `<table>${r.ranked.map((s) => `<tr class="${s === r.ranked.find((x) => x.kind === best.kind && x.amount === best.amount) ? 'best' : ''}">
-          <td>${esc(actionText(s, c.heroStageBet, r.toCall))}${s.sizeLabel && s.sizeLabel !== 'raise' ? ' <span class="muted">' + esc(s.sizeLabel) + '</span>' : ''}</td>
+          <td>${esc(actionText(s, c.heroStageBet, r.toCall))}${s.sizeLabel && s.sizeLabel !== 'raise' ? ' <span class="muted">' + esc(s.sizeLabel) + '</span>' : ''}${s.freq != null ? ' <span class="muted">· play ' + pct(s.freq) + '</span>' : ''}</td>
           <td class="${s.ev < 0 ? 'neg' : s.ev > 0 ? 'pos' : ''}">${s.ev >= 0 ? '+' : '−'}${money(Math.abs(s.ev))}</td></tr>`).join('')}</table>`;
       }
       html += `</div>`;

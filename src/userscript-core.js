@@ -6,14 +6,14 @@ function slim(r) {
     return s && {
       kind: s.kind, label: s.label, sizeLabel: s.sizeLabel || '', amount: s.amount,
       ev: s.ev, se: s.se, foldPct: s.foldPct || 0, reraisedPct: s.reraisedPct || 0,
-      equityWhenCalled: s.equityWhenCalled
+      equityWhenCalled: s.equityWhenCalled, freq: s.freq
     };
   };
   return {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
     bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix,
+    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map(function (o) {
       return {
@@ -89,7 +89,10 @@ function slim(r) {
     return 'Raise to ' + money(heroStageBet + sc.amount);
   }
   function tone(sc) { return !sc ? '' : sc.kind === 'fold' ? 'fold' : (sc.kind === 'check' || sc.kind === 'call') ? 'passive' : 'aggr'; }
-  function sizeNote(s) { return s.sizeLabel && s.sizeLabel !== 'raise' ? s.sizeLabel : ''; }
+  function sizeNote(s) {
+    var size = s.sizeLabel && s.sizeLabel !== 'raise' ? s.sizeLabel : '';
+    return s.freq != null ? (size ? size + ' · ' : '') + 'play ' + pct(s.freq) : size;
+  }
 
   // ---------- DOM ----------
   var host = document.createElement('div');
@@ -245,6 +248,7 @@ function slim(r) {
       kv.push(['Pot', money(r.pot)]);
       kv.push(['Position', r.inPosition ? 'In position' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
+      if (r.solver) kv.push(['River solve', 'Your range vs theirs']);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += '<div class="kv">' + kv.map(function (p) { return '<span>' + p[0] + '</span><span>' + p[1] + '</span>'; }).join('') + '</div>';
       html += '<div><div class="sec" data-a="opts">All options ' + (ui.showOptions ? '▾' : '▸') + '</div>';

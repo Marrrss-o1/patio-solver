@@ -452,6 +452,12 @@
       if (stack != null && toCall > stack) toCall = stack;
 
       const street = h.board.length;
+      const lineOf = (o) => {
+        const a = { pre: PatioTracker.streetAction(o.seq.pre, 0) };
+        for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (street >= n) a[k] = PatioTracker.streetAction(o.seq[k], n);
+        if (street > 0 && a.pre === 'pending') a.pre = 'call';
+        return a;
+      };
       const opponents = opps.map((o) => {
         const r = this.record(o.auth, o.name);
         const actions = { pre: PatioTracker.streetAction(o.seq.pre, 0) };
@@ -471,6 +477,9 @@
           bigBlind: h.bigBlind || (this.snap && this.snap.bigBlind) || 1,
           inPosition, tableStyle: tableStyle || 'typical',
           opponents,
+          // Hero's own line this hand, so the river solver knows what hero's range looks like.
+          heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
+          heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
           iterations: opponents.length > 2 ? 16000 : 24000,
           // Fresh seed each decision, so close spots get mixed rather than always the same advice.
           seed: (Math.random() * 4294967296) >>> 0,
