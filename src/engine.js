@@ -5291,11 +5291,13 @@
     for (const o of input.opponents || []) if (o.committed != null && o.committed > heroMax + 1e-9) x += o.committed - heroMax;
     return x;
   }
-  // Side pots matter when someone is shorter than hero, or hero is shorter than a bet it faces.
+  // Side pots matter when someone has fewer chips than hero in total (in the pot plus behind:
+  // a player who just bet is not short), or hero is shorter than a bet it faces.
   function hasSidePots(input, stack) {
     const opps = input.opponents || [];
-    return input.heroCommitted != null && opps.every((o) => o.committed != null) &&
-      (opps.some((o) => o.stack != null && o.stack < stack) || uncalledChips(input, stack) > 0);
+    if (input.heroCommitted == null || !opps.every((o) => o.committed != null)) return false;
+    const heroTotal = +input.heroCommitted + stack;
+    return opps.some((o) => o.stack != null && +o.committed + o.stack < heroTotal - 1e-9) || uncalledChips(input, stack) > 0;
   }
 
   // The multiway solvers and the multiway lookahead treat every player as able to match every
