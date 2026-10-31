@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.7.2
+// @version      1.7.3
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1641,10 +1641,13 @@ function ENGINE() {
     if (kind.raiseOverAggressor) fold *= 0.75;
     let cont = 1 - fold;
     if (kind.raiseOverAggressor) cont = Math.min(cont, valueShare(s) + (ctx.street < 5 ? 0.1 : 0));
+    // A player who bet and got raised re-raises more often than one facing a first bet (logs:
+    // 3 of 11 flop bettors and 4 of 22 overall re-raised, against about 8% facing a first bet).
+    const rrScale = kind.raiseOverAggressor && ctx.rrAgg != null ? ctx.rrAgg : 1;
     return {
       cont: clamp(cont, 0.03, 0.97),
       nut: clamp(0.86 + 0.08 * (1 - mdf), 0.86, 0.95) - (kind.raiseOverAggressor ? 0.02 : 0),
-      reraise: clamp(streetStats(s, ctx.street).raiseFreq, 0.02, 0.3),
+      reraise: clamp(streetStats(s, ctx.street).raiseFreq * rrScale, 0.02, 0.3 * rrScale),
     };
   }
 
@@ -4991,7 +4994,12 @@ function ENGINE() {
       }
     }
 
-    const ctx = { street, bigBlind };
+    // After the flop a re-raise is played out: hero calls a pot-size re-raise and the hand goes
+    // to showdown, or folds, whichever wins more over the deals that get re-raised (hero's hand
+    // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
+    // played the rest as if just called, so re-raises only ever cost hero chips.
+    const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
+    const ctx = { street, bigBlind, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -5040,6 +5048,9 @@ function ENGINE() {
         n: 0, gainSum: 0, gainSq: 0, foldAll: 0, showdowns: 0, shareSum: 0, wins: 0, ties: 0,
         vsWins: new Float64Array(opps.length), vsTies: new Float64Array(opps.length), vsCount: new Float64Array(opps.length),
         oppFolds: new Float64Array(opps.length), reraised: 0, looked: 0, varSum: new Float64Array(VARIANTS.length),
+        // Deals where hero is re-raised after the flop (reraiseModel): what calling the re-raise
+        // won, kept apart; result() takes calling or folding, whichever is better over them.
+        rrN: 0, rrCall: 0, rrCallSq: 0, rrVarN: new Float64Array(VARIANTS.length), rrVarCall: new Float64Array(VARIANTS.length),
         // Nothing is left to bet after this action (hero all-in, or everyone who calls is), so
         // the robust versions can only differ in who folds to it now. Other bets keep the read's
         // response now and meet the versions on later streets.
@@ -5108,7 +5119,7 @@ function ENGINE() {
     const oppCombo = new Int16Array(opps.length);
     const oppScore = new Int32Array(opps.length);
     const oppIn = new Uint8Array(opps.length);
-    const varGain = new Float64Array(VARIANTS.length);
+    const varGain = new Float64Array(VARIANTS.length), varRR = new Uint8Array(VARIANTS.length);
     const addNow = new Float64Array(opps.length);
 
     // Side pots. With each player's chips in the pot so far (`committed`) and behind
@@ -5422,7 +5433,7 @@ function ENGINE() {
     // decision), who is still in, and whether the last settle() played later streets.
     const oppR = new Float64Array(opps.length), oppQ = new Float64Array(opps.length);
     const inBase = new Uint8Array(opps.length);
-    let settledLooked = false;
+    let settledLooked = false, settledRR = false;
     // Who continues against this scenario (fills oppIn), with the read's continue rates moved
     // down by `shift` (an opponent version that folds more, or less with a negative shift).
     // Returns the index of an opponent who re-raises, or -1.
@@ -5478,11 +5489,11 @@ function ENGINE() {
     let dealNo = 0, heroScoreDeal = -1, heroScore7 = 0;
     const oppScoreDeal = new Int32Array(opps.length).fill(-1), oppScore7 = new Int32Array(opps.length);
     function settle(sc, v, rng, rec, reraisedBy) {
-      settledLooked = false;
+      settledLooked = false; settledRR = false;
       let anyIn = 0;
       for (let i = 0; i < opps.length; i++) anyIn |= oppIn[i];
       if (!anyIn) { if (rec) sc.foldAll++; return pot; }
-      if (reraisedBy >= 0 && !heroStandsReraise) { if (rec) sc.reraised++; return -sc.amount; }
+      if (reraisedBy >= 0 && !rrModel && !heroStandsReraise) { if (rec) sc.reraised++; return -sc.amount; }
       // 7-card scores, evaluated once per deal (settle runs again for the opponent versions).
       if (heroScoreDeal !== dealNo) { cards[0] = hero[0]; cards[1] = hero[1]; heroScore7 = evaluate(cards, 7); heroScoreDeal = dealNo; }
       const hs = heroScore7;
@@ -5506,6 +5517,19 @@ function ENGINE() {
         }
       }
       const share = heroBest ? 1 / nBest : 0;
+      if (reraisedBy >= 0 && rrModel) {
+        // Hero calls a pot-size re-raise (capped by both stacks) and the hand goes to showdown;
+        // the others who were in keep their chips in. runScenario keeps this apart from the
+        // other deals (settledRR) and result() picks calling or folding.
+        const heroLeft = stack - sc.amount, rrLeft = oppLeft[reraisedBy] - addNow[reraisedBy];
+        const X = Math.min(finalPot, heroLeft, rrLeft);
+        if (X > 1e-9) {
+          if (rec) sc.reraised++;
+          settledRR = true;
+          const rz = heroLeft - X > 1e-9 && rrLeft - X > 1e-9 ? realize : 1;
+          return share * rz * (finalPot + 2 * X) - sc.amount - X;
+        }
+      }
       let inCount = 0, lastIn = -1;
       for (let i = 0; i < opps.length; i++) if (oppIn[i]) { inCount++; lastIn = i; }
       let gain;
@@ -5577,6 +5601,8 @@ function ENGINE() {
         }
         dealNo++;
         const gain = settle(sc, 0, rng, true, reraisedBy);
+        const baseRR = settledRR;
+        varRR.fill(0);
         // The robust opponent versions (only used with the look-ahead). Bets meet them on later
         // streets; shoves have none, so there a version that folds more or less changes who
         // folds to the shove itself. Without this a shove's worst case was its read EV, which
@@ -5590,14 +5616,18 @@ function ENGINE() {
             const rr = shift ? decide(sc, shift, tabsV[v]) : reraisedBy;
             let same = true;
             if (shift) for (let i = 0; i < opps.length; i++) if (oppIn[i] !== inBase[i]) { same = false; break; }
-            varGain[v] = same && !looked ? gain : settle(sc, v, rng, false, rr);
+            if (same && !looked) { varGain[v] = gain; varRR[v] = baseRR ? 1 : 0; }
+            else { varGain[v] = settle(sc, v, rng, false, rr); varRR[v] = settledRR ? 1 : 0; }
             if (shift) oppIn.set(inBase);
           }
         }
         sc.n++;
-        for (let v = 1; v < VARIANTS.length; v++) sc.varSum[v] += isNaN(varGain[v]) ? gain : varGain[v];
-        sc.gainSum += gain;
-        sc.gainSq += gain * gain;
+        for (let v = 1; v < VARIANTS.length; v++) {
+          const nan = isNaN(varGain[v]), g = nan ? gain : varGain[v];
+          if (nan ? baseRR : varRR[v]) { sc.rrVarN[v]++; sc.rrVarCall[v] += g; } else sc.varSum[v] += g;
+        }
+        if (baseRR) { sc.rrN++; sc.rrCall += gain; sc.rrCallSq += gain * gain; }
+        else { sc.gainSum += gain; sc.gainSq += gain * gain; }
       }
     }
 
@@ -5948,12 +5978,21 @@ function ENGINE() {
       for (const sc of scenarios) {
         if (sc.kind === 'fold') { sc.ev = sc.evRead = sc.evWorst = 0; sc.se = 0; continue; }
         const n = Math.max(1, sc.n);
-        sc.evRead = sc.gainSum / n;
-        sc.se = Math.sqrt(Math.max(0, sc.gainSq / n - sc.evRead * sc.evRead) / n);
+        // Re-raised deals: call the re-raise if that beats folding over them.
+        const rrFold = -sc.amount * sc.rrN;
+        sc.callsReraise = sc.rrN > 0 ? sc.rrCall > rrFold : null;
+        const rrSum = sc.callsReraise ? sc.rrCall : rrFold, rrSq = sc.callsReraise ? sc.rrCallSq : sc.amount * sc.amount * sc.rrN;
+        sc.evRead = (sc.gainSum + rrSum) / n;
+        sc.se = Math.sqrt(Math.max(0, (sc.gainSq + rrSq) / n - sc.evRead * sc.evRead) / n);
         // Hold up against opponents who play differently from the read: blend in the worst
         // version, more so when the read is thin.
         sc.evWorst = sc.evRead;
-        if (lookahead) for (let v = 1; v < VARIANTS.length; v++) sc.evWorst = Math.min(sc.evWorst, sc.varSum[v] / n);
+        if (lookahead) {
+          for (let v = 1; v < VARIANTS.length; v++) {
+            const rv = sc.callsReraise ? sc.rrVarCall[v] : -sc.amount * sc.rrVarN[v];
+            sc.evWorst = Math.min(sc.evWorst, (sc.varSum[v] + rv) / n);
+          }
+        }
         sc.ev = (1 - robustWeight) * sc.evRead + robustWeight * sc.evWorst;
         sc.foldPct = sc.foldAll / n;
         sc.reraisedPct = sc.reraised / n;
@@ -6049,8 +6088,8 @@ function ENGINE() {
 
     // Parallel runs: workers return their Monte Carlo tallies with partial(), and one final
     // analysis with input.merge adds them up (and runs the solvers) instead of sampling itself.
-    const ACC = ['n', 'gainSum', 'gainSq', 'foldAll', 'showdowns', 'shareSum', 'wins', 'ties', 'reraised', 'looked'];
-    const ARR = ['vsWins', 'vsTies', 'vsCount', 'oppFolds', 'varSum'];
+    const ACC = ['n', 'gainSum', 'gainSq', 'foldAll', 'showdowns', 'shareSum', 'wins', 'ties', 'reraised', 'looked', 'rrN', 'rrCall', 'rrCallSq'];
+    const ARR = ['vsWins', 'vsTies', 'vsCount', 'oppFolds', 'varSum', 'rrVarN', 'rrVarCall'];
     function partial() {
       return scenarios.map((sc) => {
         const o = { kind: sc.kind, amount: sc.amount };
