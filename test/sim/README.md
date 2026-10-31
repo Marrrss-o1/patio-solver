@@ -56,8 +56,9 @@ bots, seed and block size), so a third arm can be added later without replaying 
   `home:pool` the pooled average friend, `home:hero` a bot fitted to Marwin's own play (used during calibration).
   They limp a lot, open 3-5bb, 3-bet with min-raises (raise wars), bet small and min-bet, and call with any pair or
   draw. Fitted per friend, shrunk toward the pool by sample size: VPIP, PFR, fold and 3-bet vs an open, continue vs
-  8bb+ to call, open size, share of opens that are all-in, bet size, and bet / fold-to-bet / raise per street
-  (average miss ~1.2 points over 278 hands from three exports, deduplicated by time stamp). Opens of 12bb or more
+  8bb+ to call, a limper's fold to a raise (real limpers fold about half the time), an opener's fold to a 3-bet,
+  open size, share of opens that are all-in, bet size, and bet / fold-to-bet / raise per street (average miss
+  ~1.7 points over 23 stats and 278 hands from three exports, deduplicated by time stamp). Opens of 12bb or more
   count as shove-opens (one friend opens all-in about a fifth of the time), so they don't set the open size or
   count as facing an open; each bet's size is capped at 2x pot so a few huge bets don't set the mean. Pooled
   over all friends (too few showdowns each), how strong river callers are at showdown sets how loosely they call

@@ -168,7 +168,7 @@ function playHand(cfg) {
   const g = {
     n, btn: cfg.btn, hands: cfg.hands, boardAll: cfg.boardAll, board: [], bb, sb,
     stack: cfg.stacks.slice(), start: cfg.stacks.slice(), bet: new Array(n).fill(0), put: new Array(n).fill(0),
-    folded: new Array(n).fill(false), cur: 0, lastRaise: bb, raises: 0, street: 0, pfAgg: -1, limpers: 0,
+    folded: new Array(n).fill(false), cur: 0, lastRaise: bb, raises: 0, street: 0, pfAgg: -1, limpers: 0, limped: new Array(n).fill(false),
     seq: Array.from({ length: n }, () => ({ pre: [], flop: [], turn: [], river: [] })), nAct: 0,
     vseed: (cfg.seed ^ 0x5bd1e995) >>> 0, lastAgg: -1, potAtStreet: 0,
   };
@@ -241,7 +241,7 @@ function playHand(cfg) {
       seat: i, n, hand: g.hands[i], board: g.board, street: g.board.length, bb, sb,
       pot: g.put.reduce((a, b) => a + b, 0), toCall: Math.max(0, g.cur - g.bet[i]), cur: g.cur, myBet: g.bet[i], stack: g.stack[i],
       put: g.put[i], lastRaise: g.lastRaise, raises: g.raises, nLive: lv.length, nOpp: lv.length - 1, pos: pos[i], btn: g.btn,
-      isBtn: i === g.btn, pfAgg: g.pfAgg, lastAgg: g.lastAgg, limpers: g.limpers, seq: g.seq[i], potAtStreet: g.potAtStreet,
+      isBtn: i === g.btn, pfAgg: g.pfAgg, lastAgg: g.lastAgg, limpers: g.limpers, limped: g.limped[i], seq: g.seq[i], potAtStreet: g.potAtStreet,
       // How many live players act after this seat on this street (0 = last to act).
       behind: (() => { const order = seatOrderFrom(g.btn, n).filter((j) => !g.folded[j]); return order.length - 1 - order.indexOf(i); })(),
       maxOppStack: Math.max(0, ...lv.filter((j) => j !== i).map((j) => g.stack[j] + g.bet[j] - g.bet[i])),
@@ -324,7 +324,7 @@ function playHand(cfg) {
           if (nb === 0) g.pfAgg = actor;
           acted.fill(false);
         }
-        if (nb === 0 && na.t === 'call' && g.raises === 0) g.limpers++;
+        if (nb === 0 && na.t === 'call' && g.raises === 0) { g.limpers++; g.limped[actor] = true; }
       }
       g.seq[actor][STREET_KEY[nb]].push(kind);
       if (log) {
