@@ -5,9 +5,9 @@ self.onmessage = (e) => {
   try {
     if (mode === 'partial') {
       const out = PokerEngine.analyzeSync(Object.assign({}, input, { partial: true }));
-      self.postMessage({ id, ok: true, partial: out.partial, solved: out.solved });
+      self.postMessage({ id, ok: true, partial: out.partial, solved: out.solved, kernels: PokerEngine.kernelsActive() });
     } else {
-      self.postMessage({ id, ok: true, result: slim(PokerEngine.analyzeSync(input)) });
+      self.postMessage({ id, ok: true, result: slim(PokerEngine.analyzeSync(input)), kernels: PokerEngine.kernelsActive() });
     }
   } catch (err) {
     self.postMessage({ id, ok: false, error: String((err && err.message) || err) });
