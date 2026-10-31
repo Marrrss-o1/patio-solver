@@ -1033,5 +1033,124 @@ test('kernels: river, preflop and turn solves give bit-identical results with an
   }
 });
 
+// ---------------------------------------------------------------------------
+// 9. Audit: chip accounting (pot odds, side pots, all-ins, blinds)
+// ---------------------------------------------------------------------------
+test('short hero vs a bigger bet: the part hero cannot match is not in the pot', () => {
+  // Pot 300, a deep opponent bets 300, hero has only 100 behind. Calling all-in plays for
+  // 300 + 100 + 100 = 500 (the other 200 goes back to them), so the price is 100 / 500.
+  const spot = { hero: C('Th 9h'), board: C('Kd 8h 2s 3c'), pot: 600, toCall: 100, stack: 100, bigBlind: 10, mix: false, seed: 1, iterations: 6000,
+    heroCommitted: 50, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'bet' }, stack: 700, committed: 350 }] };
+  const r = E.analyzeSync(spot);
+  assert.strictEqual(r.potWin, 400);
+  assert.ok(Math.abs(r.potOdds - 0.2) < 1e-9, String(r.potOdds));
+  const call = r.ranked.find((s) => s.kind === 'allin');
+  assert.ok(Math.abs(call.ev - (r.equity.share * 500 - 100)) < 1e-6, `${call.ev} vs ${r.equity.share * 500 - 100}`);
+  // The river solver plays for the same pot.
+  const river = E.analyzeSync(Object.assign({}, spot, { board: C('Kd 8h 2s 3c 7d'), opponents: [Object.assign({}, spot.opponents[0], { actions: { pre: 'call', flop: 'call', turn: 'call', river: 'bet' } })] }));
+  assert.ok(river.solver);
+  river.ranked.forEach((s) => assert.ok(s.ev <= 400 + 1e-6, `${s.kind}: ${s.ev}`));
+  assert.strictEqual(E.solvableSpot(Object.assign({}, spot, { board: C('Kd 8h 2s 3c 7d'), opponents: [spot.opponents[0], Object.assign({}, spot.opponents[0], { name: 'W' })] })), null);
+});
+
+test('an opponent who is already all-in cannot fold to a bet', () => {
+  const r = E.analyzeSync({ hero: C('Ah Qd'), board: C('Kd 8h 2s 3c'), pot: 300, toCall: 0, stack: 1000, bigBlind: 10, mix: false, seed: 1, iterations: 3000, inPosition: true,
+    heroCommitted: 100, opponents: [
+      { name: 'Short', tally: {}, actions: { pre: 'call', flop: 'call', turn: '' }, stack: 0, committed: 100 },
+      { name: 'Deep', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check' }, stack: 2000, committed: 100 }] });
+  for (const s of r.ranked.filter((x) => x.kind === 'bet' || x.kind === 'allin')) {
+    assert.strictEqual(s.oppFolds[0], 0, `${s.kind} ${s.amount}: Short folded ${s.oppFolds[0]} times`);
+    assert.strictEqual(s.foldPct, 0, 'nobody can fold everyone out of an all-in pot');
+  }
+});
+
+test('blinds already posted are not counted twice when they call', () => {
+  // CO opens to 6 (bb 2), hero on the button calls, SB (1 in) and BB (2 in) still to act.
+  const r = E.analyzeSync({ hero: C('9h 8h'), board: [], pot: 9, toCall: 6, stack: 200, bigBlind: 2, mix: false, seed: 1, iterations: 500, inPosition: true,
+    heroBet: 0, opponents: [
+      { name: 'SB', tally: {}, actions: { pre: 'pending' }, bet: 1 },
+      { name: 'BB', tally: {}, actions: { pre: 'pending' }, bet: 2 },
+      { name: 'CO', tally: {}, actions: { pre: 'raise' }, bet: 6 }] });
+  const call = r.scenarios.find((s) => s.kind === 'call');
+  assert.deepStrictEqual(call.opp.map((o) => o.add), [5, 4, 0]);
+  const raise = r.scenarios.find((s) => s.kind === 'raise');
+  assert.deepStrictEqual(raise.opp.map((o) => o.add), [raise.amount - 1, raise.amount - 2, raise.amount - 6]);
+  // The tracker passes what each player has in on this street.
+  const x = replay(three).turns[0];
+  assert.strictEqual(x.input.heroBet, 10);
+  assert.deepStrictEqual(x.input.opponents.map((o) => o.bet), [30, 30]);
+});
+
+test('no discount for later streets when nobody can bet any more', () => {
+  // The opponent is all-in: calling just runs the board out, so EV = equity x pot - call.
+  const r = E.analyzeSync({ hero: C('Ah Kh'), board: C('Qh 7h 2c'), pot: 300, toCall: 100, stack: 1000, bigBlind: 10, mix: false, seed: 2, iterations: 4000, inPosition: false,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'raise' }, stack: 0 }] });
+  const call = r.ranked.find((s) => s.kind === 'call');
+  assert.ok(Math.abs(call.ev - (r.equity.share * 400 - 100)) < 1e-6, `${call.ev} vs ${r.equity.share * 400 - 100}`);
+});
+
+test('look-ahead bets stop at the chips the opponent has left', () => {
+  // Hero has top set; the opponent has 20 behind after their bet. Hero can win at most the
+  // pot (with their bet) plus those 20.
+  const r = E.analyzeSync({ hero: C('Kh Ks'), board: C('Kd 7c 2s'), pot: 200, toCall: 100, stack: 1000, bigBlind: 10, mix: false, seed: 4, iterations: 4000, inPosition: true,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'bet' }, stack: 20 }] });
+  const call = r.ranked.find((s) => s.kind === 'call');
+  assert.ok(call.lookedPct > 0.9);
+  assert.ok(call.evRead <= 200 + 20 + 1e-6, String(call.evRead));
+});
+
+test('robust EV: shoves on the flop and turn are stress-tested like other bets', () => {
+  // A draw with a short stack: the all-in leans on fold equity, so an opponent who calls
+  // more than the read says must cost it, as it costs the smaller bets.
+  const r = E.analyzeSync({ hero: C('9c 8c'), board: C('Tc 7d 2h 3s'), pot: 150, toCall: 0, stack: 300, bigBlind: 10, mix: false, seed: 3, iterations: 6000, inPosition: true,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check' } }] });
+  assert.ok(r.robustWeight > 0);
+  const shove = r.ranked.find((s) => s.kind === 'allin');
+  assert.ok(shove.evWorst < shove.evRead - 10, `${shove.evWorst} vs ${shove.evRead}`);
+  assert.ok(shove.ev < shove.evRead);
+  assert.notStrictEqual(r.best.kind, 'allin');
+});
+
+test('multiway: position is taken against each opponent, not the whole table', () => {
+  // Hero in the big blind on the flop: the small blind acts before hero, the button after.
+  const x = replay(three).turns[1];
+  assert.strictEqual(x.input.inPosition, false);
+  assert.deepStrictEqual(x.input.opponents.map((o) => [o.name, o.heroIP]), [['Ann', false], ['Bob', true]]);
+  // The play-outs (multiway, and heads-up once one folds) use hero's position against each
+  // opponent: a draw that bets is worth more acting last against both than acting first.
+  const spot = (ip) => E.analyzeSync({ hero: C('9h 8h'), board: C('Kd 7c 2h'), pot: 90, toCall: 0, stack: 970, bigBlind: 10, mix: false, seed: 6, iterations: 8000, inPosition: false,
+    opponents: ['A', 'B'].map((n) => ({ name: n, tally: {}, actions: { pre: 'call', flop: 'check' }, heroIP: ip })) });
+  const bet = (r) => r.ranked.find((s) => s.kind === 'bet').evRead;
+  const ip = spot(true), oop = spot(false);
+  assert.ok(bet(ip) > bet(oop) + 3, `${bet(ip)} vs ${bet(oop)}`);
+});
+
+// Real 5-handed hand (names anonymized). Seats s1, s7, s8, s3_v2, s10; the server's blinds
+// and preflop action order put s3_v2 between s8 and s10, although its digits read as 32.
+const fiveV2 = require(path.join(__dirname, 'fixtures/real-5handed-seat-v2.json'));
+function seatsAtFirstTurn(msgs) {
+  const t = new T({ players: {} });
+  let first = null;
+  t.on((type, p) => {
+    if (type === 'turn' && p.isHero && !first) first = { order: t.seatOrder().map((x) => x.pos), b: t.solverInput('typical') };
+  });
+  for (const m of msgs) t.handle(m.ev, m.data, m.snap);
+  return first;
+}
+
+test('seat order: the s3_v2 seat sits between s9 and s10, blinds and UTG come from the server', () => {
+  const x = seatsAtFirstTurn(fiveV2);
+  assert.deepStrictEqual(x.order, ['s10', 's1', 's7', 's8', 's3_v2']);
+  const i = x.b.input;
+  assert.strictEqual(i.heroPosition, 'early');
+  assert.strictEqual(i.inPosition, false);
+  assert.deepStrictEqual(i.opponents.map((o) => [o.name, o.position, o.heroIP]),
+    [['P2', 'late', false], ['P4', 'late', false], ['P3', 'blinds', true], ['P1', 'blinds', true]]);
+  // Without the blinds and UTG in dealer_updated (older recordings), the seat order alone
+  // gives the same ring.
+  const bare = fiveV2.map((m) => (m.ev === 'game:dealer_updated' ? Object.assign({}, m, { data: { dealerSeatPos: m.data.dealerSeatPos } }) : m));
+  assert.deepStrictEqual(seatsAtFirstTurn(bare).order, x.order);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
