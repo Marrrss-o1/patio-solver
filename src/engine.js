@@ -1537,18 +1537,30 @@
     };
   }
 
+  // Inverse-CDF sampling. `guide[j]` is the first entry whose cumulative weight reaches j/GUIDE
+  // of the total, so the binary search starts from a narrow window; the checks below widen it
+  // again if rounding put the answer outside, so the pick is the one the full search makes.
+  const GUIDE = 512;
   function buildSampler(W) {
-    const idx = [], cum = [];
+    const idx = [], cumL = [];
     let total = 0;
     for (let k = 0; k < NUM_COMBOS; k++) {
-      if (W[k] > 0) { total += W[k]; idx.push(k); cum.push(total); }
+      if (W[k] > 0) { total += W[k]; idx.push(k); cumL.push(total); }
     }
-    return { idx: Int16Array.from(idx), cum: Float64Array.from(cum), total };
+    const cum = Float64Array.from(cumL), n = cum.length, guide = new Int32Array(GUIDE + 1);
+    for (let j = 0, i = 0; j <= GUIDE; j++) {
+      const x = (j / GUIDE) * total;
+      while (i < n - 1 && cum[i] < x) i++;
+      guide[j] = i;
+    }
+    return { idx: Int16Array.from(idx), cum, total, guide };
   }
 
   function sampleCombo(s, r) {
-    const x = r * s.total;
-    let lo = 0, hi = s.cum.length - 1;
+    const x = r * s.total, cum = s.cum, j = (r * GUIDE) | 0;
+    let lo = s.guide[j], hi = s.guide[j + 1];
+    if (lo > 0 && cum[lo - 1] >= x) lo = 0;
+    if (!(cum[hi] >= x)) hi = cum.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
       if (s.cum[mid] < x) lo = mid + 1; else hi = mid;
