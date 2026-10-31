@@ -266,7 +266,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up +1.9 ± 21 and 4-handed +5 ± 20, then +20 ± 22 on the size-aware bots (1,000 deals each; pooled 4-handed
   about +12 ± 15); multiway preflop on the refit bots (limpers fold like the
   friends) +31 ± 18; v1.4.0 vs v1.5.0 main +13 ± 21 4-handed, +12 ± 22 heads-up; side-pot gate (#21) +28 ± 16; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
-  against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals). Bots are simple; this is a regression check, not proof
+  against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals); lookahead lines (v1.7.0, LINE_SOFT 0.5) +27 ± 15
+  4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22. Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
