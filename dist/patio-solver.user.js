@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.5.0
+// @version      1.6.0
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -4513,6 +4513,9 @@ function ENGINE() {
     // Side pots. With each player's chips in the pot so far (`committed`) and behind
     // (`stack`), an all-in player can only win what they matched from each other player.
     const sidePots = hasSidePots(input, stack);
+    // Stack for the multiway solves and lookahead (null: side pots matter, see multiwayStack).
+    const mwStack = street >= 3 ? multiwayStack(input, stack, street) : stack;
+    const mwStackF = mwStack != null && isFinite(mwStack) ? mwStack : 100 * bigBlind + pot;
     const contrib = new Float64Array(opps.length + 1);
     function sidePotWin(heroAdd, heroScore) {
       let committedSum = input.heroCommitted;
@@ -4859,7 +4862,7 @@ function ENGINE() {
         const startCur = sc.kind === 'check' && opps[lastIn].pending;
         gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v, null, oppLeft[lastIn] - addNow[lastIn]);
         settledLooked = true;
-      } else if (lookahead && inCount >= 2 && sc.amount < stack && !sidePots) {
+      } else if (lookahead && inCount >= 2 && sc.amount < stack && mwStack != null) {
         let mask = 0, anyPending = false;
         for (let i = 0; i < opps.length; i++) if (oppIn[i]) { mask |= 1 << i; if (opps[i].pending) anyPending = true; }
         const list = listFor(mask);
@@ -4998,7 +5001,7 @@ function ENGINE() {
     // field as one opponent whose hand is the live hand with the most turn equity, sampled
     // jointly. Hero's showdown share is scaled by kappa (turnFieldKappa) because the other
     // players can still win on the river.
-    if (!solved && street === 4 && opps.length >= 2 && opps.length <= 4 && !sidePots && input.turnSolver === true && stack > 0) {
+    if (!solved && street === 4 && opps.length >= 2 && opps.length <= 4 && mwStack != null && input.turnSolver === true && stack > 0) {
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
       const heroW = buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
@@ -5013,7 +5016,7 @@ function ENGINE() {
           board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
           oppStats: fieldStats(opps.map((x) => x.stats), o.stats), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroLine) ? aggS : 1, aggScaleIfAgg: aggS,
-          pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+          pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
           turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises,
@@ -5025,7 +5028,7 @@ function ENGINE() {
     // Computer mode, flop (input.flopSolver === true): the flop and the turn in one solve with the
     // river checked down, heads-up or against the field (2-4 opponents, no side pots) like the
     // multiway turn.
-    if (!solved && street === 3 && opps.length >= 1 && opps.length <= 4 && !(opps.length > 1 && sidePots) && input.flopSolver === true && stack > 0) {
+    if (!solved && street === 3 && opps.length >= 1 && opps.length <= 4 && !(opps.length > 1 && mwStack == null) && input.flopSolver === true && stack > 0) {
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call' }, input.heroActions || {});
       const heroW = buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
@@ -5055,7 +5058,7 @@ function ENGINE() {
         const fs = flopSolve({
           board, heroCombo, strengths3: strengths[3], bigBlind, heroW, oppW, oppStats, p,
           aggScale: opps.some((x) => x.aggroLine) ? aggS : 1, aggScaleIfAgg: aggS,
-          pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+          pot: potWin, toCall, stack: opps.length > 1 ? mwStackF : isFinite(stack) ? stack : 100 * bigBlind + pot,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.flopIterations, timeMs: input.flopTimeMs, turnSamples: input.flopTurnSamples,
           riverSamples: input.flopRiverSamples, seed, flopBets: input.flopBets, turnBets: input.flopTurnBets, multi,
@@ -5071,7 +5074,7 @@ function ENGINE() {
     // the live opponents' hands, sampled jointly from their ranges (so card removal is right),
     // and it plays like the aggressor if there is one, otherwise like the stickiest caller.
     // Overcalls from the weaker players are ignored, so value bets come out slightly cautious.
-    if (!solved && street === 5 && opps.length >= 2 && opps.length <= 5 && !sidePots && input.riverSolver !== false && stack > 0) {
+    if (!solved && street === 5 && opps.length >= 2 && opps.length <= 5 && mwStack != null && input.riverSolver !== false && stack > 0) {
       const W = new Float64Array(NUM_COMBOS);
       const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
       const used = new Uint8Array(52);
@@ -5112,7 +5115,7 @@ function ENGINE() {
           },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroLine) ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
-          pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
+          pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,
         });
@@ -5344,21 +5347,13 @@ function ENGINE() {
       if (input.preflopSolver === false) return null;
       return n === 1 || (n <= 8 && ((allPending && toCall > 0 && toCall <= bb + 1e-9) || input.preflopMultiway !== false)) ? 'preflop' : null;
     }
+    const stack = input.stack > 0 ? +input.stack : Infinity;
     if (street === 3) {
       if (input.flopSolver !== true) return null;
-      const stack = input.stack > 0 ? +input.stack : Infinity;
-      const sidePots = input.heroCommitted != null && opps.every((o) => o.committed != null) && opps.some((o) => o.stack != null && o.stack < stack);
-      return n === 1 || (n <= 4 && !sidePots) ? 'flop' : null;
+      return n === 1 || (n <= 4 && multiwayStack(input, stack, 3) != null) ? 'flop' : null;
     }
-    if (street === 4) {
-      const stack = input.stack > 0 ? +input.stack : Infinity;
-      const sidePots = input.heroCommitted != null && opps.every((o) => o.committed != null) && opps.some((o) => o.stack != null && o.stack < stack);
-      return n === 1 || (n <= 4 && !sidePots) ? 'turn' : null;
-    }
-    if (street === 5) {
-      const stack = input.stack > 0 ? +input.stack : Infinity;
-      return n === 1 || (n <= 5 && !hasSidePots(input, stack)) ? 'river' : null;
-    }
+    if (street === 4) return n === 1 || (n <= 4 && multiwayStack(input, stack, 4) != null) ? 'turn' : null;
+    if (street === 5) return n === 1 || (n <= 5 && multiwayStack(input, stack, 5) != null) ? 'river' : null;
     return null;
   }
 
@@ -5371,11 +5366,38 @@ function ENGINE() {
     for (const o of input.opponents || []) if (o.committed != null && o.committed > heroMax + 1e-9) x += o.committed - heroMax;
     return x;
   }
-  // Side pots matter when someone is shorter than hero, or hero is shorter than a bet it faces.
+  // Side pots matter when someone has fewer chips than hero in total (in the pot plus behind:
+  // a player who just bet is not short), or hero is shorter than a bet it faces.
   function hasSidePots(input, stack) {
     const opps = input.opponents || [];
-    return input.heroCommitted != null && opps.every((o) => o.committed != null) &&
-      (opps.some((o) => o.stack != null && o.stack < stack) || uncalledChips(input, stack) > 0);
+    if (input.heroCommitted == null || !opps.every((o) => o.committed != null)) return false;
+    const heroTotal = +input.heroCommitted + stack;
+    return opps.some((o) => o.stack != null && +o.committed + o.stack < heroTotal - 1e-9) || uncalledChips(input, stack) > 0;
+  }
+
+  // The multiway solvers and the multiway lookahead treat every player as able to match every
+  // bet. With side pots that is still close when hero can match the bets it faces and every
+  // player with fewer chips in total (in the pot plus behind) than hero has at least k pots
+  // behind (river 1, turn 2, flop 3), so the lines played rarely put anyone all-in. The stack to
+  // use is then capped at what the shortest of them can match. null when side pots matter; the
+  // Monte Carlo models them at showdown (sidePotWin). Before this, any opponent with fewer chips
+  // behind blocked the multiway solves, including one who had just bet: in Marwin's 5-6 handed
+  // log that was every multiway turn and river.
+  function multiwayStack(input, stack, street) {
+    if (!hasSidePots(input, stack)) return stack;
+    if (uncalledChips(input, stack) > 0) return null;
+    const heroTotal = +input.heroCommitted + stack;
+    let shortTotal = Infinity, shortBehind = Infinity;
+    for (const o of input.opponents || []) {
+      if (o.stack == null) continue;
+      const total = +o.committed + o.stack;
+      if (total < heroTotal - 1e-9) { shortTotal = Math.min(shortTotal, total); shortBehind = Math.min(shortBehind, o.stack); }
+    }
+    if (!isFinite(shortTotal)) return stack;
+    const k = street >= 5 ? 1 : street === 4 ? 2 : 3;
+    const bb = input.bigBlind > 0 ? +input.bigBlind : 1;
+    if (!(shortBehind >= k * Math.max(+input.pot || 0, bb))) return null;
+    return Math.min(stack, shortTotal - +input.heroCommitted);
   }
 
   function roundChips(x, bb) {
