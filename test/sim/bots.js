@@ -137,8 +137,9 @@ const HOME_DEFAULT = {
   pfr: 0.15,         // open-raises this share first in
   cont: 0.6,         // continues vs one raise of ~3bb with this share of hands
   contElast: 0.45,   // ... shrinking as (3bb / raise)^contElast
-  limpCont: 0.85,    // share of their own limping range that continues vs a raise
+  limpCont: 0.85,    // after limping, continues vs a ~3bb raise with hands up to limpCont x VPIP (fitted to limpers' folds)
   threeBet: 0.1,     // re-raises one raise with this share of hands
+  cont3b: 0,         // after open-raising, continues vs a re-raise with hands up to PFR + this (opens are soft-edged)
   rrDecay: 0.55,     // each further raise multiplies the re-raise share by this
   callBig: 0.4,      // continues vs a raise of 8bb or more (or a shove) with this share
   openBB: 4.4,       // open size in big blinds (plus one per limper)
@@ -198,8 +199,12 @@ function homeBot(params) {
         const big = toCall >= 8 * bb;
         let cont = big ? P.callBig * Math.pow(8 * bb / toCall, 0.25) : P.cont * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
         if (v.raises >= 2 && !big) cont *= 0.8;
-        // Already in with a limp or a raise: stick with most of that range.
-        if (!big && v.put > (v.pos === 'blinds' ? bb : 0) && v.seq.pre.length) cont = Math.max(cont, P.limpCont * P.vpip * pm);
+        // Already in the pot: an opener facing a re-raise and a limper facing a raise have their own fitted rates
+        // (real limpers fold about half the time, openers about a fifth); a caller sticks with most of its range.
+        const opened = v.seq.pre.some((k) => k === 'raise' || k === '3bet');
+        if (!big && opened) cont = Math.min(0.97, P.pfr * pm) + P.cont3b;
+        else if (!big && v.limped) cont = P.limpCont * Math.min(0.97, P.vpip * pm) * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
+        else if (!big && v.put > (v.pos === 'blinds' ? bb : 0) && v.seq.pre.length) cont = Math.max(cont, 0.85 * P.vpip * pm);
         cont = clamp(cont, 0.02, 0.97);
         const tb = clamp(P.threeBet * Math.pow(P.rrDecay, v.raises - 1), 0.003, cont);
         const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tb - pct) / (w * 0.7)));

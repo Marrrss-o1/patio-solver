@@ -19,7 +19,7 @@ function blank() {
   return {
     hands: 0, vpip: 0, pfr: 0, pos: { early: pos(), late: pos(), blinds: pos() },
     // Preflop details (need the full action log, v1.2.2+):
-    pfLogHands: 0, unopened: 0, open: 0, openShove: 0, limp: 0, unopenedFold: 0,
+    pfLogHands: 0, unopened: 0, open: 0, openShove: 0, limp: 0, unopenedFold: 0, limpFace: 0, limpFold: 0,
     vsOpen: 0, vsOpenFold: 0, vsOpenCall: 0, vsOpen3b: 0,
     vs3b: 0, vs3bFold: 0, vsBig: 0, vsBigCont: 0,
     openSizes: [], threeBetRatio: [],
@@ -77,7 +77,7 @@ function addEntry(prof, h, opts = {}) {
 function addLog(prof, h, bb, opts) {
   const heroName = (h.players.find((p) => p.hero) || {}).name;
   const seen = {};
-  let raises = 0, lastTo = bb, pfRaiser = null;
+  let raises = 0, lastTo = bb, pfRaiser = null, opener = null;
   const preDone = {};
   for (const e of h.log) {
     if (e.st !== 'pre') break;
@@ -90,13 +90,18 @@ function addLog(prof, h, bb, opts) {
       if (raises === 0 && first && e.act !== 'check') {
         t.unopened++;
         if (e.act === 'raise') { t.open++; if (e.to >= SHOVE_BB * bb) t.openShove++; else t.openSizes.push(r2(e.to / bb)); }
-        else if (e.act === 'call') t.limp++;
+        else if (e.act === 'call') { t.limp++; seen[e.who + ':limped'] = true; }
         else if (e.act === 'fold') t.unopenedFold++;
-      } else if (raises === 1 && lastTo < SHOVE_BB * bb && !seen[e.who + ':vo'] && e.facing > 0) {
+      } else if (raises >= 1 && seen[e.who + ':limped'] && !seen[e.who + ':lf'] && e.facing > 0) {
+        // A limper's first answer to a raise (iso-raises over limpers are common in this game).
+        seen[e.who + ':lf'] = true;
+        t.limpFace++; if (e.act === 'fold') t.limpFold++;
+      } else if (raises === 1 && lastTo < SHOVE_BB * bb && !seen[e.who + ':vo'] && !seen[e.who + ':limped'] && e.facing > 0) {
         seen[e.who + ':vo'] = true;
         t.vsOpen++;
         if (e.act === 'fold') t.vsOpenFold++; else if (e.act === 'call') t.vsOpenCall++; else t.vsOpen3b++;
-      } else if (raises >= 2 && e.facing > 0 && pfRaiser === e.who && !seen[e.who + ':v3']) {
+      } else if (raises >= 2 && e.facing > 0 && opener === e.who && !seen[e.who + ':v3']) {
+        // The opener's answer to a 3-bet.
         seen[e.who + ':v3'] = true;
         t.vs3b++; if (e.act === 'fold') t.vs3bFold++;
       }
@@ -105,7 +110,7 @@ function addLog(prof, h, bb, opts) {
       }
       if (e.act === '3bet' && lastTo > 0) t.threeBetRatio.push(r2(e.to / lastTo));
     }
-    if (e.act === 'raise' || e.act === '3bet') { raises++; lastTo = e.to; pfRaiser = e.who; }
+    if (e.act === 'raise' || e.act === '3bet') { raises++; lastTo = e.to; pfRaiser = e.who; if (raises === 1) opener = e.who; }
   }
   // Postflop: sizes, facing-size reactions, c-bets, check-raises, donks.
   const checked = {};
@@ -140,7 +145,7 @@ function summarize(t) {
   const s = {
     hands: t.hands,
     vpip: ratio(t.vpip, t.hands), pfr: ratio(t.pfr, t.hands),
-    limp: ratio(t.limp, t.unopened), openRaise: ratio(t.open, t.unopened), unopenedFold: ratio(t.unopenedFold, t.unopened), unopenedN: t.unopened,
+    limp: ratio(t.limp, t.unopened), limpFold: ratio(t.limpFold, t.limpFace), limpFaceN: t.limpFace, openRaise: ratio(t.open, t.unopened), unopenedFold: ratio(t.unopenedFold, t.unopened), unopenedN: t.unopened,
     vsOpenFold: ratio(t.vsOpenFold, t.vsOpen), vsOpen3b: ratio(t.vsOpen3b, t.vsOpen), vsOpenN: t.vsOpen,
     vs3bFold: ratio(t.vs3bFold, t.vs3b), vs3bN: t.vs3b,
     callBig: ratio(t.vsBigCont, t.vsBig), callBigN: t.vsBig,
