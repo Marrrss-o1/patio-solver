@@ -410,6 +410,28 @@ test('reads: players who re-raised preflop fold less after the flop', () => {
   assert.ok(E.predictAction(flat, Object.assign({ reraised: true }, d)).fold < E.predictAction(flat, d).fold);
 });
 
+test('reads: limpers facing a raise are counted, and their fold rate is learned', () => {
+  const t = new T({ players: {} });
+  const snap = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' },
+    { id: 3, authUserId: 'W', name: 'Wes', stack: 200, posType: 's3', playState: 'playing' }] };
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's3' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 3, actionType: 'call', makeBetValue: 2 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 9 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'fold', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 3, actionType: 'fold', makeBetValue: 0 }],
+  ]) t.handle(ev, data, snap);
+  const w = t.db.players.W.tally;
+  assert.deepStrictEqual([w.limp, w.limpFaceN, w.limpFold], [1, 1, 1]);
+  const folder = E.computeStats(Object.assign(T.blankTally(), { limpFaceN: 12, limpFold: 11 }), 'typical');
+  const sticky = E.computeStats(Object.assign(T.blankTally(), { limpFaceN: 12, limpFold: 2 }), 'typical');
+  assert.ok(folder.limpFold > 0.65 && sticky.limpFold < 0.35, folder.limpFold + ' ' + sticky.limpFold);
+});
+
 test('reads: range noise keeps unusual lines possible, and is learned from showdowns', () => {
   const board = C('6d As Qc');
   const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
@@ -989,6 +1011,20 @@ test('river: hands that play a straight-or-better board call, so bluffing into t
     const ev = (k) => Math.max(...r.ranked.filter((a) => a.kind === k).map((a) => a.ev));
     assert.ok(ev('bet') - ev('check') < 0.25, `bet ${ev('bet')} vs check ${ev('check')}`);
   }
+});
+
+test('multiway solves run when every shorter stack still has a few pots behind', () => {
+  const opps = (short) => [130, 335, short].map((stack, i) => ({ name: 'P' + i, tally: {}, stack, committed: 2,
+    actions: { pre: 'call', flop: 'check', turn: 'check', river: '' } }));
+  const spot = (short) => ({ hero: C('Ah Kd'), board: C('Jd 7c 4c 9h 2s'), pot: 8, toCall: 0, stack: 300, heroCommitted: 2,
+    bigBlind: 2, inPosition: false, mix: false, seed: 1, iterations: 3000, opponents: opps(short),
+    heroActions: { pre: 'call', flop: 'check', turn: 'check' } });
+  const deep = E.analyzeSync(spot(218));
+  assert.strictEqual(deep.solver && deep.solver.kind, 'river');
+  assert.strictEqual(E.solvableSpot(spot(218)), 'river');
+  // One player with less than a pot behind: side pots matter, the Monte Carlo decides.
+  assert.strictEqual(E.analyzeSync(spot(5)).solver, null);
+  assert.strictEqual(E.solvableSpot(spot(5)), null);
 });
 
 test('tracker passes chips committed and behind for side pots', () => {
