@@ -1188,5 +1188,188 @@ test('seat order: the s3_v2 seat sits between s9 and s10, blinds and UTG come fr
   assert.deepStrictEqual(seatsAtFirstTurn(bare).order, x.order);
 });
 
+// ---------------------------------------------------------------------------
+// 10. Property tests: random spots and random hands (test/fuzz.js)
+// ---------------------------------------------------------------------------
+const F = require('./fuzz.js');
+
+test('fuzz: advice is legal and EVs stay within what can be lost or won (random spots)', () => {
+  const bad = [];
+  const run = (seed, n, extra) => {
+    const r = F.rng32(seed);
+    for (let k = 0; k < n;) {
+      const s = F.randomSpot(r, extra);
+      if (!s) continue;
+      k++;
+      for (const x of F.adviceProblems(s, E.analyzeSync(s))) bad.push(`seed ${seed} spot ${k} (street ${s.board.length}, ${s.opponents.length} opp): ${x}`);
+    }
+  };
+  run(11, 200);
+  // Computer mode: turn and flop solvers too.
+  run(12, 30, { turnSolver: true, turnIterations: 3, turnTimeMs: 200, flopSolver: true, flopIterations: 2, flopTimeMs: 200 });
+  assert.deepStrictEqual(bad, []);
+});
+
+test('fuzz: random hands through the tracker match the table (chips, price, stacks, seats) and get legal advice', () => {
+  const r = F.rng32(5);
+  const db = { players: {} };
+  const bad = [];
+  let turns = 0;
+  for (let h = 0; h < 150; h++) {
+    const hand = F.randomHand(r);
+    const t = new T(db);
+    t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
+    const got = [];
+    t.on((type, p) => { if (type === 'turn' && p.isHero) got.push(t.solverInput('typical')); });
+    for (const m of hand.msgs) t.handle(m.ev, m.data, m.snap);
+    if (got.length !== hand.truth.length) { bad.push(`hand ${h}: ${got.length} hero turns, expected ${hand.truth.length}`); continue; }
+    got.forEach((b, k) => {
+      turns++;
+      const w = hand.truth[k], tag = `hand ${h} turn ${k}`;
+      if (b.error) { bad.push(`${tag}: ${b.error}`); return; }
+      const i = b.input;
+      for (const f of ['pot', 'toCall', 'stack']) if (Math.abs(i[f] - w[f]) > 1e-9) bad.push(`${tag}: ${f} ${i[f]}, table says ${w[f]}`);
+      // pending: no action yet on this street.
+      const nm = ['pre', null, null, 'flop', 'turn', 'river'][i.board.length];
+      const pending = (o) => (nm === 'pre' ? (o.actions.pre || 'pending') === 'pending' : !o.actions[nm]);
+      const mine = JSON.stringify(i.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP, pending(o)]));
+      const real = JSON.stringify(w.opponents.map((o) => [o.name, o.committed, o.stack, o.bet, o.heroIP, o.pending]));
+      if (mine !== real) bad.push(`${tag}: opponents ${mine}, table says ${real}`);
+      if (h % 3 === 0) {
+        const res = E.analyzeSync(Object.assign({}, i, { iterations: 400, riverIterations: 20, preflopIterations: 20, mix: false, seed: 1 }));
+        for (const x of F.adviceProblems(i, res)) bad.push(`${tag}: ${x}`);
+      }
+    });
+  }
+  assert.ok(turns > 250, String(turns));
+  assert.deepStrictEqual(bad, []);
+});
+
+test('fuzz: extreme players (nit, maniac, station, always-raise, always-fold) keep reads finite and advice legal', () => {
+  const styles = {
+    A1: { fold: 0.85, call: 0.98, check: 0.95 }, A2: { fold: 0.02, call: 0.3, check: 0.1 }, A3: { fold: 0, call: 1, check: 0.9 },
+    A4: { fold: 0, call: 0, check: 0 }, A5: { fold: 1, call: 1, check: 1 }, A6: { fold: 0.5, call: 0.5, check: 0 },
+  };
+  const r = F.rng32(9);
+  const db = { players: {} };
+  const bad = [];
+  let checked = 0;
+  for (let h = 0; h < 120; h++) {
+    const hand = F.randomHand(r, { styles });
+    const t = new T(db);
+    t.scorer = (show, tally) => E.scoreShow(show, tally, 'home');
+    const got = [];
+    t.on((type, p) => { if (type === 'turn' && p.isHero) got.push(t.solverInput('home')); });
+    for (const m of hand.msgs) t.handle(m.ev, m.data, m.snap);
+    if (h < 60 || h % 2) continue; // reads build up first
+    got.forEach((b, k) => {
+      if (b.error) { bad.push(`hand ${h} turn ${k}: ${b.error}`); return; }
+      const i = b.input;
+      const res = E.analyzeSync(Object.assign({}, i, { iterations: 400, riverIterations: 20, preflopIterations: 20, mix: false, seed: 1,
+        turnSolver: true, turnIterations: 4, flopSolver: true, flopIterations: 2 }));
+      checked++;
+      for (const x of F.adviceProblems(i, res)) bad.push(`hand ${h} turn ${k}: ${x}`);
+      for (const o of res.opponents || []) for (const [key, v] of Object.entries(o.stats || {})) if (typeof v === 'number' && !isFinite(v)) bad.push(`hand ${h}: ${o.name} ${key} = ${v}`);
+    });
+  }
+  assert.ok(checked > 40, String(checked));
+  assert.deepStrictEqual(bad, []);
+});
+
+test('solver bets are at least the big blind (small pots on the river)', () => {
+  // Heads-up limped pot checked to the river: 2 big blinds. A third of the pot is less than a big blind.
+  const r = E.analyzeSync({ hero: C('Ah 7d'), board: C('Kd 8h 4s 2c 7c'), pot: 20, toCall: 0, stack: 990, bigBlind: 10, mix: false, seed: 1, iterations: 3000, inPosition: true,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check', turn: 'check', river: 'check' } }] });
+  assert.ok(r.solver, 'river solver ran');
+  for (const s of r.ranked) if (s.kind === 'bet') assert.ok(s.amount >= 10, `bet ${s.amount}`);
+});
+
+test('solver EVs: an option hero never takes is valued with good play after it (check-fold is not a loss)', () => {
+  // Air, first to act on the river. The solver bets it as a bluff every time, so its average
+  // strategy after a check never trained on this hand and stayed near uniform: it called and
+  // shoved 2 times in 3 after checking, and checking showed -18 chips. Checking and then folding
+  // to a bet loses nothing.
+  const spot = { hero: C('6h 2d'), board: C('5c 5d Kc 3d Ac'), pot: 176, toCall: 0, stack: 180, bigBlind: 10, inPosition: false, mix: false, seed: 1,
+    iterations: 3000, riverIterations: 150, heroCommitted: 6,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'check', flop: 'check', turn: 'call', river: '' }, stack: 200, committed: 134, heroIP: false }] };
+  for (const extra of [{}, { riverIterations: 1500 }]) {
+    const r = E.analyzeSync(Object.assign({}, spot, extra));
+    assert.strictEqual(r.solver && r.solver.kind, 'river');
+    const check = r.ranked.find((s) => s.kind === 'check');
+    assert.ok(check.ev >= 0, `check EV ${check.ev}`);
+  }
+  // The same on the turn (turn and river in one solve) and preflop: every check is worth at least 0.
+  const turn = E.analyzeSync(Object.assign({}, spot, { board: C('5c 5d Kc 3d'), turnSolver: true, turnIterations: 12,
+    opponents: [Object.assign({}, spot.opponents[0], { actions: { pre: 'check', flop: 'check', turn: '' } })] }));
+  assert.strictEqual(turn.solver && turn.solver.kind, 'turn');
+  assert.ok(turn.ranked.find((s) => s.kind === 'check').ev >= 0);
+  const bb = E.analyzeSync({ hero: C('7h 2d'), board: [], pot: 20, toCall: 0, stack: 990, bigBlind: 10, inPosition: false, mix: false, seed: 1, iterations: 2000,
+    preflopIterations: 200, heroActions: { pre: 'pending' }, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call' } }] });
+  assert.strictEqual(bb.solver && bb.solver.kind, 'preflop');
+  assert.ok(bb.ranked.find((s) => s.kind === 'check').ev >= 0);
+});
+
+test('hand log: results come from the payout, so a bust and a rebuy is a loss (and a player who left still has one)', () => {
+  const mk = (heroStack, players) => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 10, players: players || [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: heroStack, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 300, posType: 's5', playState: 'playing' },
+    { id: 3, authUserId: 'W', name: 'Wes', stack: 50, posType: 's7', playState: 'playing' }] });
+  const play = (ended) => {
+    const t = new T({ players: {} });
+    const s = mk(100);
+    for (const [ev, data] of [
+      ['game:stage_began', { stageType: 'set_blinds' }],
+      ['game:dealer_updated', { dealerSeatPos: 's7', smallBlindSeatPos: 's1', bigBlindSeatPos: 's5', underTheGunSeatPos: 's7' }],
+      ['game:small_blind_paid', { amount: 5, playerId: 1 }], ['game:big_blind_paid', { amount: 10, playerId: 2 }],
+      ['game:stage_began', { stageType: 'pre_flop' }],
+      ['player:game:action_taken', { playerID: 3, actionType: 'call', makeBetValue: 10 }],
+      ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 95 }],
+      ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 90 }],
+      ['player:game:player_play_state_changed', { newPlayState: 'folded', userId: 'W' }],
+      ['player:game:action_taken', { playerID: 3, actionType: 'fold', makeBetValue: 0 }],
+      ['game:stage_began', { stageType: 'flop' }], ['game:stage_began', { stageType: 'turn' }], ['game:stage_began', { stageType: 'river' }],
+      ['game:stage_began', { stageType: 'showdown' }],
+      ['game:game_ended', ended],
+    ]) t.handle(ev, data, s);
+    // Hero busted and buys back in for 200; Wes has left.
+    t.handle('game:stage_began', { stageType: 'set_blinds' }, mk(200, mk(200).players.slice(0, 2)));
+    return t.db.history[0];
+  };
+  const paid = (won) => ({ endPopupData: { gameResults: {
+    winnersInfo: { V: { playerData: { authUserId: 'V', posType: 's5' }, wonAmount: won, refundUncalledBetsAmount: 0 } },
+    sidePotsWithWinners: [{ isMainPot: true, potAmount: won, potRake: 0, netPotAmount: won }] } } });
+  const e = play(paid(210));
+  assert.deepStrictEqual(e.net, { Hero: -100, Vic: 110, Wes: -10 });
+  assert.strictEqual(e.heroNet, -100);
+  assert.strictEqual(e.heroNetBB, -10);
+  // A payout that doesn't account for the chips in the pot (or none at all): the stacks decide.
+  assert.deepStrictEqual(play(paid(150)).net, { Hero: 100, Vic: 0 });
+  assert.deepStrictEqual(play({}).net, { Hero: 100, Vic: 0 });
+});
+
+test('blinds: a big blind posted short (all-in for less) does not change the big blind', () => {
+  // Ann (s3) is the big blind with 4 chips left; the table's big blind is 10.
+  const msgs = [];
+  const add = (ev, data, snap) => msgs.push({ ev, data, snap });
+  const s0 = snap3(1000, 4, 1000);
+  add('admin:game:new_hand_started', { gameSettings: { big_blind: 10, small_blind: 5 } }, s0);
+  add('game:stage_began', { stageType: 'set_blinds' }, s0);
+  add('game:dealer_updated', { dealerSeatPos: 's7', smallBlindSeatPos: 's1', bigBlindSeatPos: 's3', underTheGunSeatPos: 's7' }, s0);
+  add('game:small_blind_paid', { amount: 5, playerId: 1 }, s0);
+  add('game:big_blind_paid', { amount: 4, playerId: 3 }, snap3(995, 4, 1000));
+  add('game:cards_dealt_to_player', [{ playerPos: 's1', cardData: { uniqueID: 11 } }, { playerPos: 's1', cardData: { uniqueID: 12 } }], snap3(995, 0, 1000));
+  add('game:update_card_data', { cardData: { uniqueID: 11, suite: 'spades', value: 'A' } }, snap3(995, 0, 1000));
+  add('game:update_card_data', { cardData: { uniqueID: 12, suite: 'hearts', value: 'K' } }, snap3(995, 0, 1000));
+  add('game:stage_began', { stageType: 'pre_flop' }, snap3(995, 0, 1000));
+  add('player:game:action_taken', { playerID: 7, actionType: 'raise', makeBetValue: 30 }, snap3(995, 0, 1000));
+  add('game:player_turn_started', { playerID: 1 }, snap3(995, 0, 970));
+  const { t, turns } = replay(msgs);
+  assert.strictEqual(t.hand.bigBlind, 10);
+  assert.strictEqual(turns[0].input.bigBlind, 10);
+  // Without the settings event, the snapshot's big blind is used for the short post.
+  const { t: t2 } = replay(msgs.slice(1));
+  assert.strictEqual(t2.hand.bigBlind, 10);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
