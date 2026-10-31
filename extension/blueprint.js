@@ -331,7 +331,7 @@
      * every action with amt added). Returns the abstract node for hero's decision plus the real
      * bets there, or { error }.
      */
-    function locate(history, seats, heroName0) {
+    function locate(history, seats, heroName0, anyActor) {
       const SKEY = { pre: 0, flop: 1, turn: 2, river: 3 };
       const map = seatMap(history, seats);
       if (!map) return { error: 'seats' };
@@ -371,9 +371,10 @@
         bet[seat] += e.amt; commit[seat] += e.amt;
         nid = nd.child[ai];
       }
+      const heroSeat = heroName != null ? map.get(heroName) : null;
+      if (anyActor) return { node: nid >= 0 ? tree.nodes[nid] : null, heroSeat, bet, commit, street, path };
       if (nid < 0) return { error: 'off tree (hand ended in the tree)' };
       const nd = tree.nodes[nid];
-      const heroSeat = heroName != null ? map.get(heroName) : null;
       if (heroSeat == null || nd.player !== heroSeat) return { error: 'off tree (not hero to act)' };
       return { node: nd, heroSeat, bet, commit, street, path };
     }
@@ -464,7 +465,7 @@
      * seat: defaults to hero's.
      */
     function rangeOf(input, seat) {
-      const loc = locate(input.history, input.seats, input.heroName);
+      const loc = locate(input.history, input.seats, input.heroName, true);
       if (loc.error) return null;
       const who = seat != null ? seat : loc.heroSeat;
       const board = input.board || [];

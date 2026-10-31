@@ -129,6 +129,31 @@ function ENGINE() {
     return TOP5[any];
   }
 
+  // Scores of one board plus many two-card hands. Without a possible flush a hand's score
+  // depends only on the ranks, so each pair of hole-card ranks is evaluated once per board
+  // and looked up after that. Use: setBoard(cards, n), then scoreHole(a, b) for each hand.
+  const SB_BUF = new Int32Array(9), SB_CNT = new Int32Array(4), SB_T = new Int32Array(169);
+  let SB_N = 0, SB_ALL = false;
+  function setBoard(cards, n) {
+    SB_N = n;
+    SB_CNT.fill(0);
+    SB_T.fill(-1);
+    for (let i = 0; i < n; i++) { const c = cards[i]; SB_BUF[i] = c; SB_CNT[c & 3]++; }
+    SB_ALL = SB_CNT[0] >= 5 || SB_CNT[1] >= 5 || SB_CNT[2] >= 5 || SB_CNT[3] >= 5;
+  }
+  function scoreHole(a, b) {
+    const sa = a & 3, sb = b & 3;
+    if (!SB_ALL && (sa === sb ? SB_CNT[sa] < 3 : SB_CNT[sa] < 4 && SB_CNT[sb] < 4)) {
+      const key = (a >> 2) * 13 + (b >> 2);
+      const t = SB_T[key];
+      if (t >= 0) return t;
+      SB_BUF[SB_N] = a; SB_BUF[SB_N + 1] = b;
+      return (SB_T[key] = evaluate(SB_BUF, SB_N + 2));
+    }
+    SB_BUF[SB_N] = a; SB_BUF[SB_N + 1] = b;
+    return evaluate(SB_BUF, SB_N + 2);
+  }
+
   function scoreCategory(score) {
     return score >> 20;
   }
@@ -303,17 +328,13 @@ function ENGINE() {
   function handPercentile(hole, board) {
     const dead = new Uint8Array(52);
     board.forEach((c) => { dead[c] = 1; });
-    const buf = new Int32Array(7);
-    for (let i = 0; i < board.length; i++) buf[i] = board[i];
-    const n = board.length;
-    buf[n] = hole[0]; buf[n + 1] = hole[1];
-    const mine = evaluate(buf, n + 2);
+    setBoard(board, board.length);
+    const mine = scoreHole(hole[0], hole[1]);
     let below = 0, ties = 0, total = 0;
     for (let k = 0; k < NUM_COMBOS; k++) {
       const a = COMBO_HI[k], b = COMBO_LO[k];
       if (dead[a] || dead[b] || a === hole[0] || a === hole[1] || b === hole[0] || b === hole[1]) continue;
-      buf[n] = a; buf[n + 1] = b;
-      const sc = evaluate(buf, n + 2);
+      const sc = scoreHole(a, b);
       total++;
       if (sc < mine) below++; else if (sc === mine) ties++;
     }
@@ -584,18 +605,28 @@ function ENGINE() {
     };
   }
 
+  // Percentile of each valid combo's score among all valid combos (ties share the middle).
+  // Scores are below 2^24, so a 3-pass radix sort orders them (much faster than sorting floats).
+  const RX_A = new Int32Array(NUM_COMBOS), RX_B = new Int32Array(NUM_COMBOS), RX_CNT = new Int32Array(256);
   function percentiles(scores, valid, count, out) {
-    const keys = new Float64Array(count);
-    for (let i = 0; i < count; i++) keys[i] = scores[valid[i]] * 2048 + valid[i];
-    keys.sort();
+    let src = RX_A, dst = RX_B;
+    for (let i = 0; i < count; i++) src[i] = valid[i];
+    for (let shift = 0; shift < 24; shift += 8) {
+      RX_CNT.fill(0);
+      for (let i = 0; i < count; i++) RX_CNT[(scores[src[i]] >> shift) & 255]++;
+      let sum = 0;
+      for (let b = 0; b < 256; b++) { const c = RX_CNT[b]; RX_CNT[b] = sum; sum += c; }
+      for (let i = 0; i < count; i++) { const k = src[i]; dst[RX_CNT[(scores[k] >> shift) & 255]++] = k; }
+      const t = src; src = dst; dst = t;
+    }
     let i = 0;
     const denom = Math.max(1, count - 1);
     while (i < count) {
-      const s = Math.floor(keys[i] / 2048);
+      const s = scores[src[i]];
       let j = i;
-      while (j < count && Math.floor(keys[j] / 2048) === s) j++;
+      while (j < count && scores[src[j]] === s) j++;
       const p = (i + (j - i - 1) / 2) / denom;
-      for (let x = i; x < j; x++) out[keys[x] % 2048] = p;
+      for (let x = i; x < j; x++) out[src[x]] = p;
       i = j;
     }
   }
@@ -619,11 +650,11 @@ function ENGINE() {
     const scores = new Int32Array(NUM_COMBOS);
     const valid = new Int16Array(NUM_COMBOS);
     let count = 0;
+    setBoard(buf, n);
     for (let k = 0; k < NUM_COMBOS; k++) {
       const a = COMBO_HI[k], b = COMBO_LO[k];
       if (dead[a] || dead[b]) continue;
-      buf[n] = a; buf[n + 1] = b;
-      scores[k] = evaluate(buf, n + 2);
+      scores[k] = scoreHole(a, b);
       valid[count++] = k;
     }
     percentiles(scores, valid, count, hs);
@@ -637,13 +668,13 @@ function ENGINE() {
       for (let x = 0; x < 52; x++) {
         if (dead[x]) continue;
         buf[n] = x;
+        setBoard(buf, n + 1);
         let c2 = 0;
         for (let i = 0; i < count; i++) {
           const k = valid[i];
           const a = COMBO_HI[k], b = COMBO_LO[k];
           if (a === x || b === x) continue;
-          buf[n + 1] = a; buf[n + 2] = b;
-          scores[k] = evaluate(buf, n + 3);
+          scores[k] = scoreHole(a, b);
           valid2[c2++] = k;
         }
         percentiles(scores, valid2, c2, hs2);
@@ -1036,12 +1067,12 @@ function ENGINE() {
       const dead = new Uint8Array(52);
       for (const c of b) dead[c] = 1;
       for (let i = 0; i < 5; i++) buf[i] = b[i];
+      setBoard(buf, 5);
       let count = 0;
       for (let k = 0; k < NUM_COMBOS; k++) {
         const a = COMBO_HI[k], c = COMBO_LO[k];
         if (dead[a] || dead[c]) continue;
-        buf[5] = a; buf[6] = c;
-        scores[k] = evaluate(buf, 7);
+        scores[k] = scoreHole(a, c);
         valid[count++] = k;
       }
       percentiles(scores, valid, count, tmp);
@@ -1170,6 +1201,314 @@ function ENGINE() {
     return plan;
   }
 
+  // ---------- WebAssembly SIMD kernels ----------
+  /*
+   * The solvers' inner loops (regret matching, regret updates, showdown sweeps, the preflop
+   * leaves' matrix-vector products) also exist as WebAssembly functions using 128-bit SIMD,
+   * which runs them 2-4x faster than the JIT. They do the same IEEE double operations in the
+   * same order as the JS loops (no fused multiply-add, each sum accumulated in the same
+   * sequence), so results are bit-for-bit the same either way. If WebAssembly SIMD is
+   * missing or blocked (a page's Content-Security-Policy can do that), the JS loops run.
+   *
+   * The module is assembled here from a small S-expression form, so there is no build step
+   * and no binary blob. Kernel arguments are byte offsets into one shared memory; solvers
+   * reserve what they need with arenaBegin() and then take views with arenaF64() etc.
+   */
+  const WASM_OPS = {
+    block: 0x02, loop: 0x03, if: 0x04, else: 0x05, end: 0x0b, br: 0x0c, br_if: 0x0d,
+    'local.get': 0x20, 'local.set': 0x21, 'local.tee': 0x22,
+    'i32.load': 0x28, 'f32.load': 0x2a, 'f64.load': 0x2b, 'i32.load8_u': 0x2d,
+    'i32.store': 0x36, 'f32.store': 0x38, 'f64.store': 0x39,
+    'i32.const': 0x41, 'f64.const': 0x44,
+    'i32.eqz': 0x45, 'i32.eq': 0x46, 'i32.ne': 0x47, 'i32.lt_s': 0x48, 'i32.gt_s': 0x4a, 'i32.le_s': 0x4c, 'i32.ge_s': 0x4e,
+    'f64.ne': 0x62, 'f64.gt': 0x64,
+    'i32.add': 0x6a, 'i32.sub': 0x6b, 'i32.mul': 0x6c, 'i32.shl': 0x74,
+    'f64.add': 0xa0, 'f64.sub': 0xa1, 'f64.mul': 0xa2, 'f64.div': 0xa3,
+    'f32.demote_f64': 0xb6, 'f64.promote_f32': 0xbb,
+  };
+  const WASM_SIMD = {
+    'v128.load': 0x00, 'v128.store': 0x0b, 'f64x2.splat': 0x14, 'f64x2.gt': 0x4a, 'v128.bitselect': 0x52,
+    'v128.store64_lane': 0x5b, 'v128.load64_zero': 0x5d, 'f32x4.demote_f64x2_zero': 0x5e, 'f64x2.promote_low_f32x4': 0x5f,
+    'f64x2.add': 0xf0, 'f64x2.sub': 0xf1, 'f64x2.mul': 0xf2, 'f64x2.div': 0xf3, 'f64x2.pmax': 0xf7,
+  };
+  const WASM_ALIGN = { 'i32.load': 2, 'f32.load': 2, 'f64.load': 3, 'i32.load8_u': 0, 'i32.store': 2, 'f32.store': 2, 'f64.store': 3,
+    'v128.load': 3, 'v128.store': 3, 'v128.load64_zero': 2, 'v128.store64_lane': 2 };
+  const WASM_TYPES = { i32: 0x7f, f64: 0x7c, v128: 0x7b };
+  function uleb(n) { const o = []; do { let b = n & 0x7f; n >>>= 7; if (n) b |= 0x80; o.push(b); } while (n); return o; }
+  function sleb(n) { const o = []; for (;;) { const b = n & 0x7f; n >>= 7; if ((n === 0 && !(b & 0x40)) || (n === -1 && (b & 0x40))) { o.push(b); return o; } o.push(b | 0x80); } }
+  // Expression form: a string is a local, [op, ...operands] an instruction after its operands;
+  // ['i32', n] / ['f64', x] constants; ['set', name, e]; ['for', v, from, to, step, ...body]
+  // (v < to, signed); ['if', cond, [then...], [else...]]; ['while', cond, ...body].
+  function wasmFunc(f) {
+    const names = {}, code = [];
+    f.params.forEach(([n], i) => { names[n] = i; });
+    const locals = f.locals || [];
+    locals.forEach(([n], i) => { names[n] = f.params.length + i; });
+    const local = (n) => { if (!(n in names)) throw new Error('kernel local ' + n); return uleb(names[n]); };
+    const op = (o) => { if (o in WASM_SIMD) code.push(0xfd, ...uleb(WASM_SIMD[o])); else if (o in WASM_OPS) code.push(WASM_OPS[o]); else throw new Error('kernel op ' + o); if (o in WASM_ALIGN) code.push(WASM_ALIGN[o], 0); };
+    const emit = (e) => {
+      if (typeof e === 'string') { code.push(0x20, ...local(e)); return; }
+      const [o, ...a] = e;
+      if (o === 'i32') { code.push(0x41, ...sleb(a[0])); return; }
+      if (o === 'f64') { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, a[0], true); code.push(0x44, ...b); return; }
+      if (o === 'set') { emit(a[1]); code.push(0x21, ...local(a[0])); return; }
+      if (o === 'seq') { a.forEach(emit); return; }
+      if (o === 'if') { emit(a[0]); code.push(0x04, 0x40); a[1].forEach(emit); if (a[2]) { code.push(0x05); a[2].forEach(emit); } code.push(0x0b); return; }
+      if (o === 'while') { code.push(0x02, 0x40, 0x03, 0x40); emit(a[0]); code.push(0x45, 0x0d, 1); a.slice(1).forEach(emit); code.push(0x0c, 0, 0x0b, 0x0b); return; }
+      if (o === 'for') {
+        const [v, from, to, step, ...body] = a;
+        emit(['set', v, from]);
+        code.push(0x02, 0x40, 0x03, 0x40);
+        emit(['i32.ge_s', v, to]); code.push(0x0d, 1);
+        body.forEach(emit);
+        emit(['set', v, ['i32.add', v, ['i32', step]]]);
+        code.push(0x0c, 0, 0x0b, 0x0b);
+        return;
+      }
+      if (o === 'v128.store64_lane') { emit(a[0]); emit(a[1]); op(o); code.push(0); return; }
+      a.forEach(emit);
+      op(o);
+    };
+    f.body.forEach(emit);
+    code.push(0x0b);
+    const decl = [...uleb(locals.length), ...locals.flatMap(([, t]) => [1, WASM_TYPES[t]])];
+    return [...uleb(decl.length + code.length), ...decl, ...code];
+  }
+  function wasmModule(funcs) {
+    const vec = (xs) => [...uleb(xs.length), ...xs.flat()];
+    const str = (s) => [...uleb(s.length), ...Array.from(s, (ch) => ch.charCodeAt(0))];
+    const sec = (id, b) => [id, ...uleb(b.length), ...b];
+    return Uint8Array.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      ...sec(1, vec(funcs.map((f) => [0x60, ...vec(f.params.map(([, t]) => [WASM_TYPES[t]])), ...vec((f.results || []).map((t) => [WASM_TYPES[t]]))]))),
+      ...sec(2, vec([[...str('e'), ...str('m'), 0x02, 0x00, 0x01]])),
+      ...sec(3, vec(funcs.map((f, i) => uleb(i)))),
+      ...sec(7, vec(funcs.map((f, i) => [...str(f.name), 0x00, ...uleb(i)]))),
+      ...sec(10, vec(funcs.map(wasmFunc))),
+    ]);
+  }
+
+  // Shorthands for the kernels below.
+  const I = (n) => ['i32', n];
+  const at = (base, i, shift) => ['i32.add', base, ['i32.shl', i, I(shift)]];
+  const ld2 = (p) => ['v128.load', p], st2 = (p, v) => ['v128.store', p, v];
+  const ldf = (p) => ['f64.load', p], stf = (p, v) => ['f64.store', p, v];
+  const ldi = (p) => ['i32.load', p], ldu8 = (p) => ['i32.load8_u', p];
+  const add = (a, b) => ['f64.add', a, b], sub = (a, b) => ['f64.sub', a, b], mul = (a, b) => ['f64.mul', a, b];
+  const vadd = (a, b) => ['f64x2.add', a, b], vsub = (a, b) => ['f64x2.sub', a, b], vmul = (a, b) => ['f64x2.mul', a, b];
+  const ldf32x2 = (p) => ['f64x2.promote_low_f32x4', ['v128.load64_zero', p]];
+  const P = (names) => names.split(' ').map((n) => [n, 'i32']);
+  // T = sum of r, all[c] = sum of r over hands holding card c (each in index order). Hands come
+  // grouped by their high card, so the running sum for the current high card stays in a register
+  // (same additions in the same order, without waiting on memory every hand).
+  const ALL_SUMS = [
+    ['set', 'cur', I(-1)], ['set', 'acc', ['f64', 0]],
+    ['for', 'i', I(0), 'N', 1,
+      ['set', 'x', ldf(at('r', 'i', 3))], ['set', 'T', add('T', 'x')],
+      ['set', 'h', ldu8(['i32.add', 'hi', 'i'])],
+      ['if', ['i32.ne', 'h', 'cur'], [
+        ['if', ['i32.ge_s', 'cur', I(0)], [stf(at('all', 'cur', 3), 'acc')]],
+        ['set', 'cur', 'h'], ['set', 'acc', ldf(at('all', 'h', 3))]]],
+      ['set', 'acc', add('acc', 'x')],
+      ['set', 'l', at('all', ldu8(['i32.add', 'lo', 'i']), 3)], stf('l', add(ldf('l'), 'x'))],
+    ['if', ['i32.ge_s', 'cur', I(0)], [stf(at('all', 'cur', 3), 'acc')]],
+  ];
+  const KERNELS = [
+    // Regret matching over nA rows of Np doubles (Np even): x = t > 0 ? max(r, 0) / t : u
+    // with t the sum of positive regrets; then x = pf + q * x when pf is not 0.
+    { name: 'strategyDiv', params: [...P('reg out nA Np pf'), ['q', 'f64'], ['u', 'f64']],
+      locals: [...P('i a p row'), ['t', 'v128'], ['x', 'v128'], ['m', 'v128'], ['z', 'v128'], ['uv', 'v128'], ['qv', 'v128']],
+      body: [
+        ['set', 'z', ['f64x2.splat', ['f64', 0]]], ['set', 'uv', ['f64x2.splat', 'u']], ['set', 'qv', ['f64x2.splat', 'q']],
+        ['set', 'row', ['i32.shl', 'Np', I(3)]],
+        ['for', 'i', I(0), 'Np', 2,
+          ['set', 't', 'z'], ['set', 'p', ['i32.shl', 'i', I(3)]],
+          ['for', 'a', I(0), 'nA', 1,
+            ['set', 't', vadd('t', ['f64x2.pmax', 'z', ld2(['i32.add', 'reg', 'p'])])],
+            ['set', 'p', ['i32.add', 'p', 'row']]],
+          ['set', 'm', ['f64x2.gt', 't', 'z']], ['set', 'p', ['i32.shl', 'i', I(3)]],
+          ['for', 'a', I(0), 'nA', 1,
+            ['set', 'x', ['v128.bitselect', ['f64x2.div', ['f64x2.pmax', 'z', ld2(['i32.add', 'reg', 'p'])], 't'], 'uv', 'm']],
+            ['if', 'pf', [['set', 'x', vadd(ld2(['i32.add', 'pf', 'p']), vmul('qv', 'x'))]]],
+            st2(['i32.add', 'out', 'p'], 'x'),
+            ['set', 'p', ['i32.add', 'p', 'row']]]]] },
+    // dst = a * b, n doubles (n even)
+    { name: 'mul', params: P('dst a b n'), locals: P('i p'),
+      body: [['for', 'i', I(0), 'n', 2, ['set', 'p', ['i32.shl', 'i', I(3)]],
+        st2(['i32.add', 'dst', 'p'], vmul(ld2(['i32.add', 'a', 'p']), ld2(['i32.add', 'b', 'p'])))]] },
+    // v += s * x
+    { name: 'addMul', params: P('v s x n'), locals: P('i p'),
+      body: [['for', 'i', I(0), 'n', 2, ['set', 'p', ['i32.shl', 'i', I(3)]],
+        st2(['i32.add', 'v', 'p'], vadd(ld2(['i32.add', 'v', 'p']), vmul(ld2(['i32.add', 's', 'p']), ld2(['i32.add', 'x', 'p']))))]] },
+    // v += x
+    { name: 'addTo', params: P('v x n'), locals: P('i p'),
+      body: [['for', 'i', I(0), 'n', 2, ['set', 'p', ['i32.shl', 'i', I(3)]],
+        st2(['i32.add', 'v', 'p'], vadd(ld2(['i32.add', 'v', 'p']), ld2(['i32.add', 'x', 'p'])))]] },
+    // River regret update for one action: reg = max(reg, 0) * pos + va - v; sum = sum * w + reach * s
+    { name: 'regretRiver', params: [...P('reg sum va v reach s n'), ['pos', 'f64'], ['w', 'f64']],
+      locals: [...P('i p'), ['z', 'v128'], ['pv', 'v128'], ['wv', 'v128']],
+      body: [
+        ['set', 'z', ['f64x2.splat', ['f64', 0]]], ['set', 'pv', ['f64x2.splat', 'pos']], ['set', 'wv', ['f64x2.splat', 'w']],
+        ['for', 'i', I(0), 'n', 2, ['set', 'p', ['i32.shl', 'i', I(3)]],
+          st2(['i32.add', 'reg', 'p'], vsub(vadd(vmul(['f64x2.pmax', 'z', ld2(['i32.add', 'reg', 'p'])], 'pv'), ld2(['i32.add', 'va', 'p'])), ld2(['i32.add', 'v', 'p']))),
+          st2(['i32.add', 'sum', 'p'], vadd(vmul(ld2(['i32.add', 'sum', 'p']), 'wv'), vmul(ld2(['i32.add', 'reach', 'p']), ld2(['i32.add', 's', 'p']))))]] },
+    // River showdown values (riverSolve's showValues): v[i] = potF * (below + tie / 2) - inv * total.
+    { name: 'showRiver', params: [...P('r v N'), ['potF', 'f64'], ['inv', 'f64'], ...P('hi lo order oHi oLo gEnd rs cum all grp')],
+      locals: [...P('i j g e h l k cur'), ['T', 'f64'], ['cT', 'f64'], ['gT', 'f64'], ['x', 'f64'], ['acc', 'f64']],
+      body: [
+        ['for', 'k', I(0), I(52), 1, stf(at('cum', 'k', 3), ['f64', 0]), stf(at('all', 'k', 3), ['f64', 0])],
+        ['set', 'T', ['f64', 0]], ['set', 'cT', ['f64', 0]],
+        ...ALL_SUMS,
+        ['for', 'j', I(0), 'N', 1, stf(at('rs', 'j', 3), ldf(at('r', ldi(at('order', 'j', 2)), 3)))],
+        ['set', 'g', I(0)],
+        ['while', ['i32.lt_s', 'g', 'N'],
+          ['set', 'e', ldi(at('gEnd', 'g', 2))],
+          ['if', ['i32.eq', 'e', ['i32.add', 'g', I(1)]], [
+            ['set', 'i', ldi(at('order', 'g', 2))], ['set', 'x', ldf(at('rs', 'g', 3))],
+            ['set', 'h', ldu8(['i32.add', 'oHi', 'g'])], ['set', 'l', ldu8(['i32.add', 'oLo', 'g'])],
+            stf(at('v', 'i', 3), sub(
+              mul('potF', add(sub(sub('cT', ldf(at('cum', 'h', 3))), ldf(at('cum', 'l', 3))), ['f64', 0])),
+              mul('inv', add(sub(sub('T', ldf(at('all', 'h', 3))), ldf(at('all', 'l', 3))), 'x')))),
+            ['set', 'cT', add('cT', 'x')],
+            stf(at('cum', 'h', 3), add(ldf(at('cum', 'h', 3)), 'x')), stf(at('cum', 'l', 3), add(ldf(at('cum', 'l', 3)), 'x')),
+          ], [
+            ['set', 'gT', ['f64', 0]],
+            ['for', 'j', 'g', 'e', 1,
+              ['set', 'x', ldf(at('rs', 'j', 3))], ['set', 'gT', add('gT', 'x')],
+              ['set', 'h', at('grp', ldu8(['i32.add', 'oHi', 'j']), 3)], stf('h', add(ldf('h'), 'x')),
+              ['set', 'l', at('grp', ldu8(['i32.add', 'oLo', 'j']), 3)], stf('l', add(ldf('l'), 'x'))],
+            ['for', 'j', 'g', 'e', 1,
+              ['set', 'i', ldi(at('order', 'j', 2))], ['set', 'x', ldf(at('rs', 'j', 3))],
+              ['set', 'h', ldu8(['i32.add', 'oHi', 'j'])], ['set', 'l', ldu8(['i32.add', 'oLo', 'j'])],
+              stf(at('v', 'i', 3), sub(
+                mul('potF', add(sub(sub('cT', ldf(at('cum', 'h', 3))), ldf(at('cum', 'l', 3))),
+                  ['f64.div', add(sub(sub('gT', ldf(at('grp', 'h', 3))), ldf(at('grp', 'l', 3))), 'x'), ['f64', 2]])),
+                mul('inv', add(sub(sub('T', ldf(at('all', 'h', 3))), ldf(at('all', 'l', 3))), 'x'))))],
+            ['for', 'j', 'g', 'e', 1,
+              ['set', 'x', ldf(at('rs', 'j', 3))],
+              ['set', 'h', ldu8(['i32.add', 'oHi', 'j'])], ['set', 'l', ldu8(['i32.add', 'oLo', 'j'])],
+              ['set', 'cT', add('cT', 'x')],
+              stf(at('cum', 'h', 3), add(ldf(at('cum', 'h', 3)), 'x')), stf(at('cum', 'l', 3), add(ldf(at('cum', 'l', 3)), 'x')),
+              stf(at('grp', 'h', 3), ['f64', 0]), stf(at('grp', 'l', 3), ['f64', 0])],
+          ]],
+          ['set', 'g', 'e']]] },
+    // River fold values: v[i] = g * (T - all[hi] - all[lo] + r[i]).
+    { name: 'foldRiver', params: [...P('r v N'), ['g', 'f64'], ...P('hi lo all')],
+      locals: [...P('i k h l cur'), ['T', 'f64'], ['x', 'f64'], ['acc', 'f64']],
+      body: [
+        ['for', 'k', I(0), I(52), 1, stf(at('all', 'k', 3), ['f64', 0])],
+        ['set', 'T', ['f64', 0]],
+        ...ALL_SUMS,
+        ['for', 'i', I(0), 'N', 1,
+          stf(at('v', 'i', 3), mul('g', add(sub(sub('T', ldf(at('all', ldu8(['i32.add', 'hi', 'i']), 3))), ldf(at('all', ldu8(['i32.add', 'lo', 'i']), 3))), ldf(at('r', 'i', 3)))))]] },
+    // Preflop classMass: out[a] = g * cnt[a] * (T - P[r1[a]] - P[r2[a]] + r[a]) with T the
+    // combo-weighted total of r and P[rank] the weight of classes holding that rank.
+    { name: 'pfMass', params: [...P('r out'), ['g', 'f64'], ...P('cnt per r1 r2 PP')],
+      locals: [...P('b k x1 x2'), ['T', 'f64'], ['w', 'f64'], ['m', 'f64']],
+      body: [
+        ['for', 'k', I(0), I(13), 1, stf(at('PP', 'k', 3), ['f64', 0])],
+        ['set', 'T', ['f64', 0]],
+        ['for', 'b', I(0), I(169), 1,
+          ['set', 'w', ldf(at('r', 'b', 3))],
+          ['if', ['f64.ne', 'w', ['f64', 0]], [
+            ['set', 'T', add('T', mul(ldf(at('cnt', 'b', 3)), 'w'))],
+            ['set', 'm', mul(ldf(at('per', 'b', 3)), 'w')],
+            ['set', 'x1', at('PP', ldi(at('r1', 'b', 2)), 3)], ['set', 'x2', at('PP', ldi(at('r2', 'b', 2)), 3)],
+            stf('x1', add(ldf('x1'), 'm')),
+            ['if', ['i32.ne', 'x2', 'x1'], [stf('x2', add(ldf('x2'), 'm'))]]]]],
+        ['for', 'b', I(0), I(169), 1,
+          stf(at('out', 'b', 3), mul(mul('g', ldf(at('cnt', 'b', 3))),
+            add(sub(sub('T', ldf(at('PP', ldi(at('r1', 'b', 2)), 3))), ldf(at('PP', ldi(at('r2', 'b', 2)), 3))), ldf(at('r', 'b', 3)))))]] },
+    // Live classes of reach r (r[b] > 1e-7 * max): their indices into live, their weights into
+    // lw; returns how many.
+    { name: 'pfLive', params: P('r live lw'), results: ['i32'], locals: [...P('b nz'), ['mx', 'f64'], ['x', 'f64'], ['th', 'f64']],
+      body: [
+        ['set', 'mx', ['f64', 0]],
+        ['for', 'b', I(0), I(169), 1, ['set', 'x', ldf(at('r', 'b', 3))], ['if', ['f64.gt', 'x', 'mx'], [['set', 'mx', 'x']]]],
+        ['set', 'th', mul(['f64', 1e-7], 'mx')], ['set', 'nz', I(0)],
+        ['for', 'b', I(0), I(169), 1, ['set', 'x', ldf(at('r', 'b', 3))],
+          ['if', ['f64.gt', 'x', 'th'], [['i32.store', at('live', 'nz', 2), 'b'], stf(at('lw', 'nz', 3), 'x'), ['set', 'nz', ['i32.add', 'nz', I(1)]]]]],
+        'nz'] },
+    // Preflop leaf, hero's side: out[a] = sum over j of XT[live[j]][a] * lw[j], two classes per
+    // lane pair, two rows per pass (each out[a] still adds its terms in order j = 0, 1, ...).
+    // XT: 170 x 170 floats (transposed, padded); out: 170 doubles.
+    { name: 'pfRowsT', params: P('XT live lw nz out'), locals: [...P('a j r0 r1'), ['w0', 'v128'], ['w1', 'v128']],
+      body: [
+        ['for', 'a', I(0), I(170), 2, st2(at('out', 'a', 3), ['f64x2.splat', ['f64', 0]])],
+        ['set', 'j', I(0)],
+        ['while', ['i32.lt_s', ['i32.add', 'j', I(1)], 'nz'],
+          ['set', 'r0', ['i32.add', 'XT', ['i32.mul', ldi(at('live', 'j', 2)), I(680)]]],
+          ['set', 'r1', ['i32.add', 'XT', ['i32.mul', ldi(at('live', ['i32.add', 'j', I(1)], 2)), I(680)]]],
+          ['set', 'w0', ['f64x2.splat', ldf(at('lw', 'j', 3))]], ['set', 'w1', ['f64x2.splat', ldf(at('lw', ['i32.add', 'j', I(1)], 3))]],
+          ['for', 'a', I(0), I(170), 2,
+            st2(at('out', 'a', 3), vadd(vadd(ld2(at('out', 'a', 3)), vmul(ldf32x2(at('r0', 'a', 2)), 'w0')), vmul(ldf32x2(at('r1', 'a', 2)), 'w1')))],
+          ['set', 'j', ['i32.add', 'j', I(2)]]],
+        ['if', ['i32.lt_s', 'j', 'nz'], [
+          ['set', 'r0', ['i32.add', 'XT', ['i32.mul', ldi(at('live', 'j', 2)), I(680)]]],
+          ['set', 'w0', ['f64x2.splat', ldf(at('lw', 'j', 3))]],
+          ['for', 'a', I(0), I(170), 2,
+            st2(at('out', 'a', 3), vadd(ld2(at('out', 'a', 3)), vmul(ldf32x2(at('r0', 'a', 2)), 'w0')))]]]] },
+    // Preflop leaf, villain's side: acc[b] = sum over j of ph[j] * XP[live[j]][b] (rows padded to 170).
+    { name: 'pfAcc', params: P('XP live ph nz acc'), locals: [...P('b j r0 r1'), ['p0', 'v128'], ['p1', 'v128']],
+      body: [
+        ['for', 'b', I(0), I(170), 2, st2(at('acc', 'b', 3), ['f64x2.splat', ['f64', 0]])],
+        ['set', 'j', I(0)],
+        ['while', ['i32.lt_s', ['i32.add', 'j', I(1)], 'nz'],
+          ['set', 'r0', ['i32.add', 'XP', ['i32.mul', ldi(at('live', 'j', 2)), I(680)]]],
+          ['set', 'r1', ['i32.add', 'XP', ['i32.mul', ldi(at('live', ['i32.add', 'j', I(1)], 2)), I(680)]]],
+          ['set', 'p0', ['f64x2.splat', ldf(at('ph', 'j', 3))]], ['set', 'p1', ['f64x2.splat', ldf(at('ph', ['i32.add', 'j', I(1)], 3))]],
+          ['for', 'b', I(0), I(170), 2,
+            st2(at('acc', 'b', 3), vadd(vadd(ld2(at('acc', 'b', 3)), vmul('p0', ldf32x2(at('r0', 'b', 2)))), vmul('p1', ldf32x2(at('r1', 'b', 2)))))],
+          ['set', 'j', ['i32.add', 'j', I(2)]]],
+        ['if', ['i32.lt_s', 'j', 'nz'], [
+          ['set', 'r0', ['i32.add', 'XP', ['i32.mul', ldi(at('live', 'j', 2)), I(680)]]],
+          ['set', 'p0', ['f64x2.splat', ldf(at('ph', 'j', 3))]],
+          ['for', 'b', I(0), I(170), 2,
+            st2(at('acc', 'b', 3), vadd(ld2(at('acc', 'b', 3)), vmul('p0', ldf32x2(at('r0', 'b', 2)))))]]]] },
+  ];
+
+  // The kernels, the shared memory and a bump allocator over it (null without WebAssembly SIMD).
+  let WK = null, wkTried = false, wkEnabled = true;
+  function kernels() {
+    if (!wkEnabled) return null;
+    if (wkTried) return WK;
+    wkTried = true;
+    try {
+      if (typeof WebAssembly !== 'object') return null;
+      const bytes = wasmModule(KERNELS);
+      if (!WebAssembly.validate(bytes)) return null;
+      const mem = new WebAssembly.Memory({ initial: 16 });
+      const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), { e: { m: mem } });
+      WK = { k: inst.exports, mem, top: 0, end: 0 };
+    } catch (e) {
+      WK = null;
+    }
+    return WK;
+  }
+  // Start a solve's allocations: room for `bytes` bytes (views from earlier solves become invalid).
+  // False when the memory cannot grow that far; the solve then runs in plain JS.
+  function arenaBegin(bytes) {
+    const need = Math.ceil((bytes + 1024) / 65536);
+    const have = WK.mem.buffer.byteLength / 65536;
+    if (need > have) {
+      try { WK.mem.grow(need - have); } catch (e) { return false; }
+    }
+    WK.top = 0;
+    WK.end = WK.mem.buffer.byteLength;
+    return true;
+  }
+  function arenaTake(bytes) {
+    const off = WK.top;
+    WK.top += Math.ceil(bytes / 16) * 16;
+    if (WK.top > WK.end) throw new Error('kernel arena overflow');
+    return off;
+  }
+  // Zeroed views (the memory is reused from solve to solve).
+  const arenaF64 = (n) => new Float64Array(WK.mem.buffer, arenaTake(8 * n), n).fill(0);
+  const arenaF32 = (n) => new Float32Array(WK.mem.buffer, arenaTake(4 * n), n).fill(0);
+  const arenaI32 = (n) => new Int32Array(WK.mem.buffer, arenaTake(4 * n), n).fill(0);
+  const arenaU8 = (n) => new Uint8Array(WK.mem.buffer, arenaTake(n), n).fill(0);
+  const arenaBytes = (n, size) => Math.ceil((n * size) / 16) * 16;
+
   // ---------- River solver ----------
   /*
    * Heads-up river spots get a small range-vs-range solve with Discounted CFR (the
@@ -1194,13 +1533,11 @@ function ENGINE() {
     const local = new Int32Array(NUM_COMBOS).fill(-1);
     idx.forEach((k, i) => { local[k] = i; });
     const hi = new Uint8Array(N), lo = new Uint8Array(N);
-    const buf = new Int32Array(7);
-    for (let i = 0; i < 5; i++) buf[i] = board[i];
     const score = new Int32Array(N);
+    setBoard(board, 5);
     for (let i = 0; i < N; i++) {
       hi[i] = COMBO_HI[idx[i]]; lo[i] = COMBO_LO[idx[i]];
-      buf[5] = hi[i]; buf[6] = lo[i];
-      score[i] = evaluate(buf, 7);
+      score[i] = scoreHole(hi[i], lo[i]);
     }
     const order = Array.from({ length: N }, (_, i) => i).sort((a, b) => score[a] - score[b]);
     const h0 = local[heroCombo];
@@ -1223,28 +1560,53 @@ function ENGINE() {
 
     // Blocker-aware showdown masses: for each hand, the other side's reach that is below,
     // tied with and above it, and the total, skipping hands that share a card.
-    const below = new Float64Array(N), tie = new Float64Array(N), tot = new Float64Array(N);
+    const tot = new Float64Array(N);
     const cum = new Float64Array(52), grp = new Float64Array(52), all = new Float64Array(52);
-    function masses(r) {
+    // Hands in showdown order (cards and tie groups precomputed), so the loop below does no searching.
+    const oHi = new Uint8Array(N), oLo = new Uint8Array(N), gEnd = new Int32Array(N), rs = new Float64Array(N);
+    for (let j = 0; j < N; j++) { oHi[j] = hi[order[j]]; oLo[j] = lo[order[j]]; }
+    for (let g = 0; g < N;) {
+      let e = g;
+      const s = score[order[g]];
+      while (e < N && score[order[e]] === s) e++;
+      gEnd[g] = e;
+      g = e;
+    }
+    // Showdown value of every hand against reach r (pot potF, `inv` chips put in by the side
+    // being valued), written straight into v: potF * (below + tie / 2) - inv * total.
+    function showValues(r, v, potF, inv) {
       cum.fill(0); all.fill(0);
       let T = 0, cT = 0;
-      for (let i = 0; i < N; i++) { T += r[i]; all[hi[i]] += r[i]; all[lo[i]] += r[i]; }
+      for (let i = 0; i < N; i++) { const x = r[i]; T += x; all[hi[i]] += x; all[lo[i]] += x; }
+      for (let j = 0; j < N; j++) rs[j] = r[order[j]];
       let g = 0;
       while (g < N) {
-        let e = g;
-        const s = score[order[g]];
-        while (e < N && score[order[e]] === s) e++;
-        let gT = 0;
-        for (let j = g; j < e; j++) { const i = order[j]; gT += r[i]; grp[hi[i]] += r[i]; grp[lo[i]] += r[i]; }
-        for (let j = g; j < e; j++) {
-          const i = order[j];
-          below[i] = cT - cum[hi[i]] - cum[lo[i]];
-          tie[i] = gT - grp[hi[i]] - grp[lo[i]] + r[i];
-          tot[i] = T - all[hi[i]] - all[lo[i]] + r[i];
+        const e = gEnd[g];
+        if (e === g + 1) {
+          // A hand with no ties: the general formula's tie mass is exactly 0 here.
+          const i = order[g], h = oHi[g], l = oLo[g], x = rs[g];
+          const bl = cT - cum[h] - cum[l], tie = 0;
+          v[i] = potF * (bl + tie / 2) - inv * (T - all[h] - all[l] + x);
+          cT += x; cum[h] += x; cum[l] += x;
+          g = e;
+          continue;
         }
-        for (let j = g; j < e; j++) { const i = order[j]; cT += r[i]; cum[hi[i]] += r[i]; cum[lo[i]] += r[i]; grp[hi[i]] = 0; grp[lo[i]] = 0; }
+        let gT = 0;
+        for (let j = g; j < e; j++) { const x = rs[j]; gT += x; grp[oHi[j]] += x; grp[oLo[j]] += x; }
+        for (let j = g; j < e; j++) {
+          const i = order[j], h = oHi[j], l = oLo[j], x = rs[j];
+          v[i] = potF * ((cT - cum[h] - cum[l]) + (gT - grp[h] - grp[l] + x) / 2) - inv * (T - all[h] - all[l] + x);
+        }
+        for (let j = g; j < e; j++) { const x = rs[j], h = oHi[j], l = oLo[j]; cT += x; cum[h] += x; cum[l] += x; grp[h] = 0; grp[l] = 0; }
         g = e;
       }
+    }
+    // Value g * (the other side's reach not sharing a card) for every hand.
+    function foldValues(r, v, g) {
+      all.fill(0);
+      let T = 0;
+      for (let i = 0; i < N; i++) { const x = r[i]; T += x; all[hi[i]] += x; all[lo[i]] += x; }
+      for (let i = 0; i < N; i++) v[i] = g * (T - all[hi[i]] - all[lo[i]] + r[i]);
     }
     function totals(r) {
       all.fill(0);
@@ -1263,13 +1625,18 @@ function ENGINE() {
     function fixedStrategy(acts, facingFrac, vsRaise) {
       const bf = clamp(st5.betFreq, 0.05, 0.9), vrB = valueShare(oppStats, oppBetFrac);
       const nA = acts.length, s = new Float64Array(nA * N);
+      // Everything that does not depend on the hand, worked out once per decision.
+      const vr = valueShare(oppStats, oppBetFrac);
+      const foldCut = facingFrac != null && !vsRaise ? (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5) : 0;
+      const raiseCut = 1 - clamp(st5.raiseFreq, 0.02, 0.3);
+      const hasRaise = acts.some((a) => a.kind === 'raise');
+      const kinds = acts.map((a) => a.kind);
+      const pr = new Float64Array(nA);
       for (let i = 0; i < N; i++) {
         const q = qO[idx[i]];
-        const pr = new Float64Array(nA);
         if (facingFrac == null) {
-          const bf = clamp(st5.betFreq, 0.05, 0.9), vr = valueShare(oppStats, oppBetFrac);
           const pBet = sigmoid((q - (1 - bf * vr)) / 0.035) + (1 - sigmoid((q - (1 - bf * vr)) / 0.035)) * sigmoid((bf * (1 - vr) - q) / 0.035);
-          acts.forEach((a, j) => { pr[j] = a.kind === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1); });
+          for (let j = 0; j < nA; j++) pr[j] = kinds[j] === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1);
         } else {
           let pCont;
           if (vsRaise && toCall > 0) {
@@ -1279,15 +1646,14 @@ function ENGINE() {
             // They bet inside the tree: value hands continue, bluffs mostly fold.
             pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
           } else {
-            pCont = sigmoid((q - (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5)) / 0.04);
+            pCont = sigmoid((q - foldCut) / 0.04);
           }
-          const pRaise = sigmoid((q - (1 - clamp(st5.raiseFreq, 0.02, 0.3))) / 0.03);
-          const hasRaise = acts.some((a) => a.kind === 'raise');
-          acts.forEach((a, j) => {
-            if (a.kind === 'fold') pr[j] = 1 - pCont;
-            else if (a.kind === 'raise') pr[j] = pCont * pRaise;
+          const pRaise = sigmoid((q - raiseCut) / 0.03);
+          for (let j = 0; j < nA; j++) {
+            if (kinds[j] === 'fold') pr[j] = 1 - pCont;
+            else if (kinds[j] === 'raise') pr[j] = pCont * pRaise;
             else pr[j] = pCont * (hasRaise ? 1 - pRaise : 1);
-          });
+          }
         }
         let t = 0;
         for (let j = 0; j < nA; j++) t += pr[j];
@@ -1328,99 +1694,208 @@ function ENGINE() {
       const nA = acts.length;
       n.regret = new Float64Array(nA * N);
       n.sum = new Float64Array(nA * N);
-      if (player === 1) n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
+      // Work buffers, reused on every visit (each node is visited once per traversal).
+      n.s = new Float64Array(nA * N);
+      n.v = new Float64Array(N);
+      n.reach = n.kids.map(() => new Float64Array(N));
+      if (player === 1) {
+        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
+        n.pFixed = n.fixed.map((x) => p * x);
+      }
+      n.sIter = 0;
       return n;
     }
     const root = toCall > 0 ? node(0, 0, 0, toCall, 1, true) : node(0, 0, 0, 0, 1, !heroFirst);
+    // Terminal nodes get their own value buffer too.
+    (function addBuffers(n) {
+      for (const k of n.kids) { if (k.term) k.v = new Float64Array(N); else addBuffers(k); }
+    })(root);
 
     // ----- Discounted CFR: positive regrets discounted by t^1.5/(t^1.5+1), negative regrets
     // reset to zero (as in CFR+), average strategy weighted by (t/(t+1))^2 -----
     function strategy(n, out) {
-      const nA = n.acts.length;
+      const nA = n.acts.length, regret = n.regret;
       for (let i = 0; i < N; i++) {
         let t = 0;
-        for (let a = 0; a < nA; a++) { const r = n.regret[a * N + i]; if (r > 0) t += r; }
+        for (let a = 0; a < nA; a++) { const r = regret[a * N + i]; if (r > 0) t += r; }
         for (let a = 0; a < nA; a++) {
-          const r = n.regret[a * N + i];
+          const r = regret[a * N + i];
           out[a * N + i] = t > 0 ? (r > 0 ? r / t : 0) : 1 / nA;
         }
       }
-      if (n.player === 1) for (let j = 0; j < nA * N; j++) out[j] = p * n.fixed[j] + (1 - p) * out[j];
+      if (n.player === 1) { const pf = n.pFixed, q = 1 - p; for (let j = 0; j < nA * N; j++) out[j] = pf[j] + q * out[j]; }
       return out;
     }
     let iter = 0;
+    // Returns the node's value buffer (valid until the node is visited again).
     function cfr(n, trav, rH, rO, avg) {
       if (n.term) {
-        const v = new Float64Array(N);
+        const v = n.v;
         const potF = P0 + n.hIn + n.oIn;
         if (n.term === 'fold') {
           const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
-          totals(trav === 0 ? rO : rH);
-          const g = trav === 0 ? heroGain : P0 - heroGain;
-          for (let i = 0; i < N; i++) v[i] = g * tot[i];
+          foldValues(trav === 0 ? rO : rH, v, trav === 0 ? heroGain : P0 - heroGain);
         } else {
-          masses(trav === 0 ? rO : rH);
-          for (let i = 0; i < N; i++) {
-            const heroish = potF * (below[i] + tie[i] / 2) - (trav === 0 ? n.hIn : n.oIn) * tot[i];
-            v[i] = heroish;
-          }
           // For the opponent the same formula holds from their side: they win the pot when
           // the hero hand is below theirs. (Zero-sum up to the sunk pot.)
+          showValues(trav === 0 ? rO : rH, v, potF, trav === 0 ? n.hIn : n.oIn);
         }
         return v;
       }
       const nA = n.acts.length;
-      const s = new Float64Array(nA * N);
+      const s = n.s;
       if (avg) {
+        const sum = n.sum;
         for (let i = 0; i < N; i++) {
           let t = 0;
-          for (let a = 0; a < nA; a++) t += n.sum[a * N + i];
-          for (let a = 0; a < nA; a++) s[a * N + i] = t > 0 ? n.sum[a * N + i] / t : 1 / nA;
+          for (let a = 0; a < nA; a++) t += sum[a * N + i];
+          for (let a = 0; a < nA; a++) s[a * N + i] = t > 0 ? sum[a * N + i] / t : 1 / nA;
         }
-      } else strategy(n, s);
-      const v = new Float64Array(N);
+      } else if (n.player === 0 || n.sIter !== iter) {
+        // The opponent's regrets only change in their own traversal (the second one), so the
+        // strategy worked out in hero's traversal of this iteration is still current there.
+        strategy(n, s);
+        if (n.player === 1) n.sIter = iter;
+      }
+      const v = n.v;
+      v.fill(0);
       const own = n.player === trav;
       const vals = own ? [] : null;
+      const base = n.player === 0 ? rH : rO;
       for (let a = 0; a < nA; a++) {
-        const r2 = new Float64Array(N);
-        const base = n.player === 0 ? rH : rO;
-        for (let i = 0; i < N; i++) r2[i] = base[i] * s[a * N + i];
+        const r2 = n.reach[a];
+        const off = a * N;
+        for (let i = 0; i < N; i++) r2[i] = base[i] * s[off + i];
         const va = n.player === 0 ? cfr(n.kids[a], trav, r2, rO, avg) : cfr(n.kids[a], trav, rH, r2, avg);
-        if (own) { vals.push(va); for (let i = 0; i < N; i++) v[i] += s[a * N + i] * va[i]; }
+        if (own) { vals.push(va); for (let i = 0; i < N; i++) v[i] += s[off + i] * va[i]; }
         else for (let i = 0; i < N; i++) v[i] += va[i];
       }
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
         const reach = n.player === 0 ? rH : rO;
+        const regret = n.regret, sum = n.sum;
         for (let a = 0; a < nA; a++) {
+          const va = vals[a];
           for (let i = 0; i < N; i++) {
             const j = a * N + i;
-            const r = n.regret[j];
-            n.regret[j] = (r > 0 ? r * pos : 0) + vals[a][i] - v[i];
-            n.sum[j] = n.sum[j] * w + reach[i] * s[j];
+            const r = regret[j];
+            regret[j] = (r > 0 ? r * pos : 0) + va[i] - v[i];
+            sum[j] = sum[j] * w + reach[i] * s[j];
           }
         }
       }
-      if (own && avg) n.vals = vals;
+      if (own && avg) n.vals = vals.map((x) => x.slice());
       return v;
     }
+
+    // ----- the same CFR with the WebAssembly kernels: every buffer moves into the kernel
+    // memory with rows padded to an even length Np (the padding stays zero) -----
+    let KK = kernels();
+    const Np = N + (N & 1);
+    let wHk = null, wOk = null, kv = null;
+    if (KK) {
+      const B = arenaBytes, D = 8;
+      let bytes = 2 * B(Np, D) + 4 * B(N, 1) + 2 * B(N, 4) + B(N, D) + 3 * B(52, D);
+      (function size(n) {
+        for (const k of n.kids) {
+          if (k.term) { bytes += B(Np, D); continue; }
+          const nA = k.acts.length;
+          bytes += 4 * B(nA * Np, D) + B(Np, D) + nA * B(Np, D);
+          size(k);
+        }
+      })({ kids: [root] });
+      if (!arenaBegin(bytes)) KK = null;
+    }
+    if (KK) {
+      wHk = arenaF64(Np); wHk.set(wH);
+      wOk = arenaF64(Np); wOk.set(wO);
+      const u8 = (x) => { const a = arenaU8(N); a.set(x); return a.byteOffset; };
+      const i32 = (x) => { const a = arenaI32(N); a.set(x); return a.byteOffset; };
+      kv = {
+        hi: u8(hi), lo: u8(lo), oHi: u8(oHi), oLo: u8(oLo), order: i32(order), gEnd: i32(gEnd),
+        rs: arenaF64(N).byteOffset, cum: arenaF64(52).byteOffset, all: arenaF64(52).byteOffset, grp: arenaF64(52).byteOffset,
+      };
+      (function move(n) {
+        for (const k of n.kids) {
+          if (k.term) { k.v = arenaF64(Np); continue; }
+          const nA = k.acts.length;
+          k.regret = arenaF64(nA * Np); k.sum = arenaF64(nA * Np); k.s = arenaF64(nA * Np);
+          const pf = arenaF64(nA * Np);
+          if (k.pFixed) for (let a = 0; a < nA; a++) pf.set(k.pFixed.subarray(a * N, (a + 1) * N), a * Np);
+          k.pFixed = pf;
+          k.v = arenaF64(Np);
+          k.reach = k.kids.map(() => arenaF64(Np));
+          move(k);
+        }
+      })({ kids: [root] });
+    }
+    function cfrK(n, trav, rH, rO, avg) {
+      const k = KK.k;
+      if (n.term) {
+        const v = n.v;
+        const r = trav === 0 ? rO : rH;
+        if (n.term === 'fold') {
+          const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
+          k.foldRiver(r.byteOffset, v.byteOffset, N, trav === 0 ? heroGain : P0 - heroGain, kv.hi, kv.lo, kv.all);
+        } else {
+          k.showRiver(r.byteOffset, v.byteOffset, N, P0 + n.hIn + n.oIn, trav === 0 ? n.hIn : n.oIn,
+            kv.hi, kv.lo, kv.order, kv.oHi, kv.oLo, kv.gEnd, kv.rs, kv.cum, kv.all, kv.grp);
+        }
+        return v;
+      }
+      const nA = n.acts.length;
+      const s = n.s, so = s.byteOffset, row = 8 * Np;
+      if (avg) {
+        const sum = n.sum;
+        for (let i = 0; i < N; i++) {
+          let t = 0;
+          for (let a = 0; a < nA; a++) t += sum[a * Np + i];
+          for (let a = 0; a < nA; a++) s[a * Np + i] = t > 0 ? sum[a * Np + i] / t : 1 / nA;
+        }
+      } else if (n.player === 0 || n.sIter !== iter) {
+        k.strategyDiv(n.regret.byteOffset, so, nA, Np, n.player === 1 ? n.pFixed.byteOffset : 0, 1 - p, 1 / nA);
+        if (n.player === 1) n.sIter = iter;
+      }
+      const v = n.v;
+      v.fill(0);
+      const own = n.player === trav;
+      const vals = own ? [] : null;
+      const base = n.player === 0 ? rH : rO;
+      for (let a = 0; a < nA; a++) {
+        const r2 = n.reach[a];
+        k.mul(r2.byteOffset, base.byteOffset, so + a * row, Np);
+        const va = n.player === 0 ? cfrK(n.kids[a], trav, r2, rO, avg) : cfrK(n.kids[a], trav, rH, r2, avg);
+        if (own) { vals.push(va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, Np); }
+        else k.addTo(v.byteOffset, va.byteOffset, Np);
+      }
+      if (own && !avg) {
+        const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
+        const w = Math.pow(iter / (iter + 1), 2);
+        const ro = n.regret.byteOffset, sm = n.sum.byteOffset;
+        for (let a = 0; a < nA; a++) k.regretRiver(ro + a * row, sm + a * row, vals[a].byteOffset, v.byteOffset, base.byteOffset, so + a * row, Np, pos, w);
+      }
+      if (own && avg) n.vals = vals.map((x) => x.slice());
+      return v;
+    }
+
     const iterations = cfg.iterations || RIVER_ITERATIONS;
+    const run = KK ? cfrK : cfr, rH0 = KK ? wHk : wH, rO0 = KK ? wOk : wO, S = KK ? Np : N;
     for (iter = 1; iter <= iterations; iter++) {
-      cfr(root, 0, wH, wO, false);
-      cfr(root, 1, wH, wO, false);
+      run(root, 0, rH0, rO0, false);
+      run(root, 1, rH0, rO0, false);
     }
     // Final pass with average strategies: EV of each root action for hero's real hand.
-    cfr(root, 0, wH, wO, true);
+    run(root, 0, rH0, rO0, true);
     totals(wO);
     const norm = tot[h0] > 0 ? tot[h0] : 1;
     let t = 0;
-    for (let a = 0; a < root.acts.length; a++) t += root.sum[a * N + h0];
+    for (let a = 0; a < root.acts.length; a++) t += root.sum[a * S + h0];
     return {
       iterations,
       actions: root.acts.map((a, j) => ({
         kind: a.kind, amount: a.amount, frac: a.frac,
-        freq: t > 0 ? root.sum[j * N + h0] / t : 1 / root.acts.length,
+        freq: t > 0 ? root.sum[j * S + h0] / t : 1 / root.acts.length,
         ev: root.vals[j][h0] / norm,
       })),
     };
@@ -1464,11 +1939,11 @@ function ENGINE() {
       idx.forEach((k, i) => { S.hi[i] = COMBO_HI[k]; S.lo[i] = COMBO_LO[k]; S.w[i] = Math.max(0, W[k]); S.local[k] = i; });
       for (const c of rivers) {
         buf[4] = c;
+        setBoard(buf, 5);
         const score = new Int32Array(n), valid = new Uint8Array(n), list = [];
         for (let i = 0; i < n; i++) {
           if (S.hi[i] === c || S.lo[i] === c) continue;
-          buf[5] = S.hi[i]; buf[6] = S.lo[i];
-          score[i] = evaluate(buf, 7);
+          score[i] = scoreHole(S.hi[i], S.lo[i]);
           valid[i] = 1;
           list.push(i);
         }
@@ -1493,25 +1968,27 @@ function ENGINE() {
 
     // ----- blocker-aware showdown masses: for each hand of side T, the other side's reach
     // below, tied with and in total, skipping hands that share a card -----
-    const below = new Float64Array(NMAX), tie = new Float64Array(NMAX), tot = new Float64Array(NMAX);
+    const tot = new Float64Array(NMAX);
     const cum = new Float64Array(52), grp = new Float64Array(52), all = new Float64Array(52);
-    function masses(r, X, T, c) {
-      const oo = X.R[c].order, os = X.R[c].score, to = T.R[c].order, ts = T.R[c].score;
+    // Adds sc * (potF * (below + tie / 2) - myIn * total) to out[i] for every hand i of T that
+    // is live with river card c (the showdown sweep and the value written in one pass).
+    function showAdd(r, X, T, c, out, sc, potF, myIn) {
+      const RX = X.R[c], RT = T.R[c];
+      const oo = RX.order, os = RX.score, xv = RX.valid, to = RT.order, ts = RT.score;
       const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo, cross = T.cross;
+      const no = oo.length, nt = to.length;
       cum.fill(0); all.fill(0);
       let tt = 0;
-      for (let j = 0; j < oo.length; j++) { const i = oo[j], x = r[i]; tt += x; all[xh[i]] += x; all[xl[i]] += x; }
+      for (let j = 0; j < no; j++) { const i = oo[j], x = r[i]; tt += x; all[xh[i]] += x; all[xl[i]] += x; }
       let a = 0, b = 0, cT = 0;
-      while (b < to.length) {
+      while (b < nt) {
         const s = ts[to[b]];
-        while (a < oo.length && os[oo[a]] < s) { const i = oo[a], x = r[i]; cT += x; cum[xh[i]] += x; cum[xl[i]] += x; a++; }
+        while (a < no && os[oo[a]] < s) { const i = oo[a], x = r[i]; cT += x; cum[xh[i]] += x; cum[xl[i]] += x; a++; }
         let a2 = a, gT = 0;
-        while (a2 < oo.length && os[oo[a2]] === s) { const i = oo[a2], x = r[i]; gT += x; grp[xh[i]] += x; grp[xl[i]] += x; a2++; }
-        while (b < to.length && ts[to[b]] === s) {
-          const i = to[b], h = th[i], l = tl[i], same = cross[i] >= 0 && X.R[c].valid[cross[i]] ? r[cross[i]] : 0;
-          below[i] = cT - cum[h] - cum[l];
-          tie[i] = gT - grp[h] - grp[l] + same;
-          tot[i] = tt - all[h] - all[l] + same;
+        while (a2 < no && os[oo[a2]] === s) { const i = oo[a2], x = r[i]; gT += x; grp[xh[i]] += x; grp[xl[i]] += x; a2++; }
+        while (b < nt && ts[to[b]] === s) {
+          const i = to[b], h = th[i], l = tl[i], ci = cross[i], same = ci >= 0 && xv[ci] ? r[ci] : 0;
+          out[i] += sc * (potF * ((cT - cum[h] - cum[l]) + (gT - grp[h] - grp[l] + same) / 2) - myIn * (tt - all[h] - all[l] + same));
           b++;
         }
         for (let j = a; j < a2; j++) { const i = oo[j]; grp[xh[i]] = 0; grp[xl[i]] = 0; }
@@ -1522,6 +1999,14 @@ function ENGINE() {
       let tt = 0;
       for (let i = 0; i < X.n; i++) { const x = r[i]; tt += x; all[X.hi[i]] += x; all[X.lo[i]] += x; }
       for (let i = 0; i < T.n; i++) tot[i] = tt - all[T.hi[i]] - all[T.lo[i]] + (T.cross[i] >= 0 ? r[T.cross[i]] : 0);
+    }
+    // out[i] = g * (the other side's reach not sharing a card with hand i of T).
+    function foldValues(r, X, T, out, g) {
+      all.fill(0);
+      let tt = 0;
+      const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo, cross = T.cross, nx = X.n, nt = T.n;
+      for (let i = 0; i < nx; i++) { const x = r[i]; tt += x; all[xh[i]] += x; all[xl[i]] += x; }
+      for (let i = 0; i < nt; i++) { const ci = cross[i]; out[i] = g * (tt - all[th[i]] - all[tl[i]] + (ci >= 0 ? r[ci] : 0)); }
     }
 
     // ----- the read's strategy for the opponent -----
@@ -1670,20 +2155,13 @@ function ENGINE() {
       const myIn = trav === 0 ? n.hIn : n.oIn;
       if (n.term === 'fold') {
         const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
-        const g = trav === 0 ? heroGain : P0 - heroGain;
-        totals(r, X, T);
-        for (let i = 0; i < T.n; i++) out[i] = g * tot[i];
+        foldValues(r, X, T, out, trav === 0 ? heroGain : P0 - heroGain);
         return;
       }
       const potF = P0 + n.hIn + n.oIn;
       out.fill(0, 0, T.n);
-      const cards = n.term === 'show' ? [n.card] : sample;
-      const sc = n.term === 'show' ? 1 : scale;
-      for (const c of cards) {
-        masses(r, X, T, c);
-        const ord = T.R[c].order;
-        for (let j = 0; j < ord.length; j++) { const i = ord[j]; out[i] += sc * (potF * (below[i] + tie[i] / 2) - myIn * tot[i]); }
-      }
+      if (n.term === 'show') { showAdd(r, X, T, n.card, out, 1, potF, myIn); return; }
+      for (let k = 0; k < sample.length; k++) showAdd(r, X, T, sample[k], out, scale, potF, myIn);
     }
     function cfr(n, trav, rH, rO, avg, d, out) {
       if (n.term) { terminal(n, trav, rH, rO, out); return; }
@@ -2036,8 +2514,78 @@ function ENGINE() {
     const root = node(0, 0, 0, cfg.raises || 4, 0, 1, cfg.villainRaised, 0);
 
     // ----- Discounted CFR over classes -----
-    const acc = new Float64Array(NC), tot = new Float64Array(NC), live = new Int32Array(NC);
+    const acc = new Float64Array(NC), tot = new Float64Array(NC), live = new Int32Array(NC), lw = new Float64Array(NC);
     const mass = (r, v, g) => classMass(r, v, g);
+    // With the WebAssembly kernels, each leaf matrix is copied into the kernel memory once per
+    // solve, row-padded to 170 (XP) and transposed (XT), and the leaves' products run there.
+    // The tree's buffers move there too (rows of 170, the padding stays zero), and the CFR
+    // node loops use the same kernels as the river solver.
+    let KK = kernels();
+    const NP = 170;
+    let kLive = null, kW = null, kOut = null, kH = null, kO = null, kTot = null, kc = null;
+    const kMat = new Map();
+    if (KK) {
+      const mats = [MEQ, ...Object.values(shareCache)];
+      const B = arenaBytes;
+      let bytes = mats.length * 2 * B(NP * NP, 4) + B(NP, 4) + 5 * B(NP, 8) + 2 * B(NC, 8) + 2 * B(NC, 4) + B(13, 8);
+      (function size(n) {
+        for (const k of n.kids) {
+          if (k.term) { bytes += B(NP, 8); continue; }
+          const nA = k.acts.length;
+          bytes += 4 * B(nA * NP, 8) + B(NP, 8) + nA * B(NP, 8);
+          size(k);
+        }
+      })({ kids: [root] });
+      if (!arenaBegin(bytes)) KK = null;
+    }
+    if (KK) {
+      const mats = [MEQ, ...Object.values(shareCache)];
+      for (const X of mats) {
+        const XP = arenaF32(NP * NP), XT = arenaF32(NP * NP);
+        for (let a = 0; a < NC; a++) for (let b = 0; b < NC; b++) { const x = X[a * NC + b]; XP[a * NP + b] = x; XT[b * NP + a] = x; }
+        kMat.set(X, { xp: XP.byteOffset, xt: XT.byteOffset });
+      }
+      kLive = arenaI32(NP); kW = arenaF64(NP); kOut = arenaF64(NP); kTot = arenaF64(NP);
+      kH = arenaF64(NP); kH.set(heroW); kO = arenaF64(NP); kO.set(oppW);
+      const cnt = arenaF64(NC), per = arenaF64(NC), r1 = arenaI32(NC), r2 = arenaI32(NC);
+      cnt.set(CLASS_COMBO_COUNT); per.set(CLASS_PER_CARD); r1.set(CLASS_R1); r2.set(CLASS_R2);
+      kc = { cnt: cnt.byteOffset, per: per.byteOffset, r1: r1.byteOffset, r2: r2.byteOffset, PP: arenaF64(13).byteOffset };
+      (function move(n) {
+        for (const k of n.kids) {
+          if (k.term) { k.v = arenaF64(NP); continue; }
+          const nA = k.acts.length;
+          k.regret = arenaF64(nA * NP); k.sum = arenaF64(nA * NP); k.buf = arenaF64(nA * NP);
+          k.pFixed = arenaF64(nA * NP);
+          if (k.fixed) for (let j = 0; j < nA * NC; j++) k.pFixed[Math.floor(j / NC) * NP + (j % NC)] = p * k.fixed[j];
+          k.v = arenaF64(NP);
+          k.r2 = k.acts.map(() => arenaF64(NP));
+          move(k);
+        }
+      })({ kids: [root] });
+    }
+    function terminalK(n, trav, rH, rO) {
+      const k = KK.k, v = n.v, T = kTot;
+      const mass = (r, out, g) => k.pfMass(r.byteOffset, out.byteOffset, g, kc.cnt, kc.per, kc.r1, kc.r2, kc.PP);
+      if (n.term === 'fold') {
+        const heroGain = n.loser === 0 ? -n.hIn : P0 + n.oIn;
+        mass(trav === 0 ? rO : rH, v, trav === 0 ? heroGain : P0 - heroGain);
+        return v;
+      }
+      const potF = P0 + n.hIn + n.oIn;
+      const m = kMat.get(n.term === 'show' ? MEQ : n.S);
+      if (trav === 0) {
+        mass(rO, T, 1);
+        const nz = k.pfLive(rO.byteOffset, kLive.byteOffset, kW.byteOffset);
+        k.pfRowsT(m.xt, kLive.byteOffset, kW.byteOffset, nz, kOut.byteOffset);
+        for (let a = 0; a < NC; a++) v[a] = potF * kOut[a] - n.hIn * T[a];
+      } else {
+        mass(rH, T, 1);
+        const nz = k.pfLive(rH.byteOffset, kLive.byteOffset, kW.byteOffset);
+        k.pfAcc(m.xp, kLive.byteOffset, kW.byteOffset, nz, kOut.byteOffset);
+        for (let b = 0; b < NC; b++) v[b] = potF * (T[b] - kOut[b]) - n.oIn * T[b];
+      }
+      return v;
+    }
     function terminal(n, trav, rH, rO) {
       const v = n.v || (n.v = new Float64Array(NC));
       if (n.term === 'fold') {
@@ -2052,22 +2600,44 @@ function ENGINE() {
         // Only the opponent's classes that still reach this leaf.
         let mx = 0, nz = 0;
         for (let b = 0; b < NC; b++) if (rO[b] > mx) mx = rO[b];
-        for (let b = 0; b < NC; b++) if (rO[b] > 1e-7 * mx) live[nz++] = b;
-        for (let a = 0; a < NC; a++) {
+        for (let b = 0; b < NC; b++) if (rO[b] > 1e-7 * mx) { live[nz] = b; lw[nz] = rO[b]; nz++; }
+        // Four rows at a time: each row keeps its own running sum in the same order, so the
+        // results are the same, but the four additions don't wait on each other.
+        let a = 0;
+        for (; a + 3 < NC; a += 4) {
+          let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+          const r0 = a * NC, r1 = r0 + NC, r2 = r1 + NC, r3 = r2 + NC;
+          for (let j = 0; j < nz; j++) {
+            const b = live[j], w = lw[j];
+            s0 += X[r0 + b] * w; s1 += X[r1 + b] * w; s2 += X[r2 + b] * w; s3 += X[r3 + b] * w;
+          }
+          v[a] = potF * s0 - n.hIn * tot[a];
+          v[a + 1] = potF * s1 - n.hIn * tot[a + 1];
+          v[a + 2] = potF * s2 - n.hIn * tot[a + 2];
+          v[a + 3] = potF * s3 - n.hIn * tot[a + 3];
+        }
+        for (; a < NC; a++) {
           let s2 = 0;
           const row = a * NC;
-          for (let j = 0; j < nz; j++) { const b = live[j]; s2 += X[row + b] * rO[b]; }
+          for (let j = 0; j < nz; j++) s2 += X[row + live[j]] * lw[j];
           v[a] = potF * s2 - n.hIn * tot[a];
         }
       } else {
         classMass(rH, tot, 1);
         acc.fill(0);
-        let mx = 0;
+        let mx = 0, nz = 0;
         for (let a = 0; a < NC; a++) if (rH[a] > mx) mx = rH[a];
-        for (let a = 0; a < NC; a++) {
-          const ph = rH[a];
-          if (ph <= 1e-7 * mx) continue;
-          const row = a * NC;
+        for (let a = 0; a < NC; a++) if (rH[a] > 1e-7 * mx) live[nz++] = a;
+        // Four hero classes per pass over acc (added in the same order as one at a time).
+        let j = 0;
+        for (; j + 3 < nz; j += 4) {
+          const a0 = live[j], a1 = live[j + 1], a2 = live[j + 2], a3 = live[j + 3];
+          const p0 = rH[a0], p1 = rH[a1], p2 = rH[a2], p3 = rH[a3];
+          const r0 = a0 * NC, r1 = a1 * NC, r2 = a2 * NC, r3 = a3 * NC;
+          for (let b = 0; b < NC; b++) acc[b] = acc[b] + p0 * X[r0 + b] + p1 * X[r1 + b] + p2 * X[r2 + b] + p3 * X[r3 + b];
+        }
+        for (; j < nz; j++) {
+          const a = live[j], ph = rH[a], row = a * NC;
           for (let b = 0; b < NC; b++) acc[b] += ph * X[row + b];
         }
         for (let b = 0; b < NC; b++) v[b] = potF * (tot[b] - acc[b]) - n.oIn * tot[b];
@@ -2121,16 +2691,55 @@ function ENGINE() {
       if (own && avg) n.vals = vals;
       return v;
     }
+    // The same CFR on the kernel memory (rows of NP).
+    function cfrK(n, trav, rH, rO, avg) {
+      if (n.term) return terminalK(n, trav, rH, rO);
+      const k = KK.k, nA = n.acts.length, s = n.buf, so = s.byteOffset, row = 8 * NP;
+      if (avg) {
+        for (let i = 0; i < NC; i++) {
+          let t = 0;
+          for (let a = 0; a < nA; a++) t += n.sum[a * NP + i];
+          for (let a = 0; a < nA; a++) s[a * NP + i] = t > 0 ? n.sum[a * NP + i] / t : 1 / nA;
+        }
+      } else k.strategyDiv(n.regret.byteOffset, so, nA, NP, n.player === 1 ? n.pFixed.byteOffset : 0, 1 - p, 1 / nA);
+      const v = n.v;
+      v.fill(0);
+      const own = n.player === trav;
+      const vals = own ? [] : null;
+      const base = n.player === 0 ? rH : rO;
+      for (let a = 0; a < nA; a++) {
+        const r2 = n.r2[a];
+        k.mul(r2.byteOffset, base.byteOffset, so + a * row, NP);
+        const va = n.player === 0 ? cfrK(n.kids[a], trav, r2, rO, avg) : cfrK(n.kids[a], trav, rH, r2, avg);
+        if (own) { vals.push(avg ? Float64Array.from(va.subarray(0, NC)) : va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, NP); }
+        else k.addTo(v.byteOffset, va.byteOffset, NP);
+      }
+      if (own && !avg) {
+        const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
+        const w = Math.pow(iter / (iter + 1), 2);
+        const ro = n.regret.byteOffset, sm = n.sum.byteOffset;
+        for (let a = 0; a < nA; a++) k.regretRiver(ro + a * row, sm + a * row, vals[a].byteOffset, v.byteOffset, base.byteOffset, so + a * row, NP, pos, w);
+      }
+      if (own && avg) n.vals = vals;
+      return v;
+    }
     const iterations = cfg.iterations || PREFLOP_ITERATIONS;
     const deadline = cfg.timeMs ? Date.now() + cfg.timeMs : Infinity;
     let ran = 0;
+    const run = KK ? cfrK : cfr, rH0 = KK ? kH : heroW, rO0 = KK ? kO : oppW;
     for (iter = 1; iter <= iterations; iter++) {
-      cfr(root, 0, heroW, oppW, false);
-      cfr(root, 1, heroW, oppW, false);
+      run(root, 0, rH0, rO0, false);
+      run(root, 1, rH0, rO0, false);
       ran = iter;
       if (Date.now() > deadline) break;
     }
-    cfr(root, 0, heroW, oppW, true);
+    run(root, 0, rH0, rO0, true);
+    // Back to plain arrays of NC per action (the kernel memory is reused by the next solve).
+    if (KK) {
+      const nA = root.acts.length, sum = new Float64Array(nA * NC);
+      for (let a = 0; a < nA; a++) for (let i = 0; i < NC; i++) sum[a * NC + i] = root.sum[a * NP + i];
+      root.sum = sum;
+    }
     const norm = new Float64Array(NC);
     mass(oppW, norm, 1);
     const h0 = heroClass;
@@ -3013,6 +3622,8 @@ function ENGINE() {
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     createAnalysis, analyzeSync, solvableSpot, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
+    // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
+    useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
     // For tests.
     _pf: { classMass, preflopCompat, preflopEquityTable, fieldMax },
   };
