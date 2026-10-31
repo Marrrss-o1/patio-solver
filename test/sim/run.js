@@ -7,7 +7,8 @@
 //   --players N        2-6 seats (hero + N-1 bots)
 //   --bots SPEC        typical | station | maniac | mixed (old bots), home (average friend), friends (a lineup of
 //                      bots calibrated to Marwin's friends, a different lineup per block), home:<id> (one friend
-//                      profile from profiles.json), or a comma list, one spec per bot seat
+//                      profile from profiles.json), solver (the solver itself, with its own tracker and reads;
+//                      solver@REF runs src/ of a git ref), or a comma list, one spec per bot seat
 //   --stack BB         starting stacks in big blinds (default 150 with friends/home bots, 100 otherwise)
 //   --bb CHIPS         big blind in chips (default 2, like the real lobby; small blind is half)
 // What is measured
@@ -94,8 +95,14 @@ function buildConfig(args) {
   if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null) {
     variants.push({ name: 'B', agent: String(args['b-agent'] || args.agent || 'solver'), src: srcForRef(args['b-ref']), ref: args['b-ref'] || 'working tree', commit: commitOf(args['b-ref']), solver: Object.assign({}, env, parse(args['b-opts'])), bp: bp('b-bp') });
   }
+  // Solver opponents: src/ for each solver@ref named in --bots.
+  const solverBots = {};
+  for (const t of botsSpec.split(',')) {
+    const m = /^solver(?:@(.+))?$/.exec(t);
+    if (m && !solverBots[t]) solverBots[t] = { src: srcForRef(m[1]), commit: commitOf(m[1]) };
+  }
   return {
-    n, bots: botsSpec, bb, sb: bb / 2, stack: Math.round(+(args.stack || (home ? 150 : 100)) * bb),
+    n, bots: botsSpec, solverBots, bb, sb: bb / 2, stack: Math.round(+(args.stack || (home ? 150 : 100)) * bb),
     hands: +(args.hands || 1000), seed: +(args.seed || 1), dup: args.dup !== '0',
     aivat: args.aivat === 'off' ? null : { pending: args.aivat && args.aivat !== true ? args.aivat : 'call', pfSamples: +(args['pf-samples'] || 2000), future: args.future != null ? +args.future : 0.8, cap: args.cap != null ? +args.cap : 1.5 },
     warm: args.warm != null ? +args.warm : 300, block: +(args.block || 100),
@@ -136,7 +143,12 @@ function makeHero(variant, cfg) {
 function playBlock(cfg, block) {
   const n = cfg.n, rots = cfg.dup ? n : 1;
   const specs = lineup(cfg, block);
-  const botSeats = specs.map((s) => bots.makeBot(s, cfg.profiles));
+  const isSolver = (s) => !!(cfg.solverBots && cfg.solverBots[s]);
+  const shared = specs.map((s) => (isSolver(s) ? null : bots.makeBot(s, cfg.profiles)));
+  // Solver opponents keep reads (of hero too), so each variant gets its own copy; they watch the table from their seat.
+  const botSets = cfg.variants.map(() => specs.map((s, j) => (isSolver(s)
+    ? solverAgent({ src: cfg.solverBots[s].src, iters: cfg.iters, riverIters: cfg.riverIters, blueprint: '' }) : shared[j])));
+  const watchersOf = (set) => set.map((b, j) => (b.onEvent ? { seat: j + 1, onEvent: (ev, data, snapFn) => b.onEvent(ev, data, snapFn) } : null)).filter(Boolean);
   const heroes = cfg.variants.map((v) => makeHero(v, cfg));
   const stacks = new Array(n).fill(cfg.stack);
   const deal = (d, rot, salt) => {
@@ -148,13 +160,16 @@ function playBlock(cfg, block) {
     return { hands, boardAll: deck.slice(2 * n, 2 * n + 5), btn: cfg.dup ? (btn0 - rot + n) % n : btn0, seed: (Math.floor(keyed(dealSeed, rot, 7) * 4294967296)) >>> 0 };
   };
   // Warm-up: a baseline player in hero's seat, every hero's tracker watching, so reads start warm.
+  // Solver opponents play the warm-up too (the first variant's copies act; the others watch the same hands).
   const listeners = heroes.filter((h) => h.onEvent);
-  if (cfg.warm > 0 && listeners.length) {
+  const allWatchers = botSets.flatMap(watchersOf);
+  if (cfg.warm > 0 && (listeners.length || allWatchers.length)) {
     const warmHero = bots.baseline();
     for (let w = 0; w < cfg.warm; w++) {
       const dl = deal(block * 100000 + w, 0, 31337);
-      playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [warmHero].concat(botSeats), hero: 0, names: NAMES, uidBase: 1000,
-        emit: (ev, data, snapFn) => { const s = snapFn(); for (const h of listeners) h.tracker.handle(ev, data, s); } }, dl));
+      playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [warmHero].concat(botSets[0]), hero: 0, names: NAMES, uidBase: 1000,
+        emit: listeners.length ? (ev, data, snapFn) => { const s = snapFn(); for (const h of listeners) h.tracker.handle(ev, data, s); } : null,
+        watchers: allWatchers }, dl));
     }
   }
   const out = [];
@@ -169,8 +184,8 @@ function playBlock(cfg, block) {
         const dl = deal(d, rot, 1);
         const diag = cfg.diag ? [] : null;
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
-        const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSeats), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
-          aivat: cfg.aivat, parts: cfg.parts, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null }, dl));
+        const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
+          aivat: cfg.aivat, parts: cfg.parts, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;
         r.chance += res.chance / rots / cfg.bb; r.action += res.action / rots / cfg.bb;
         // Per rotation: hero's hand (preflop-order rank), position (0 = button, 1 = next seat, ...), corrected result.
@@ -185,7 +200,9 @@ function playBlock(cfg, block) {
     out.push(rec);
   }
   const hs = heroes.map((h) => (h.stats ? h.stats : null));
-  return { block, lineup: specs, deals: out, stats: hs };
+  // Solver opponents' own counts, per variant: decisions and fallbacks to the simple player.
+  const os = botSets.map((set) => set.filter((b) => b.stats).reduce((a, b) => ({ decisions: a.decisions + b.stats.decisions, errors: a.errors + b.stats.errors }), { decisions: 0, errors: 0 }));
+  return { block, lineup: specs, deals: out, stats: hs, oppStats: os };
 }
 
 function meanSe(xs) {
@@ -210,6 +227,10 @@ function summarize(cfg, results, sec) {
       bb100: r1(raw.mean * 100), se100: r1(raw.se * 100), aivatBB100: r1(adj.mean * 100), aivatSE100: r1(adj.se * 100),
       seRatio: adj.se > 0 ? Math.round((raw.se / adj.se) * 100) / 100 : null,
       decisions: dec, msPerDecision: dec ? Math.round(ms / dec) : 0, errors: st.reduce((a, s) => a + s.errors, 0), solved };
+    if (cfg.solverBots && Object.keys(cfg.solverBots).length) {
+      const vi = cfg.variants.indexOf(v), o = results.map((b) => (b.oppStats || [])[vi]).filter(Boolean);
+      sum.variants[v.name].solverOpponents = { decisions: o.reduce((a, x) => a + x.decisions, 0), errors: o.reduce((a, x) => a + x.errors, 0) };
+    }
   }
   if (cfg.variants.length === 2) {
     const raw = meanSe(deals.map((x) => x.B.net - x.A.net)), adj = meanSe(deals.map((x) => x.B.adj - x.A.adj));
@@ -224,7 +245,7 @@ function summarize(cfg, results, sec) {
 function blockKey(cfg) {
   const crypto = require('crypto');
   const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp]);
-  const k = [cfg.n, cfg.bots, cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
+  const k = [cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {
