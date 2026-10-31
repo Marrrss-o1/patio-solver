@@ -10,12 +10,13 @@ never add code that clicks, sends `player:game:perform_action`, or otherwise pla
 ```
 src/engine.js            The solver (exploitative Monte Carlo + CFR solvers). Pure JS, no deps. Shared by both builds.
                          Holds the 169x169 preflop equity table (`PF_EQ_B64`, written by scripts/preflop-equity.js).
-                         The river, turn and preflop solvers' inner loops also run as WebAssembly SIMD kernels
+                         The river, turn, flop and preflop solvers' inner loops also run as WebAssembly SIMD kernels
                          assembled at load time (`cfrK`, `terminalK`, the turn solver's showTurn/foldTurn kernels and
-                         per-card data; JS fallback, `useKernels(false)`), bit-identical to the JS loops. Any change
-                         to CFR or leaf code in riverSolve/turnSolve/preflopSolve (cfr loop, showAdd, foldValues)
-                         needs the same change there; the "kernels: ... bit-identical" test catches drift for the
-                         spots it covers. flopSolve is JS only. The manifest allows 'wasm-unsafe-eval' for this.
+                         per-card data, the flop solver's river-bet sweep; JS fallback, `useKernels(false)`),
+                         bit-identical to the JS loops. Any change to CFR or leaf code in riverSolve/turnSolve/
+                         flopSolve/preflopSolve (cfr loop, showAdd, foldValues, riverExtra) needs the same change
+                         there; the "kernels: ... bit-identical" test catches drift for the spots it covers.
+                         The manifest allows 'wasm-unsafe-eval' for this.
 src/tracker.js           Socket events -> hand state, opponent tallies, solver input. Pure JS, unit-tested.
 src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
@@ -43,7 +44,11 @@ blueprint/               trainer.c (MCCFR self-play trainer), run.sh (chunked tr
                          coverage.js, README.md (training runs and numbers).
 test/                    replay.test.js and blueprint.test.js (node), fuzz.js (random spots and random socket hands
                          for property tests), Playwright harnesses, recorded + synthetic fixtures
-                         (synth-showdown.json: heads-up hand that ends with the opponent's cards shown).
+                         (synth-showdown.json: heads-up hand that ends with the opponent's cards shown;
+                         real-multiway-flops.json: three real 3-4 way flop inputs, names removed).
+                         sim/exploit.js: friend bots with one tendency pushed hard (river bluffs, light 3-bets,
+                         overbets, barrels, or `adapt`: all pushed as far as hero over-folds) and what calling each
+                         bet hero faced would have been worth.
 ```
 
 ## Commands
@@ -99,7 +104,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   act, the current street is played first (checking is not a free card); once one opponent is left it hands over to
   `playOut` (with `from`). Hero only bluffs the river. Preflop has no lookahead; the preflop solver (below) covers
   the spots it can, and the Monte Carlo's `realize` (position, suitedness, connectedness, pairs, opponent count and
-  stack depth) the rest.
+  stack depth) the rest. An opponent's thresholds on later streets come from the hands that would have played
+  their line so far in the lookahead (called, checked, or bet: `plan.at(s, m)` with 2-bit `LINE_*` masks per
+  street; the current decision's callers count as called), so every line folds, bets and raises at the read's
+  rate. With whole-range quantiles (v1.6.0 and before) a player who had called the flop folded 14% to a turn bet
+  when the read said 45%, so weak multiway stabs and raises looked good (J-high bet 12 into 24 four-way). The logs
+  agree with the read-rate view: after calling the flop friends fold 33% to a turn bet (27 spots), 51% after a
+  checked flop (41); on the river 71% after calling the turn (21), 60% after a checked turn (48).
 - Preflop solver (`preflopSolve`): heads-up preflop spots (one opponent left, any action so far) and opens with
   2-8 players still to act (all pending; they are one "field" whose hand is the strongest continuing one,
   `fieldMax`; no open-limp option there). Discounted CFR over the 169 classes, compatible-pair counts from
@@ -134,7 +145,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   pass uses every turn card with 10 rivers each. Hero bets 33/75% pot on the flop and 50/100% on the turn
   (`flopBets`, `flopTurnBets`), the opponent their size, one pot-size raise per street. Heads-up, or against the
   field (2-4 opponents, no side pots; `turnField` works on the flop too) with kappa^(0.4^bets) as on the turn.
-  About 60 ms per iteration heads-up and 100 ms 3-way in the cloud sandbox; pure JS (no kernel yet).
+  WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
+  loops), with about 50-230 MB of kernel memory per solve.
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%). The river solver
   models hero's range directly, so it does not take the shift.
@@ -227,7 +239,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
   preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does
   not change the advice unless `input.blueprint === true`: blending it in lost in the friends simulator (3-handed
-  -9.6 ± 18.9, 4-handed -25.5 ± 13.7 bb/100; blinds and premium hands lose). See blueprint/README.md.
+  -9.6 ± 18.9, 4-handed -25.5 ± 13.7 bb/100; blinds and premium hands lose; flop-to-river only, 4-handed,
+  -31.5 ± 13.1 over 3,000 deals). See blueprint/README.md.
 - Safety and legality (audit round 2): the private-table gate fails closed (a missing `tableType` counts as not
   private); the tracker takes the big blind from `admin:game:new_hand_started` (settingsBB), so a short-posted big
   blind doesn't shrink it; solver bets are at least the big blind. `test/fuzz.js` property tests: random spots give

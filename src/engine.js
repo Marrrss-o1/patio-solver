@@ -1623,6 +1623,7 @@
   // What an opponent did on a street of the lookahead (makePlan's line masks, 2 bits per street).
   const LINE_CALL = 1, LINE_CHECK = 2, LINE_BET = 3;
   const lineAt = (m, s, kind) => (m & ~(3 << (2 * (s - 3)))) | (kind << (2 * (s - 3)));
+  const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
   const VARIANTS = [{}, { foldShift: 0.15, betShift: -0.08 }, { foldShift: -0.15 }, { betShift: 0.15, valueShift: 0.15, raiseShift: 0.1 }];
@@ -1688,7 +1689,7 @@
       const cumR = new Float64Array(n + 1);
       for (let j = 0; j < n; j++) cumR[j + 1] = cumR[j] + (x[j] >= rCut ? 1 : x[j] < airCut ? pBluffR : 0);
       return {
-        rCut, pBluffR,
+        q, rCut, pBluffR,
         // They call a raise of their bet with nearly all of their value range.
         raiseCallCut: q(1 - betFreq * vr * 0.9),
         eqVsRaise: (h) => (cumR[n] > 0 ? cumR[lowerBound(x, h)] / cumR[n] : 1),
@@ -1713,23 +1714,30 @@
     // turn bet when their read said 45%, which paid hero's improved hands off far too often, and
     // players who checked the turn folded to a river bet far more often than their read.)
     // `m` holds 2 bits per street b >= ctx.street (shift 2(b - 3)): LINE_CALL (continued against a
-    // bet), LINE_CHECK (could bet and checked), LINE_BET (bet or raised).
+    // bet), LINE_CHECK (could bet and checked), LINE_BET (bet or raised). Bits 4+ (lineCont) hold
+    // 1 + 20 x the share of their range that continued against hero's bet or raise on ctx.street, so
+    // a small bet's callers are a wider range than a big bet's (otherwise the cut is a 2/3-pot bet's).
     const u = new Float64Array(N);
     const urng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
     for (let j = 0; j < N; j++) u[j] = urng();
     const below = (s) => (1 << (2 * (s - 3))) - 1;
     const memo = {}, sets = {};
+    const canon = (s, m) => {
+      const line = m & below(s);
+      return line && ((line >> (2 * (street - 3))) & 3) === LINE_CALL ? line | (m & ~15) : line;
+    };
     const survivors = (s, m) => {
-      m &= below(s);
+      m = canon(s, m);
       if (!m) return null;
-      const key = s * 16 + m;
+      const key = s * 512 + m;
       if (sets[key] !== undefined) return sets[key];
       let b = 4;
       while (b >= 3 && !((m >> (2 * (b - 3))) & 3)) b--;
       const kind = (m >> (2 * (b - 3))) & 3;
-      const prev = survivors(b, m & below(b));
+      const prev = survivors(b, m & (below(b) | ~15));
       const t = plan.at(b, m);
-      const cut = t.callCut(HERO_BET), xb = xs[b];
+      const share = b === street && m >> 4 ? ((m >> 4) - 1) / 20 : -1;
+      const cut = share >= 0 ? t.q(1 - share) : t.callCut(HERO_BET), xb = xs[b];
       const keep = (j) => {
         const x = xb[j];
         if (kind === LINE_CALL) return x >= cut;
@@ -1742,9 +1750,9 @@
       return (sets[key] = out.length >= Math.max(20, 0.05 * N) ? out : prev);
     };
     plan.at = (s, m) => {
-      m &= below(s);
+      m = canon(s, m);
       if (!m || !xs[s]) return plan[s];
-      const key = s * 16 + m;
+      const key = s * 512 + m;
       let p = memo[key];
       if (!p) {
         const idx = survivors(s, m);
@@ -5095,8 +5103,8 @@
     const multiAlive = new Uint8Array(opps.length);
     const multiState = new Uint8Array(opps.length); // 0 checked/unknown, 1 bet, 2 called, 3 raised
     const multiPut = new Float64Array(opps.length);
-    const multiMask = new Uint8Array(opps.length); // each one's line so far (makePlan's masks)
-    const entryMask = new Uint8Array(opps.length);
+    const multiMask = new Uint16Array(opps.length); // each one's line so far (makePlan's masks)
+    const entryMask = new Uint16Array(opps.length);
     const multiLine = new Uint8Array(opps.length); // what each did on this street
     const HERO = -1;
     const planAt = (i, v, s) => (multiMask[i] ? planFor(i, v).at(s, multiMask[i]) : planFor(i, v)[s]);
@@ -5292,12 +5300,12 @@
       const lineNow = lineAt(0, street, LINE_CALL);
       if (lookahead && inCount === 1 && sc.amount < stack && oppLeft[lastIn] > addNow[lastIn]) {
         const startCur = sc.kind === 'check' && opps[lastIn].pending;
-        const m = sc.opp[lastIn].cont < 0.999 ? lineNow : 0;
+        const m = sc.opp[lastIn].cont < 0.999 ? lineNow | lineCont(sc.opp[lastIn].cont) : 0;
         gain = playOut(lastIn, finalPot, sc.amount, share, rng, startCur, v, null, oppLeft[lastIn] - addNow[lastIn], m);
         settledLooked = true;
       } else if (lookahead && inCount >= 2 && sc.amount < stack && mwStack != null) {
         let mask = 0, anyPending = false;
-        for (let i = 0; i < opps.length; i++) if (oppIn[i]) { mask |= 1 << i; if (opps[i].pending) anyPending = true; entryMask[i] = sc.opp[i].cont < 0.999 ? lineNow : 0; }
+        for (let i = 0; i < opps.length; i++) if (oppIn[i]) { mask |= 1 << i; if (opps[i].pending) anyPending = true; entryMask[i] = sc.opp[i].cont < 0.999 ? lineNow | lineCont(sc.opp[i].cont) : 0; }
         const list = listFor(mask);
         const startCur = sc.kind === 'check' && anyPending;
         gain = playOutMulti(list, finalPot, sc.amount, hs, rng, v, startCur);
