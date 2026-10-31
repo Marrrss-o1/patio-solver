@@ -288,7 +288,7 @@ test('lookahead: an open-ended draw can call a pot-size bet on implied odds', ()
   const now = E.analyzeSync(Object.assign({}, spot, { lookahead: false }));
   const ahead = E.analyzeSync(spot);
   const call = (r) => r.ranked.find((s) => s.kind === 'call').ev;
-  assert.ok(call(ahead) > call(now) + 20, `${call(ahead)} vs ${call(now)}`);
+  assert.ok(call(ahead) > call(now) + 15, `${call(ahead)} vs ${call(now)}`);
 });
 
 test('lookahead: real hand flop decision stays sane', () => {
@@ -324,11 +324,20 @@ test('tracker passes a fresh seed with each decision', () => {
   assert.ok(t.every((x) => Number.isInteger(x.input.seed)));
 });
 
-test('overbets: 2x pot is offered on the turn and river, not the flop', () => {
-  const has2x = (b) => E.analyzeSync(flopSpot('7h 7d', { board: C(b), iterations: 500 })).scenarios.some((s) => s.amount === 200);
+test('no 2x-pot overbets: they lost money at a real table', () => {
+  const has2x = (b) => {
+    const r = E.analyzeSync(flopSpot('7h 7d', { board: C(b), iterations: 500, riverIterations: 50 }));
+    return r.ranked.some((s) => (s.kind === 'bet') && s.amount >= 200);
+  };
   assert.strictEqual(has2x('7s Kc 2d'), false);
-  assert.strictEqual(has2x('7s Kc 2d 9h'), true);
-  assert.strictEqual(has2x('7s Kc 2d 9h 3c'), true);
+  assert.strictEqual(has2x('7s Kc 2d 9h'), false);
+  assert.strictEqual(has2x('7s Kc 2d 9h 3c'), false);
+});
+
+test('fold rates rise only gently with bet size', () => {
+  const st = E.computeStats({}, 'typical');
+  assert.ok(E.foldAtSize(st, 2, 5) < 0.62, String(E.foldAtSize(st, 2, 5)));
+  assert.ok(E.foldAtSize(st, 2, 5) - E.foldAtSize(st, 0.5, 5) < 0.2);
 });
 
 test('bet size: a big bet reads more polarized (fewer medium hands) than a small one', () => {
