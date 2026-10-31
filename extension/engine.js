@@ -125,6 +125,16 @@
     for (let i = 0; i < n; i++) { const c = cards[i]; SB_BUF[i] = c; SB_CNT[c & 3]++; }
     SB_ALL = SB_CNT[0] >= 5 || SB_CNT[1] >= 5 || SB_CNT[2] >= 5 || SB_CNT[3] >= 5;
   }
+  // The hands in `list` (ascending indices below 2048) ordered by score (scoreHole values,
+  // which are below 2^24), ties in index order: the order a stable sort by score gives, as
+  // one numeric sort of score * 2048 + index instead of a comparator call per step.
+  function sortByScore(list, score) {
+    const L = list.length, keys = new Float64Array(L), out = new Int32Array(L);
+    for (let j = 0; j < L; j++) keys[j] = score[list[j]] * 2048 + list[j];
+    keys.sort();
+    for (let j = 0; j < L; j++) out[j] = keys[j] % 2048;
+    return out;
+  }
   function scoreHole(a, b) {
     const sa = a & 3, sb = b & 3;
     if (!SB_ALL && (sa === sb ? SB_CNT[sa] < 3 : SB_CNT[sa] < 4 && SB_CNT[sb] < 4)) {
@@ -2061,6 +2071,104 @@
           ['set', 'v', ['f64x2.splat', ['f64', 0]]], ['set', 'pv', at('V', 'i', 3)],
           ['for', 'a', I(0), 'nA', 1, ['set', 'v', vadd('v', ld2('pv'))], ['set', 'pv', ['i32.add', 'pv', 'rowM']]],
           st2(at('out', 'i', 3), 'v')]] },
+    // Multiway showdowns (showMulti in the turn solver, show in the flop solver) in one sweep.
+    // Hero traversing (multi0): what showTurn into a zeroed tmp with (1, 1, 0), then
+    // out += c1 * kap * tmp, then showTurn with (sc, 0, myIn) would add, per hand in that order.
+    // The field traversing (multi1): showTurn of r * kap with (sc, potF, 0), of r * (1 - kap)
+    // with (sc, 0, nPotF) and of r with (sc, 0, myIn), summed per hand in that order. tb: nine
+    // 52-double tables (cum, grp, all for each of the three reaches).
+    { name: 'showMulti0', params: [...P('r out xo xs xh xl no xv to ts th tl tc nt kap cum grp all'), ['c1', 'f64'], ['sc', 'f64'], ['myIn', 'f64']],
+      locals: [...P('j a b a2 i h l ci s p'), ...['x', 'tt', 'cT', 'gT', 'same', 'W', 'A', 'o'].map((n) => [n, 'f64'])],
+      body: [
+        ['for', 'j', I(0), I(52), 1, stf(at('cum', 'j', 3), ['f64', 0]), stf(at('all', 'j', 3), ['f64', 0])],
+        ['set', 'tt', ['f64', 0]],
+        ['for', 'j', I(0), 'no', 1,
+          ['set', 'x', ldf(at('r', ldi(at('xo', 'j', 2)), 3))], ['set', 'tt', add('tt', 'x')],
+          ['set', 'p', at('all', ldu8(['i32.add', 'xh', 'j']), 3)], stf('p', add(ldf('p'), 'x')),
+          ['set', 'p', at('all', ldu8(['i32.add', 'xl', 'j']), 3)], stf('p', add(ldf('p'), 'x'))],
+        ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cT', ['f64', 0]],
+        ['while', ['i32.lt_s', 'b', 'nt'],
+          ['set', 's', ldi(at('ts', 'b', 2))],
+          ['while', ['i32.lt_s', ldi(at('xs', 'a', 2)), 's'],
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a', 2)), 3))], ['set', 'cT', add('cT', 'x')],
+            ['set', 'p', at('cum', ldu8(['i32.add', 'xh', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'p', at('cum', ldu8(['i32.add', 'xl', 'a']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'a', ['i32.add', 'a', I(1)]]],
+          ['set', 'a2', 'a'], ['set', 'gT', ['f64', 0]],
+          ['while', ['i32.eq', ldi(at('xs', 'a2', 2)), 's'],
+            ['set', 'x', ldf(at('r', ldi(at('xo', 'a2', 2)), 3))], ['set', 'gT', add('gT', 'x')],
+            ['set', 'p', at('grp', ldu8(['i32.add', 'xh', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'p', at('grp', ldu8(['i32.add', 'xl', 'a2']), 3)], stf('p', add(ldf('p'), 'x')),
+            ['set', 'a2', ['i32.add', 'a2', I(1)]]],
+          ['while', ['i32.eq', ldi(at('ts', 'b', 2)), 's'],
+            ['set', 'h', ldu8(['i32.add', 'th', 'b'])], ['set', 'l', ldu8(['i32.add', 'tl', 'b'])],
+            ['set', 'ci', ldi(at('tc', 'b', 2))], ['set', 'same', ['f64', 0]],
+            ['if', ['i32.ge_s', 'ci', I(0)], [['if', ldu8(['i32.add', 'xv', 'ci']), [['set', 'same', ldf(at('r', 'ci', 3))]]]]],
+            ['set', 'W', add(sub(sub('cT', ldf(at('cum', 'h', 3))), ldf(at('cum', 'l', 3))),
+              ['f64.div', add(sub(sub('gT', ldf(at('grp', 'h', 3))), ldf(at('grp', 'l', 3))), 'same'), ['f64', 2]])],
+            ['set', 'A', add(sub(sub('tt', ldf(at('all', 'h', 3))), ldf(at('all', 'l', 3))), 'same')],
+            ['set', 'i', ldi(at('to', 'b', 2))], ['set', 'p', at('out', 'i', 3)],
+            ['set', 'o', add(ldf('p'), mul(mul('c1', ldf(at('kap', 'i', 3))),
+              add(['f64', 0], mul(['f64', 1], sub(mul(['f64', 1], 'W'), mul(['f64', 0], 'A'))))))],
+            stf('p', add('o', mul('sc', sub(mul(['f64', 0], 'W'), mul('myIn', 'A'))))),
+            ['set', 'b', ['i32.add', 'b', I(1)]]],
+          ['for', 'j', 'a', 'a2', 1,
+            stf(at('grp', ldu8(['i32.add', 'xh', 'j']), 3), ['f64', 0]), stf(at('grp', ldu8(['i32.add', 'xl', 'j']), 3), ['f64', 0])]]] },
+    { name: 'showMulti1', params: [...P('r out xo xs xh xl no xv kap to ts th tl tc nt tb'), ['sc', 'f64'], ['potF', 'f64'], ['nPotF', 'f64'], ['myIn', 'f64']],
+      locals: [...P('j a b a2 i h l ci s p xi cA gA lA cB gB lB cR gR lR'),
+        ...['x', 'k', 'xa', 'xb', 'ttA', 'ttB', 'ttR', 'cTA', 'cTB', 'cTR', 'gTA', 'gTB', 'gTR', 'sA', 'sB', 'sR', 'o'].map((n) => [n, 'f64'])],
+      body: [
+        ['set', 'cA', 'tb'], ['set', 'gA', ['i32.add', 'tb', I(416)]], ['set', 'lA', ['i32.add', 'tb', I(832)]],
+        ['set', 'cB', ['i32.add', 'tb', I(1248)]], ['set', 'gB', ['i32.add', 'tb', I(1664)]], ['set', 'lB', ['i32.add', 'tb', I(2080)]],
+        ['set', 'cR', ['i32.add', 'tb', I(2496)]], ['set', 'gR', ['i32.add', 'tb', I(2912)]], ['set', 'lR', ['i32.add', 'tb', I(3328)]],
+        ['for', 'j', I(0), I(52), 1,
+          stf(at('cA', 'j', 3), ['f64', 0]), stf(at('lA', 'j', 3), ['f64', 0]),
+          stf(at('cB', 'j', 3), ['f64', 0]), stf(at('lB', 'j', 3), ['f64', 0]),
+          stf(at('cR', 'j', 3), ['f64', 0]), stf(at('lR', 'j', 3), ['f64', 0])],
+        ['set', 'ttA', ['f64', 0]], ['set', 'ttB', ['f64', 0]], ['set', 'ttR', ['f64', 0]],
+        // x, x * kap and x * (1 - kap) of X's hand in order slot j (into x, xa, xb), then the three adds.
+        ...(() => {
+          const reach = (slot) => [
+            ['set', 'xi', ldi(at('xo', slot, 2))], ['set', 'x', ldf(at('r', 'xi', 3))], ['set', 'k', ldf(at('kap', 'xi', 3))],
+            ['set', 'xa', mul('x', 'k')], ['set', 'xb', mul('x', sub(['f64', 1], 'k'))]];
+          const add3 = (slot, tA, tB, tR, sA, sB, sR) => [
+            ['set', sA, add(sA, 'xa')], ['set', sB, add(sB, 'xb')], ['set', sR, add(sR, 'x')],
+            ...[[tA, 'xa'], [tB, 'xb'], [tR, 'x']].flatMap(([t, v]) => [
+              ['set', 'p', at(t, ldu8(['i32.add', 'xh', slot]), 3)], stf('p', add(ldf('p'), v)),
+              ['set', 'p', at(t, ldu8(['i32.add', 'xl', slot]), 3)], stf('p', add(ldf('p'), v))])];
+          return [
+            ['for', 'j', I(0), 'no', 1, ...reach('j'), ...add3('j', 'lA', 'lB', 'lR', 'ttA', 'ttB', 'ttR')],
+            ['set', 'a', I(0)], ['set', 'b', I(0)], ['set', 'cTA', ['f64', 0]], ['set', 'cTB', ['f64', 0]], ['set', 'cTR', ['f64', 0]],
+            ['while', ['i32.lt_s', 'b', 'nt'],
+              ['set', 's', ldi(at('ts', 'b', 2))],
+              ['while', ['i32.lt_s', ldi(at('xs', 'a', 2)), 's'],
+                ...reach('a'), ...add3('a', 'cA', 'cB', 'cR', 'cTA', 'cTB', 'cTR'),
+                ['set', 'a', ['i32.add', 'a', I(1)]]],
+              ['set', 'a2', 'a'], ['set', 'gTA', ['f64', 0]], ['set', 'gTB', ['f64', 0]], ['set', 'gTR', ['f64', 0]],
+              ['while', ['i32.eq', ldi(at('xs', 'a2', 2)), 's'],
+                ...reach('a2'), ...add3('a2', 'gA', 'gB', 'gR', 'gTA', 'gTB', 'gTR'),
+                ['set', 'a2', ['i32.add', 'a2', I(1)]]],
+              ['while', ['i32.eq', ldi(at('ts', 'b', 2)), 's'],
+                ['set', 'h', ldu8(['i32.add', 'th', 'b'])], ['set', 'l', ldu8(['i32.add', 'tl', 'b'])],
+                ['set', 'ci', ldi(at('tc', 'b', 2))], ['set', 'sA', ['f64', 0]], ['set', 'sB', ['f64', 0]], ['set', 'sR', ['f64', 0]],
+                ['if', ['i32.ge_s', 'ci', I(0)], [['if', ldu8(['i32.add', 'xv', 'ci']), [
+                  ['set', 'x', ldf(at('r', 'ci', 3))], ['set', 'k', ldf(at('kap', 'ci', 3))],
+                  ['set', 'sA', mul('x', 'k')], ['set', 'sB', mul('x', sub(['f64', 1], 'k'))], ['set', 'sR', 'x']]]]],
+                ['set', 'i', ldi(at('to', 'b', 2))], ['set', 'p', at('out', 'i', 3)],
+                ...(() => {
+                  const W = (cT, cum, gT, grp, same) => add(sub(sub(cT, ldf(at(cum, 'h', 3))), ldf(at(cum, 'l', 3))),
+                    ['f64.div', add(sub(sub(gT, ldf(at(grp, 'h', 3))), ldf(at(grp, 'l', 3))), same), ['f64', 2]]);
+                  const A = (tt, all, same) => add(sub(sub(tt, ldf(at(all, 'h', 3))), ldf(at(all, 'l', 3))), same);
+                  return [
+                    ['set', 'o', add(ldf('p'), mul('sc', sub(mul('potF', W('cTA', 'cA', 'gTA', 'gA', 'sA')), mul(['f64', 0], A('ttA', 'lA', 'sA')))))],
+                    ['set', 'o', add('o', mul('sc', sub(mul(['f64', 0], W('cTB', 'cB', 'gTB', 'gB', 'sB')), mul('nPotF', A('ttB', 'lB', 'sB')))))],
+                    stf('p', add('o', mul('sc', sub(mul(['f64', 0], W('cTR', 'cR', 'gTR', 'gR', 'sR')), mul('myIn', A('ttR', 'lR', 'sR')))))),
+                  ];
+                })(),
+                ['set', 'b', ['i32.add', 'b', I(1)]]],
+              ['for', 'j', 'a', 'a2', 1,
+                ...['gA', 'gB', 'gR'].flatMap((g) => [stf(at(g, ldu8(['i32.add', 'xh', 'j']), 3), ['f64', 0]), stf(at(g, ldu8(['i32.add', 'xl', 'j']), 3), ['f64', 0])])]]];
+        })()] },
     // Flop solver river bets (riverExtra): the showdown sweep of showTurn with each hand's call
     // and bet probabilities (floats, in score order like xh/xl). out[to[b]] += sc * (w * tb *
     // below - lose * tc * above), w = win * wk[to[b]] when wk is not 0, else win.
@@ -2688,8 +2796,7 @@
           valid[i] = 1;
           list.push(i);
         }
-        list.sort((a, b) => score[a] - score[b]);
-        S.R[c] = { score, valid, order: Int32Array.from(list) };
+        S.R[c] = { score, valid, order: sortByScore(list, score) };
       }
       return S;
     }
@@ -2952,11 +3059,22 @@
     // part of the other players in. The rest of the pot goes to the field.
     function kapAt(nb) {
       if (kapCache[nb]) return kapCache[nb];
-      const e = Math.pow(multi.rho, nb), out = new Float64Array(H.n);
+      const e = Math.pow(multi.rho, nb), out = KT ? KT.f64(ev(H.n)) : new Float64Array(H.n);
       for (let i = 0; i < H.n; i++) out[i] = Math.pow(clamp(multi.kappa[H.idx[i]] || 1, 0.05, 1.05), e);
       return (kapCache[nb] = out);
     }
     function showMulti(r, X, T, c, out, sc, potF, myIn, kap, trav) {
+      if (KT) {
+        const oX = X.K.R[c], oT = T.K.R[c];
+        if (trav === 0) {
+          KT.k.showMulti0(r.byteOffset, out.byteOffset, oX.o, oX.s, oX.h, oX.l, oX.n, oX.valid, oT.o, oT.s, oT.h, oT.l, oT.c, oT.n,
+            kap.byteOffset, kSweep.cum, kSweep.grp, kSweep.all, sc * potF, sc, myIn);
+        } else {
+          KT.k.showMulti1(r.byteOffset, out.byteOffset, oX.o, oX.s, oX.h, oX.l, oX.n, oX.valid, kap.byteOffset,
+            oT.o, oT.s, oT.h, oT.l, oT.c, oT.n, kSweep.tb, sc, potF, -potF, myIn);
+        }
+        return;
+      }
       if (trav === 0) {
         mtmp.fill(0, 0, T.n);
         showAdd(r, X, T, c, mtmp, 1, 1, 0);
@@ -3047,10 +3165,10 @@
     const ev = (x) => x + (x & 1), MK = ev(NMAX);
     let wHk = null, wOk = null, outHk = null, outOk = null;
     if (kernels()) {
-      let maxD = 0, bytes = 0;
+      let maxD = 0, maxNb = 0, bytes = 0;
       const B = arenaBytes, Hp = ev(H.n), Op = ev(O.n);
       const walk = (n, d) => {
-        if (n.term) return;
+        if (n.term) { if ((n.nb || 0) > maxNb) maxNb = n.nb || 0; return; }
         if (d > maxD) maxD = d;
         if (n.chance) {
           for (const c of rivers) { if (!n.subs[c]) n.subs[c] = riverRoot(n, c); walk(n.subs[c], d + 1); }
@@ -3062,7 +3180,7 @@
       walk(root, 0);
       bytes += (maxD + 1) * (3 * B(4 * MK, 8) + B(MK, 8) + B(Hp, 8) + B(Op, 8)) + 2 * (B(Hp, 8) + B(Op, 8)) + 3 * B(52, 8);
       for (const S of sides) bytes += 2 * B(S.n, 1) + B(S.n, 4) + rivers.length * (3 * B(S.n + 1, 4) + 3 * B(S.n, 1) + B(ev(S.n), 8));
-      if (multi) bytes += B(MK, 8) + 2 * B(Hp, 8);
+      if (multi) bytes += B(MK, 8) + 2 * B(Hp, 8) + (maxNb + 1) * B(Hp, 8) + B(9 * 52, 8);
       KT = arenaOwn(bytes);
       if (KT) {
         // The showdown sweeps' data: each side's cards and cross index, and per river card its
@@ -3083,7 +3201,7 @@
             S.K.R[c] = { o: offs(ord), s: offs(sc), h: offs(h), l: offs(l), c: offs(cr), n: L, valid: offs(va), mask: offs(mask) };
           }
         }
-        kSweep = { cum: offs(KT.f64(52)), grp: offs(KT.f64(52)), all: offs(KT.f64(52)) };
+        kSweep = { cum: offs(KT.f64(52)), grp: offs(KT.f64(52)), all: offs(KT.f64(52)), tb: multi ? offs(KT.f64(9 * 52)) : 0 };
         if (multi) { mtmp = KT.f64(MK); mrA = KT.f64(Hp); mrB = KT.f64(Hp); }
         wHk = KT.f64(Hp); wHk.set(H.w); wOk = KT.f64(Op); wOk.set(O.w);
         outHk = KT.f64(Hp); outOk = KT.f64(Op);
@@ -3267,21 +3385,21 @@
         valid[i] = 1;
         list.push(i);
       }
-      list.sort((x, y) => score[x] - score[y]);
-      const R = { score, valid, order: Int32Array.from(list) };
+      const order = sortByScore(list, score);
+      const R = { score, valid, order };
       if (RB) {
         // Call and bet probabilities by strength in the side's range on this board (ties share).
         const c = new Float32Array(n), bt = new Float32Array(n);
         let W = 0;
-        for (const i of list) W += S.w[i];
+        for (const i of order) W += S.w[i];
         let g = 0, cumW = 0;
-        while (g < list.length) {
+        while (g < order.length) {
           let e = g, w = 0;
-          const s0 = score[list[g]];
-          while (e < list.length && score[list[e]] === s0) { w += S.w[list[e]]; e++; }
-          const q = W > 0 ? (cumW + w / 2) / W : (g + e) / 2 / list.length;
+          const s0 = score[order[g]];
+          while (e < order.length && score[order[e]] === s0) { w += S.w[order[e]]; e++; }
+          const q = W > 0 ? (cumW + w / 2) / W : (g + e) / 2 / order.length;
           const cc = sigmoid((q - S.foldR) / 0.06), bb = sigmoid((q - S.betCut) / 0.06);
-          for (let j = g; j < e; j++) { c[list[j]] = cc; bt[list[j]] = bb; }
+          for (let j = g; j < e; j++) { c[order[j]] = cc; bt[order[j]] = bb; }
           cumW += w;
           g = e;
         }
@@ -3390,6 +3508,17 @@
     }
     function show(r, X, T, key, out, sc, potF, myIn, kap, trav) {
       if (!kap) { showAdd(r, X, T, key, out, sc, potF, myIn); return; }
+      if (KM) {
+        const oX = X.K.R[key], oT = T.K.R[key];
+        if (trav === 0) {
+          KM.k.showMulti0(r.byteOffset, out.byteOffset, oX.o, oX.s, oX.h, oX.l, oX.n, oX.valid, oT.o, oT.s, oT.h, oT.l, oT.c, oT.n,
+            kap.byteOffset, kSweep.cum, kSweep.grp, kSweep.all, sc * potF, sc, myIn);
+        } else {
+          KM.k.showMulti1(r.byteOffset, out.byteOffset, oX.o, oX.s, oX.h, oX.l, oX.n, oX.valid, kap.byteOffset,
+            oT.o, oT.s, oT.h, oT.l, oT.c, oT.n, kSweep.tb, sc, potF, -potF, myIn);
+        }
+        return;
+      }
       if (trav === 0) {
         mtmp.fill(0, 0, T.n);
         showAdd(r, X, T, key, mtmp, 1, 1, 0);
@@ -3714,7 +3843,7 @@
         bytes += 2 * B(S.n, 1) + B(S.n, 4) + turns.length * B(2 * ev(S.n), 4);
         bytes += pairs * (3 * B(S.n, 4) + B(S.n + 1, 4) + 3 * B(S.n, 1) + (RB ? 2 * B(S.n, 4) : 0));
       }
-      if (multi) bytes += B(MK, 8) + 2 * B(Hp, 8) + (maxNb + 2) * B(Hp, 8);
+      if (multi) bytes += B(MK, 8) + 2 * B(Hp, 8) + (maxNb + 2) * B(Hp, 8) + B(9 * 52, 8);
       KM = arenaOwn(bytes);
       if (KM) {
         for (const S of sides) {
@@ -3730,7 +3859,7 @@
         }
         for (let key = 0; key < 52 * 52; key++) if (H.R[key]) kPair(key);
         const sw = () => KM.f64(52).byteOffset;
-        kSweep = { cum: sw(), grp: sw(), all: sw(), cumC: sw(), cumB: sw(), grpB: sw(), allB: sw() };
+        kSweep = { cum: sw(), grp: sw(), all: sw(), cumC: sw(), cumB: sw(), grpB: sw(), allB: sw(), tb: multi ? KM.f64(9 * 52).byteOffset : 0 };
         if (multi) { mtmp = KM.f64(MK); mrA = KM.f64(Hp); mrB = KM.f64(Hp); }
         wHk = KM.f64(Hp); wHk.set(H.w); wOk = KM.f64(Op); wOk.set(O.w);
         outHk = KM.f64(Hp); outOk = KM.f64(Op);
