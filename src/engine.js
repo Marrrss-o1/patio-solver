@@ -3197,10 +3197,13 @@
     const dead = hero.concat(board);
 
     const opps = input.opponents.map((o) => {
-      const stats = computeStats(o.tally, tableStyle, input.pool, {
+      const ctx = {
         multiway: input.opponents.length >= 2,
         reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
-      });
+      };
+      const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
+      // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
+      const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -3211,7 +3214,7 @@
         ? PRE_RAISED.test(actions.pre || '')
         : currentAction === 'bet' || currentAction === 'raise' || currentAction === 'checkraise';
       return {
-        name: o.name, stats, type: classifyPlayer(stats), actions, pending, aggressor,
+        name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
         // They bet or raised on some street after the flop: from here on their range is strong.
         aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
@@ -3409,7 +3412,7 @@
     function planFor(i, v) {
       const key = i * VARIANTS.length + v;
       if (!plans[key]) {
-        const st = Object.assign({}, opps[i].stats, VARIANTS[v]);
+        const st = Object.assign({}, opps[i].statsHU || opps[i].stats, VARIANTS[v]);
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
           { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine });
