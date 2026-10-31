@@ -21,6 +21,13 @@
     const n = parseInt(String(pos).replace(/\D/g, ''), 10);
     return isNaN(n) ? 0 : n;
   }
+  // Where a seat sits going clockwise. Seats run in ascending number, except the extra seat
+  // 's3_v2' (its digits read as 32), which sits between s9 and s10 at the owner's tables
+  // (preflop action order in the live hand logs).
+  const SEAT_KEY = { s3_v2: 9.5 };
+  function seatKey(pos) {
+    return Object.prototype.hasOwnProperty.call(SEAT_KEY, pos) ? SEAT_KEY[pos] : seatNum(pos);
+  }
   const MAX_SHOWS = 80;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 10 KB a hand).
@@ -49,6 +56,8 @@
       // Limping (calling the big blind first in), folding to a 3-bet after raising.
       // Re-raising again (4-bet or more) after raising and facing a re-raise; opportunities are f3betOpp.
       limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0,
+      // Limpers facing a raise: how often they fold.
+      limpFaceN: 0, limpFold: 0,
       // Donk bets (leading the flop into the preflop raiser) and check-raises (any street after the flop).
       donkOpp: 0, donk: 0, xrOpp: 0, xr: 0,
       // Pots won after a showdown and without one (from stack changes between hands).
@@ -186,7 +195,12 @@
           break;
         }
         case 'game:dealer_updated':
-          if (h) h.dealerPos = data.dealerSeatPos;
+          if (h) {
+            h.dealerPos = data.dealerSeatPos;
+            h.sbPos = data.smallBlindSeatPos || null;
+            h.bbPos = data.bigBlindSeatPos || null;
+            h.utgPos = data.underTheGunSeatPos || null;
+          }
           break;
         case 'game:small_blind_paid':
         case 'game:big_blind_paid': {
@@ -514,7 +528,8 @@
         p.ms.push({ st: key, act: kind, ms: last.ms });
       }
       if (h.street === 0) {
-        if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') t.limp++; }
+        if (p.seq.pre.length === 1 && h.preRaises === 0 && kind !== 'check') { t.limpOpp++; if (kind === 'call') { t.limp++; p.limped = true; } }
+        else if (p.limped && !p.limpFaced && h.preRaises >= 1 && facing > 0) { p.limpFaced = true; t.limpFaceN++; if (kind === 'fold') t.limpFold++; }
         if (h.preRaises >= 2 && facing > 0 && !p.faced3bet && p.seq.pre.slice(0, -1).some((k) => k === 'raise' || k === '3bet')) {
           p.faced3bet = true; t.f3betOpp++; if (kind === 'fold') t.f3bet++; else if (kind === 'raise' || kind === '3bet') t.pf4bet++;
         }
@@ -600,6 +615,10 @@
         if (r.best && r.best.foldPct > 0.02) a.foldPct = r2(r.best.foldPct);
         if (r.mix) a.mix = r.mix.map((m) => m.label + ' ' + Math.round(m.freq * 100) + '%');
         if (r.solver) { a.solve = r.solver.kind; if (r.solver.kind === 'river') a.riverSolve = true; }
+        // Blueprint (computer mode): its own frequencies, or why it was not used.
+        if (r.blueprint) a.bp = r.blueprint.actions
+          ? { acts: r.blueprint.actions.filter((x) => x.p >= 0.02).map((x) => x.kind + (x.amount ? ' ' + r2(x.amount) : '') + ' ' + Math.round(x.p * 100) + '%'), visits: r2(r.blueprint.visits || 0), blended: !!r.blueprint.used }
+          : { off: r.blueprint.why };
         if (r.quick) a.quick = true;
         if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
         if (r.opponents) a.reads = r.opponents.map((o) => ({
@@ -619,12 +638,21 @@
     }
 
     // Players in postflop order: small blind first, button last.
-    // (Assumes seats run clockwise in ascending number; see CLAUDE.md.)
+    // The server names the dealer, both blinds and UTG each hand, so those are pinned; only
+    // players between UTG and the dealer (6+ handed) rely on the seat order (seatKey).
     seatOrder() {
       const h = this.hand;
-      const all = Object.values(h.players).sort((a, b) => seatNum(a.pos) - seatNum(b.pos));
-      const dealerN = seatNum(h.dealerPos);
-      return all.filter((p) => seatNum(p.pos) > dealerN).concat(all.filter((p) => seatNum(p.pos) <= dealerN));
+      const all = Object.values(h.players).sort((a, b) => seatKey(a.pos) - seatKey(b.pos));
+      const dealerK = seatKey(h.dealerPos);
+      const ring = all.filter((p) => seatKey(p.pos) > dealerK).concat(all.filter((p) => seatKey(p.pos) <= dealerK));
+      if (ring.length < 3) return ring;
+      const at = (pos) => (pos ? ring.find((p) => p.pos === pos) : null);
+      const dealer = at(h.dealerPos);
+      const head = [];
+      for (const p of [at(h.sbPos), at(h.bbPos), at(h.utgPos)]) if (p && p !== dealer && !head.includes(p)) head.push(p);
+      if (!head.length) return ring;
+      const rest = ring.filter((p) => p !== dealer && !head.includes(p));
+      return head.concat(rest, dealer ? [dealer] : []);
     }
 
     // 'blinds', 'late' (button and cutoff) or 'early'. Heads-up the button is 'late'.
@@ -730,6 +758,8 @@
       const hi = afterDealer.findIndex((p) => p.id === heroId);
       const rotated = afterDealer.slice(hi + 1).concat(afterDealer.slice(0, hi));
       const opps = rotated.filter((p) => !p.folded);
+      // Players before hero in postflop order act first, so hero is in position against them.
+      const actsBefore = new Set(afterDealer.slice(0, hi).map((p) => p.id));
       if (!opps.length) return { error: 'Everyone else has folded.' };
 
       let pot = 0;
@@ -763,7 +793,9 @@
         const cbetter = h.pfRaiser === o.id;
         return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
           // For side pots: chips already in the pot this hand, and chips behind.
-          committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null };
+          committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null,
+          // Chips in on this street (blinds count), so the engine knows what each still owes.
+          bet: o.stageBet, heroIP: actsBefore.has(o.id) };
       });
 
       return {
@@ -777,7 +809,11 @@
           // Hero's own line this hand, so the river solver knows what hero's range looks like.
           heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
           heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
-          heroCommitted: hero.total,
+          heroCommitted: hero.total, heroBet: hero.stageBet,
+          // Every action so far and the effective stack at the start of the hand (blueprint lookup).
+          history: h.log.map((e) => ({ st: e.st, who: e.who, hero: !!e.hero, act: e.act, amt: e.amt, to: e.to, pot: e.pot, facing: e.facing, allin: !!e.allin })),
+          seats: afterDealer.map((p) => p.name), heroName: hero.name,
+          startStack: heroStack != null ? Math.min(heroStack + hero.total, Math.max(...opps.map((o) => { const s = snapOf(o.id); return s ? s.stack + o.total : 0; }))) : null,
           // Every known opponent's counts added up, for the engine's table prior.
           pool: this.poolTally(),
           iterations: opponents.length > 2 ? 16000 : 24000,
