@@ -37,7 +37,9 @@ game:stage_began        { stageType: "flop" | "turn" | "river" }
 game:cards_deal_to_stack [ { delay, emitData: { stackID: "community_stack", cardData: { uniqueID, suite, value, ... } } } ]
 ...
 game:stage_began        { stageType: "showdown" }      // also sent when the pot is won uncontested
-game:update_card_data   ...                            // opponents' cards revealed at showdown
+game:update_card_data   ...                            // opponents' cards revealed at showdown (arrives after the
+                                                       // showdown stage; the tracker matches uniqueID to the seat
+                                                       // from cards_dealt_to_player and logs the shown hand)
 game:game_ended         { endPopupData: { gameResults: { winnersInfo, sidePotsWithWinners, ... } } }
 ```
 

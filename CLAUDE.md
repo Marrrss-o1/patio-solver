@@ -19,7 +19,8 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
 dist/patio-solver-extension.zip Built extension zip.
 docs/protocol.md         What the game's socket sends. Read this before touching tracker.js.
-test/                    replay.test.js (node), Playwright harnesses, recorded fixtures.
+test/                    replay.test.js (node), Playwright harnesses, recorded + synthetic fixtures
+                         (synth-showdown.json: heads-up hand that ends with the opponent's cards shown).
 ```
 
 ## Commands
@@ -47,11 +48,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   assumption that seats run clockwise in ascending number (s1 → s10) has not been confirmed live. If position
   looks wrong in a real 4+ player game, that is the first suspect (`solverInput` in tracker.js).
 - Side pots are not modelled (the engine treats all chips as one pot).
+- Lookahead (`makePlan` / `playOut` in engine.js) only runs on the flop and turn once hero is heads-up. Preflop and
+  multiway pots still use the `realize` fudge factor. Inside the lookahead nobody raises, and hero only bluffs the river.
+- Showdown reads only see hands that were shown, so they over-sample hands that got called. Bluffs that won
+  uncontested are invisible unless the player shows voluntarily.
+- Tally format (tracker.js `blankTally`): flat counts plus `st` (per street), `vs` (reaction by facing-bet size),
+  `betSize`, 3-bet / c-bet counters, `sawFlop`/`wtsd` and `shows` (last 40 revealed hands with their bets).
+  `upgradeTally` fills in fields for reads saved by older versions.
 - Joining mid-hand: tracking starts at the next `set_blinds`.
 - Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
-- Ideas: position-aware stats, showdown hand logging (opponent cards are revealed via `update_card_data`),
-  syncing reads between devices, multi-street planning in the engine.
+- Ideas: position-aware stats, raises inside the lookahead, lookahead for multiway pots and preflop,
+  syncing reads between devices.
 
 ## Testing limits in the cloud sandbox
 

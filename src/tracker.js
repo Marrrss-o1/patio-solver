@@ -21,8 +21,38 @@
     const n = parseInt(String(pos).replace(/\D/g, ''), 10);
     return isNaN(n) ? 0 : n;
   }
+  const MAX_SHOWS = 40;
+  const streetTally = () => ({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 });
+  const facingTally = () => ({ fold: 0, call: 0, raise: 0 });
   function blankTally() {
-    return { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0 };
+    return {
+      pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0,
+      // Preflop re-raising: times they faced an open, and how often they 3-bet it.
+      pf3betOpp: 0, pf3bet: 0,
+      // Continuation bets: preflop raiser's first flop decision, and how others react to it.
+      cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0,
+      // Per-street action counts (the flat counts above are all streets together).
+      st: { flop: streetTally(), turn: streetTally(), river: streetTally() },
+      // Reaction to a bet by its size (fraction of the pot before the bet): <45%, 45-85%, >85%.
+      vs: { small: facingTally(), medium: facingTally(), large: facingTally() },
+      // Their own bet sizes postflop, as fractions of the pot.
+      betSize: { n: 0, sum: 0 },
+      sawFlop: 0, wtsd: 0,
+      // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
+      shows: [],
+    };
+  }
+  // Fills in fields added after a read was first saved.
+  function upgradeTally(t) {
+    const b = blankTally();
+    for (const k of Object.keys(b)) {
+      if (t[k] == null) t[k] = b[k];
+      else if (k === 'st' || k === 'vs') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
+    }
+    return t;
+  }
+  function sizeBucket(f) {
+    return f < 0.45 ? 'small' : f < 0.85 ? 'medium' : 'large';
   }
 
   const STREET_BY_STAGE = { pre_flop: 0, flop: 3, turn: 4, river: 5 };
@@ -44,6 +74,7 @@
       if (!authId) return null;
       let r = this.db.players[authId];
       if (!r) r = this.db.players[authId] = { name, tally: blankTally() };
+      else r.tally = upgradeTally(r.tally || {});
       if (name) r.name = name;
       return r;
     }
@@ -64,11 +95,13 @@
           id: p.id, auth: p.authUserId, name: p.name, pos: p.posType,
           stageBet: 0, total: 0, folded: false, allin: false,
           seq: { pre: [], flop: [], turn: [], river: [] },
-          pfCat: null, acted: false,
+          pfCat: null, acted: false, faced3: false, cbetSeen: false,
+          agg: [], sizes: {}, shown: [],
         };
       }
       this.hand = {
-        players, street: 0, started: false, board: [], heroUids: [], heroCards: {},
+        players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
+        pfRaiser: null, flopBet: false,
         currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
         finished: false,
       };
@@ -113,6 +146,7 @@
           const heroPos = this.heroPos();
           const list = Array.isArray(data) ? data : [data];
           for (const d of list) {
+            if (d && d.cardData && d.playerPos) h.uidPos[d.cardData.uniqueID] = d.playerPos;
             if (d && d.playerPos === heroPos && d.cardData) {
               h.heroUids.push(d.cardData.uniqueID);
               const c = cardStr(d.cardData);
@@ -127,6 +161,8 @@
           if (h.heroUids.includes(uid)) {
             const c = cardStr(data.cardData);
             if (c) { h.heroCards[uid] = c; this.emit('cards', h); }
+          } else if (h.uidPos[uid]) {
+            this.onReveal(h.uidPos[uid], cardStr(data.cardData));
           }
           break;
         }
@@ -174,6 +210,9 @@
       const street = h.street;
       const key = STREET_KEY[street];
       const added = +d.makeBetValue || 0;
+      let potBefore = 0;
+      for (const x of Object.values(h.players)) potBefore += x.total;
+      const facing = Math.max(0, h.currentBet - p.stageBet);
       let kind = d.actionType;
       if (kind === 'raise') {
         if (street === 0) kind = h.preRaises >= 1 ? '3bet' : 'raise';
@@ -189,16 +228,42 @@
       p.acted = true;
 
       const isHero = p.id === this.heroId();
+      const r = isHero ? null : this.record(p.auth, p.name);
       if (street === 0) {
-        if (kind === 'raise' || kind === '3bet') h.preRaises++;
+        if (r && !p.faced3 && h.preRaises === 1 && kind !== 'check') {
+          p.faced3 = true;
+          r.tally.pf3betOpp++;
+          if (kind === '3bet') r.tally.pf3bet++;
+        }
+        if (kind === 'raise' || kind === '3bet') { h.preRaises++; h.pfRaiser = p.id; }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
         const cat = rank === 2 ? 'pfRaise' : rank === 1 ? 'pfCall' : 'pfFold';
         const order = { pfFold: 0, pfCall: 1, pfRaise: 2 };
         if (!p.pfCat || order[cat] > order[p.pfCat]) p.pfCat = cat;
-      } else if (!isHero) {
-        const r = this.record(p.auth, p.name);
-        const map = { check: 'check', bet: 'bet', call: 'call', raise: 'raise', fold: 'fold' };
-        if (r && map[kind]) r.tally[map[kind]]++;
+      } else {
+        const frac = potBefore > 0 ? Math.min(3, Math.max(0, added - facing) / (potBefore + facing)) : 0;
+        if (kind === 'bet' || kind === 'raise') {
+          p.agg.push({ n: h.board.length, frac: Math.round(frac * 100) / 100 });
+          p.sizes[key] = Math.round(frac * 100) / 100;
+        }
+        // C-bets: the preflop raiser's first flop decision, and replies to their flop bet.
+        const cbetSpot = street === 3 && h.pfRaiser != null;
+        if (r) {
+          const t = r.tally;
+          if (t[kind] != null) t[kind]++;
+          if (key && t.st[key] && t.st[key][kind] != null) t.st[key][kind]++;
+          if (facing > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) {
+            t.vs[sizeBucket(facing / Math.max(1, potBefore - facing))][kind]++;
+          }
+          if (kind === 'bet') { t.betSize.n++; t.betSize.sum += frac; }
+          if (cbetSpot && p.id === h.pfRaiser && !p.cbetSeen && !h.flopBet) { t.cbetOpp++; if (kind === 'bet') t.cbet++; }
+          if (cbetSpot && p.id !== h.pfRaiser && h.flopBet === 'cbet' && !p.vsCbetSeen && facing > 0) { t.vsCbet++; if (kind === 'fold') t.foldCbet++; }
+        }
+        if (street === 3) {
+          if (kind === 'bet' && !h.flopBet) h.flopBet = p.id === h.pfRaiser ? 'cbet' : 'donk';
+          p.cbetSeen = true;
+          if (h.flopBet === 'cbet' && facing > 0) p.vsCbetSeen = true;
+        }
       }
       this.emit('action', { player: p, kind, added });
     }
@@ -209,13 +274,37 @@
       h.finished = true;
       if (h.started) {
         const heroId = this.heroId();
+        const live = Object.values(h.players).filter((p) => !p.folded).length;
         for (const p of Object.values(h.players)) {
           if (p.id === heroId) continue;
           const r = this.record(p.auth, p.name);
-          if (r) r.tally[p.pfCat || 'pfFold']++;
+          if (!r) continue;
+          r.tally[p.pfCat || 'pfFold']++;
+          const sawFlop = h.board.length >= 3 && (p.seq.flop.length > 0 || !p.folded);
+          if (sawFlop) r.tally.sawFlop++;
+          if (sawFlop && !p.folded && live >= 2) r.tally.wtsd++;
         }
       }
       this.emit('handEnd', h);
+      this.emit('save', this.db);
+    }
+
+    // An opponent's hole card was turned face up (showdown, or a voluntary show).
+    // Once both are known, keep the hand with the bets they made, so the engine
+    // can tell how often their bets were value and how often bluffs.
+    onReveal(pos, card) {
+      const h = this.hand;
+      if (!h || !card) return;
+      const p = Object.values(h.players).find((x) => x.pos === pos);
+      if (!p || p.id === this.heroId()) return;
+      if (!p.shown.includes(card)) p.shown.push(card);
+      if (p.shown.length !== 2 || p.logged) return;
+      p.logged = true;
+      if (!p.agg.length || h.board.length < 3) return;
+      const r = this.record(p.auth, p.name);
+      if (!r) return;
+      r.tally.shows.push({ cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice() });
+      if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
     }
 
@@ -288,7 +377,8 @@
           if (street >= n) actions[k] = PatioTracker.streetAction(o.seq[k], n);
         }
         if (street > 0 && actions.pre === 'pending') actions.pre = 'call';
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions };
+        const cbetter = h.pfRaiser === o.id;
+        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter };
       });
 
       return {
@@ -308,6 +398,7 @@
   }
 
   PatioTracker.blankTally = blankTally;
+  PatioTracker.upgradeTally = upgradeTally;
   PatioTracker.cardStr = cardStr;
   if (typeof module !== 'undefined' && module.exports) module.exports = PatioTracker;
   else global.PatioTracker = PatioTracker;

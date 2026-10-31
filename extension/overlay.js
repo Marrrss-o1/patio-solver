@@ -176,6 +176,8 @@
     return `<div><div class="sec">Reads</div>${list.map((o) => `
       <div class="opp"><span class="nm">${esc(o.name)}</span><span class="ty">${esc(o.type)}</span>
         <div class="muted">${o.hands} hand${o.hands === 1 ? '' : 's'} · VPIP ${pct(o.vpip)} · PFR ${pct(o.pfr)} · folds to bets ${pct(o.ftb)}${o.likely ? ' · likely ' + esc(o.likely) : ''}</div>
+        ${o.summary ? `<div class="muted">${esc(o.summary)}</div>` : ''}
+        ${o.bluffChance != null ? `<div class="tip">Bluffing here about ${pct(o.bluffChance)} of the time</div>` : ''}
         ${o.tip ? `<div class="tip">${esc(o.tip)}</div>` : ''}</div>`).join('')}</div>`;
   }
 
@@ -189,7 +191,7 @@
       const tally = Object.assign(PatioTracker.blankTally(), r ? r.tally : {});
       const st = PokerEngine.computeStats(tally, ui.tableStyle);
       const ty = PokerEngine.classifyPlayer(st);
-      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: ty.label, tip: '', hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet });
+      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: ty.label, tip: '', hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
     }
     return out;
   }
@@ -234,6 +236,7 @@
       if (r.toCall > 0) kv.push(['Needed to call', pct(r.potOdds)]);
       kv.push(['Pot', money(r.pot)]);
       kv.push(['Position', r.inPosition ? 'In position (you act last)' : 'Out of position']);
+      if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += `<div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
 
@@ -247,6 +250,7 @@
       html += oppReadsHtml(r.opponents.map((o) => ({
         name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands,
         vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '),
+        summary: o.summary, bluffChance: o.bluffChance,
       })));
     } else {
       if (!thinking) html += `<div class="status">${esc(status)}</div>`;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.0.0
+// @version      1.1.0
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -226,7 +226,66 @@ function ENGINE() {
     loose: { vpip: 0.40, pfr: 0.13, af: 1.4, betFreq: 0.34, foldToBet: 0.36, raiseFreq: 0.08 },
   };
 
-  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0 };
+  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0 };
+  const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
+  // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
+  const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
+  const BIG_BET = 0.75;
+
+  // How often a player with fold-to-bet `ftb` folds to a bet of `f` x pot, before any size-specific data.
+  function modelFold(ftb, f) {
+    const mdf = 1 / (1 + Math.max(0.05, f));
+    const elasticity = clamp(1.7 * Math.sqrt(ftb / 0.45), 1, 2.2);
+    return clamp(1 - (1 - ftb) * Math.pow(mdf / 0.625, elasticity), 0.03, 0.97);
+  }
+
+  // Strength (percentile against every hand) of one known hand on a board, without potential.
+  function handPercentile(hole, board) {
+    const dead = new Uint8Array(52);
+    board.forEach((c) => { dead[c] = 1; });
+    const buf = new Int32Array(7);
+    for (let i = 0; i < board.length; i++) buf[i] = board[i];
+    const n = board.length;
+    buf[n] = hole[0]; buf[n + 1] = hole[1];
+    const mine = evaluate(buf, n + 2);
+    let below = 0, ties = 0, total = 0;
+    for (let k = 0; k < NUM_COMBOS; k++) {
+      const a = COMBO_HI[k], b = COMBO_LO[k];
+      if (dead[a] || dead[b] || a === hole[0] || a === hole[1] || b === hole[0] || b === hole[1]) continue;
+      buf[n] = a; buf[n + 1] = b;
+      const sc = evaluate(buf, n + 2);
+      total++;
+      if (sc < mine) below++; else if (sc === mine) ties++;
+    }
+    return total ? (below + ties / 2) / total : 0.5;
+  }
+
+  // Shown hands -> how many of their bets and raises were value, thin value or bluffs.
+  // A bet counts as value when the hand was in the top 30% of all hands on that board,
+  // a bluff when it was in the bottom 45% (semi-bluffs with draws count as bluffs).
+  const showCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function classifyShows(shows) {
+    const out = { value: 0, bluff: 0, mid: 0, bigValue: 0, bigBluff: 0, bigMid: 0, hands: 0 };
+    for (const sh of shows || []) {
+      if (!sh || !sh.cards || sh.cards.length !== 2 || !sh.board) continue;
+      let c = showCache && showCache.get(sh);
+      if (!c) {
+        const hole = sh.cards.map(parseCard), board = sh.board.map(parseCard);
+        if (hole.some((x) => x < 0) || board.some((x) => x < 0)) continue;
+        c = (sh.agg || []).filter((a) => a.n >= 3 && a.n <= board.length).map((a) => ({
+          big: a.frac >= BIG_BET, p: handPercentile(hole, board.slice(0, a.n)),
+        }));
+        if (showCache) showCache.set(sh, c);
+      }
+      if (c.length) out.hands++;
+      for (const a of c) {
+        const kind = a.p >= 0.7 ? 'value' : a.p < 0.45 ? 'bluff' : 'mid';
+        out[kind]++;
+        if (a.big) out['big' + kind[0].toUpperCase() + kind.slice(1)]++;
+      }
+    }
+    return out;
+  }
 
   function computeStats(tally, tableStyle) {
     const t = Object.assign({}, EMPTY_TALLY, tally || {});
@@ -256,6 +315,61 @@ function ENGINE() {
         raiseFreq: facing ? t.raise / facing : null,
       },
     };
+
+    // Preflop 3-bet and flop c-bet frequencies.
+    stats.threeBet = (t.pf3bet + 10 * clamp(pr.pfr * 0.45, 0.04, 0.1)) / (t.pf3betOpp + 10);
+    stats.cbet = (t.cbet + 5 * clamp(pr.betFreq + 0.22, 0.4, 0.75)) / (t.cbetOpp + 5);
+    stats.foldToCbet = (t.foldCbet + 5 * stats.foldToBet) / (t.vsCbet + 5);
+    stats.wtsd = (t.wtsd + 5 * 0.3) / (t.sawFlop + 5);
+    stats.raw.threeBet = t.pf3betOpp ? t.pf3bet / t.pf3betOpp : null;
+    stats.raw.cbet = t.cbetOpp ? t.cbet / t.cbetOpp : null;
+    stats.raw.foldToCbet = t.vsCbet ? t.foldCbet / t.vsCbet : null;
+    stats.raw.wtsd = t.sawFlop ? t.wtsd / t.sawFlop : null;
+
+    // Per street, shrunk toward the all-streets numbers.
+    const KS = 5;
+    stats.byStreet = {};
+    for (const n of [3, 4, 5]) {
+      const x = Object.assign({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, (t.st && t.st[STREET_KEYS[n]]) || {});
+      const u = x.check + x.bet, f = x.fold + x.call + x.raise;
+      stats.byStreet[n] = {
+        betFreq: (x.bet + KS * stats.betFreq) / (u + KS),
+        foldToBet: (x.fold + KS * stats.foldToBet) / (f + KS),
+        raiseFreq: (x.raise + KS * stats.raiseFreq) / (f + KS),
+        samples: u + f,
+      };
+    }
+
+    // Folds by the size of the bet they face, shrunk toward the size model.
+    stats.foldBySize = {};
+    stats.raw.foldBySize = {};
+    for (const [key, f] of SIZE_BUCKETS) {
+      const x = Object.assign({ fold: 0, call: 0, raise: 0 }, (t.vs && t.vs[key]) || {});
+      const nf = x.fold + x.call + x.raise;
+      const prior = modelFold(stats.foldToBet, f);
+      stats.foldBySize[key] = (x.fold + 4 * prior) / (nf + 4);
+      stats.raw.foldBySize[key] = nf ? x.fold / nf : null;
+      stats.raw.foldBySize[key + 'N'] = nf;
+    }
+
+    // Their usual bet size, as a fraction of the pot.
+    const bs = t.betSize || { n: 0, sum: 0 };
+    stats.betSize = clamp((bs.sum + 3 * 0.6) / (bs.n + 3), 0.2, 2);
+
+    // Value share of their bets: the aggression-based guess, corrected by hands they showed.
+    const vr0 = clamp(0.9 - 0.08 * (stats.af - 1), 0.55, 0.9);
+    const sd = classifyShows(t.shows);
+    const V = sd.value + sd.mid / 2, B = sd.bluff + sd.mid / 2;
+    const vr = clamp((V + 5 * vr0) / (V + B + 5), 0.3, 0.95);
+    const Vb = sd.bigValue + sd.bigMid / 2, Bb = sd.bigBluff + sd.bigMid / 2;
+    const Vs = V - Vb, Bs = B - Bb;
+    stats.valueShare = vr;
+    stats.valueShareBig = clamp((Vb + 4 * Math.min(0.95, vr + 0.04)) / (Vb + Bb + 4), 0.3, 0.97);
+    stats.valueShareSmall = clamp((Vs + 4 * Math.max(0.3, vr - 0.03)) / (Vs + Bs + 4), 0.3, 0.95);
+    stats.shown = { hands: sd.hands, bets: sd.value + sd.mid + sd.bluff, bluffs: sd.bluff };
+    stats.raw.bluffShare = V + B ? B / (V + B) : null;
+    stats.bluffShare = 1 - vr;
+
     const n = hands + stats.postflopActions / 2;
     stats.confidence = n < 10 ? 'guess' : n < 40 ? 'low' : n < 120 ? 'medium' : 'solid';
     return stats;
@@ -277,7 +391,7 @@ function ENGINE() {
     let key;
     const ratio = stats.pfr / Math.max(stats.vpip, 0.01);
     if (stats.hands < 8 && stats.postflopActions < 8) key = 'unknown';
-    else if (stats.vpip >= 0.45 && (stats.af >= 3 || stats.pfr >= 0.3)) key = 'maniac';
+    else if (stats.vpip >= 0.45 && (stats.af >= 3 || stats.pfr >= 0.3 || stats.bluffShare >= 0.45)) key = 'maniac';
     else if (stats.vpip >= 0.35 && (ratio < 0.4 || stats.af < 1.2)) key = 'station';
     else if (stats.vpip >= 0.27 && stats.pfr >= 0.19) key = 'lag';
     else if (stats.vpip <= 0.16) key = ratio >= 0.55 ? 'nit' : 'rock';
@@ -285,6 +399,19 @@ function ENGINE() {
     else if (ratio < 0.45) key = stats.vpip >= 0.26 ? 'loosePassive' : 'rock';
     else key = 'regular';
     return Object.assign({ key }, PLAYER_TYPES[key]);
+  }
+
+  // One line of the extra reads, from observed numbers only.
+  function readSummary(stats) {
+    const p = (x) => Math.round(x * 100) + '%';
+    const r = stats.raw || {}, parts = [];
+    if (r.threeBet != null) parts.push('3-bet ' + p(r.threeBet));
+    if (r.cbet != null) parts.push('c-bet ' + p(r.cbet));
+    const fs = r.foldBySize;
+    if (fs && (fs.smallN || fs.largeN)) parts.push('folds to small/big bets ' + (fs.smallN ? p(fs.small) : '–') + '/' + (fs.largeN ? p(fs.large) : '–'));
+    if (stats.shown && stats.shown.bets) parts.push('bluffed ' + stats.shown.bluffs + ' of ' + stats.shown.bets + ' shown bets');
+    if (r.wtsd != null) parts.push('to showdown ' + p(r.wtsd));
+    return parts.join(' · ');
   }
 
   function percentiles(scores, valid, count, out) {
@@ -381,7 +508,7 @@ function ENGINE() {
     if (action === 'raise') {
       cw.set(topClassWeights(stats.pfr));
     } else if (action === '3bet') {
-      cw.set(topClassWeights(clamp(stats.pfr * 0.4, 0.025, 0.15)));
+      cw.set(topClassWeights(clamp(stats.threeBet != null ? stats.threeBet : stats.pfr * 0.4, 0.025, 0.25)));
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
       const trap = 0.15 + 0.35 * (1 - stats.pfr / Math.max(stats.vpip, 0.01));
@@ -425,8 +552,37 @@ function ENGINE() {
     return Math.max(lo, Math.min(hi, x));
   }
 
-  function valueShare(stats) {
-    return clamp(0.9 - 0.08 * (stats.af - 1), 0.55, 0.9);
+  // Share of a player's bets that are for value. `size` (fraction of pot) picks the
+  // big-bet or small-bet estimate when we know how much they bet.
+  function valueShare(stats, size) {
+    if (stats.valueShare == null) return clamp(0.9 - 0.08 * (stats.af - 1), 0.55, 0.9);
+    if (size == null || !(size > 0)) return stats.valueShare;
+    return size >= BIG_BET ? stats.valueShareBig : stats.valueShareSmall;
+  }
+
+  // Street-specific view of a player's stats.
+  function streetStats(stats, n) {
+    const b = stats.byStreet && stats.byStreet[n];
+    return b ? Object.assign({}, stats, b) : stats;
+  }
+
+  // Fold probability against a bet of `f` x pot on street `n`: the size model for that
+  // street, corrected by how they actually reacted to small, medium and large bets.
+  function foldAtSize(stats, f, n) {
+    const ss = streetStats(stats, n);
+    const base = modelFold(ss.foldToBet, f);
+    if (!stats.foldBySize) return base;
+    const corr = SIZE_BUCKETS.map(([k, c]) => [c, stats.foldBySize[k] - modelFold(stats.foldToBet, c)]);
+    let d;
+    if (f <= corr[0][0]) d = corr[0][1];
+    else if (f >= corr[corr.length - 1][0]) d = corr[corr.length - 1][1];
+    else {
+      let i = 0;
+      while (f > corr[i + 1][0]) i++;
+      const w = (f - corr[i][0]) / (corr[i + 1][0] - corr[i][0]);
+      d = corr[i][1] * (1 - w) + corr[i + 1][1] * w;
+    }
+    return clamp(base + d, 0.02, 0.98);
   }
 
   function aggressionProbs(W, st, freq, vr) {
@@ -445,18 +601,24 @@ function ENGINE() {
     const qb = rangeQuantiles(Wb, bluffScore);
     const bluffCut = 1 - bluffFrac / Math.max(1e-6, 1 - valueFrac);
     const P = new Float64Array(NUM_COMBOS);
+    const bluff = new Float64Array(NUM_COMBOS);
     for (let k = 0; k < NUM_COMBOS; k++) {
       if (!(W[k] > 0)) continue;
       const pv = sigmoid((qv[k] - (1 - valueFrac)) / 0.035);
       const pb = Wb[k] > 0 ? sigmoid((qb[k] - bluffCut) / 0.06) : 0;
-      P[k] = pv + (1 - pv) * pb;
+      bluff[k] = (1 - pv) * pb;
+      P[k] = pv + bluff[k];
     }
+    P.bluff = bluff;
     return P;
   }
 
-  function applyAction(W, st, action, stats) {
+  function applyAction(W, st, action, stats, size, opts) {
     const out = new Float64Array(NUM_COMBOS);
-    const vr = valueShare(stats);
+    stats = streetStats(stats, st.street);
+    if (opts && opts.cbet && action === 'bet') stats = Object.assign({}, stats, { betFreq: stats.cbet });
+    if (opts && opts.cbet && action === 'check') stats = Object.assign({}, stats, { betFreq: stats.cbet });
+    const vr = valueShare(stats, size);
     let P;
     if (action === 'bet') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
@@ -481,7 +643,14 @@ function ENGINE() {
     } else {
       return W.slice();
     }
-    for (let k = 0; k < NUM_COMBOS; k++) out[k] = W[k] * P[k];
+    let all = 0, bl = 0;
+    for (let k = 0; k < NUM_COMBOS; k++) {
+      out[k] = W[k] * P[k];
+      all += out[k];
+      if (P.bluff) bl += W[k] * Math.min(P.bluff[k], P[k]);
+    }
+    // Share of the hands taking this line that do it as a bluff (bets and raises only).
+    out.bluffShare = P.bluff && all > 0 ? bl / all : null;
     return out;
   }
 
@@ -496,7 +665,7 @@ function ENGINE() {
     return s;
   }
 
-  function buildRange(stats, actions, strengths, deadCards) {
+  function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor) {
     let W = preflopRange(stats, actions.pre || 'pending');
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
@@ -507,8 +676,10 @@ function ENGINE() {
       const st = strengths[len];
       const act = STREET_ACTION_MAP[actions[name]];
       if (!st || !act) continue;
-      const next = applyAction(W, st, act, stats);
+      const cbet = name === 'flop' && (pfAggressor || (pfAggressor == null && (actions.pre === 'raise' || actions.pre === '3bet')));
+      const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet });
       if (sumWeights(next) > 1e-9) W = next;
+      W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
     }
     if (sumWeights(W) <= 1e-9) {
       for (let k = 0; k < NUM_COMBOS; k++) W[k] = dead[COMBO_HI[k]] || dead[COMBO_LO[k]] ? 0 : 1;
@@ -624,16 +795,146 @@ function ENGINE() {
       const base = opp.actions.pre === 'raise' || opp.actions.pre === '3bet' ? 0.55 : 0.5;
       return { cont: clamp(base * (mdf / 0.5), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
     }
-    let ftb = s.foldToBet;
-    if (kind.raiseOverAggressor) ftb *= 0.75;
-    const elasticity = clamp(1.7 * Math.sqrt(s.foldToBet / 0.45), 1, 2.2);
-    let cont = (1 - ftb) * Math.pow(mdf / 0.625, elasticity);
+    const f = 1 / Math.max(0.05, mdf) - 1;
+    let fold = foldAtSize(s, f, ctx.street);
+    if (kind.raiseOverAggressor) fold *= 0.75;
+    let cont = 1 - fold;
     if (kind.raiseOverAggressor) cont = Math.min(cont, valueShare(s) + (ctx.street < 5 ? 0.1 : 0));
     return {
       cont: clamp(cont, 0.03, 0.97),
       nut: clamp(0.86 + 0.08 * (1 - mdf), 0.86, 0.95) - (kind.raiseOverAggressor ? 0.02 : 0),
-      reraise: clamp(s.raiseFreq, 0.02, 0.3),
+      reraise: clamp(streetStats(s, ctx.street).raiseFreq, 0.02, 0.3),
     };
+  }
+
+  // ---------- Lookahead over the streets still to come ----------
+  // Strength (percentile against every hand) of each combo on boards that are not out
+  // yet, computed the first time a runout is needed. On the flop, a turn card's value is
+  // the hand's average river percentile over every river, so draws count.
+  function makeRunouts(board) {
+    const rivers = new Map(), turns = new Map();
+    const buf = new Int32Array(7);
+    const scores = new Int32Array(NUM_COMBOS);
+    const valid = new Int16Array(NUM_COMBOS);
+    const tmp = new Float64Array(NUM_COMBOS);
+    function strengthOn(b) {
+      const dead = new Uint8Array(52);
+      for (const c of b) dead[c] = 1;
+      for (let i = 0; i < 5; i++) buf[i] = b[i];
+      let count = 0;
+      for (let k = 0; k < NUM_COMBOS; k++) {
+        const a = COMBO_HI[k], c = COMBO_LO[k];
+        if (dead[a] || dead[c]) continue;
+        buf[5] = a; buf[6] = c;
+        scores[k] = evaluate(buf, 7);
+        valid[count++] = k;
+      }
+      percentiles(scores, valid, count, tmp);
+      const out = new Float32Array(NUM_COMBOS).fill(-1);
+      for (let i = 0; i < count; i++) out[valid[i]] = tmp[valid[i]];
+      return out;
+    }
+    // River strengths for a 4-card board plus x (y < 0), or a flop plus x and y.
+    function river(x, y) {
+      const key = y < 0 ? x : Math.min(x, y) * 52 + Math.max(x, y);
+      let a = rivers.get(key);
+      if (!a) {
+        a = strengthOn(y < 0 ? board.concat([x]) : board.concat([x, y]));
+        rivers.set(key, a);
+      }
+      return a;
+    }
+    function turn(t) {
+      let a = turns.get(t);
+      if (a) return a;
+      const sum = new Float64Array(NUM_COMBOS), cnt = new Uint8Array(NUM_COMBOS);
+      for (let r = 0; r < 52; r++) {
+        if (r === t || board.includes(r)) continue;
+        const R = river(t, r);
+        for (let k = 0; k < NUM_COMBOS; k++) if (R[k] >= 0) { sum[k] += R[k]; cnt[k]++; }
+      }
+      a = new Float32Array(NUM_COMBOS).fill(-1);
+      for (let k = 0; k < NUM_COMBOS; k++) if (cnt[k]) a[k] = sum[k] / cnt[k];
+      turns.set(t, a);
+      return a;
+    }
+    return { river, turn };
+  }
+
+  function lowerBound(xs, v) {
+    let lo = 0, hi = xs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (xs[mid] < v) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  const HERO_BET = 0.66;
+  const PLAN_SAMPLES = 500;
+
+  /*
+   * An opponent's strategy on each street still to come, read off their stats:
+   *   - bets for value with the top (betFreq x valueShare) of their range on that street,
+   *     and bluffs with a slice of their weakest 35%;
+   *   - folds to a bet of f x pot as often as their size-specific fold rate says.
+   * Thresholds are quantiles of their strength on random runouts, so they adapt to the
+   * board. The same samples tell hero how often it is ahead of their betting range.
+   */
+  function makePlan(o, ctx) {
+    const { street, dead, current, runouts, seed } = ctx;
+    const rng = mulberry32(seed);
+    const N = PLAN_SAMPLES;
+    const streets = street === 3 ? [3, 4, 5] : [4, 5];
+    const xs = {};
+    for (const s of streets) xs[s] = new Float64Array(N);
+    const used = new Uint8Array(52);
+    const draw = () => { let x; do { x = Math.floor(rng() * 52); } while (used[x]); used[x] = 1; return x; };
+    for (let j = 0; j < N; j++) {
+      used.fill(0);
+      for (const c of dead) used[c] = 1;
+      let k = -1;
+      for (let tries = 0; tries < 60 && k < 0; tries++) {
+        const cand = sampleCombo(o.sampler, rng());
+        if (!used[COMBO_HI[cand]] && !used[COMBO_LO[cand]]) k = cand;
+      }
+      if (k < 0) do { k = Math.floor(rng() * NUM_COMBOS); } while (used[COMBO_HI[k]] || used[COMBO_LO[k]]);
+      used[COMBO_HI[k]] = used[COMBO_LO[k]] = 1;
+      xs[street][j] = current.ehs[k];
+      if (street === 3) {
+        const t = draw(), r = draw();
+        xs[4][j] = runouts.turn(t)[k];
+        xs[5][j] = runouts.river(t, r)[k];
+      } else {
+        xs[5][j] = runouts.river(draw(), -1)[k];
+      }
+    }
+    const plan = {};
+    for (const s of streets) {
+      const x = xs[s].sort();
+      const q = (p) => x[clamp(Math.floor(p * (N - 1)), 0, N - 1)];
+      const ss = streetStats(o.stats, s);
+      const betFreq = clamp(ss.betFreq, 0.05, 0.9);
+      const vr = valueShare(o.stats, o.stats.betSize);
+      const vCut = q(1 - betFreq * vr);
+      const airCut = q(0.35);
+      const pBluff = clamp((betFreq * (1 - vr)) / 0.35, 0, 0.9);
+      const cum = new Float64Array(N + 1);
+      for (let j = 0; j < N; j++) cum[j + 1] = cum[j] + (x[j] >= vCut ? 1 : x[j] < airCut ? pBluff : 0);
+      const callCut = (f) => q(foldAtSize(o.stats, f, s));
+      const c0 = lowerBound(x, callCut(HERO_BET));
+      plan[s] = {
+        vCut, airCut, pBluff,
+        betFrac: o.stats.betSize,
+        foldHero: foldAtSize(o.stats, HERO_BET, s),
+        callCut,
+        // Hero value-bets when it beats 55% of the hands that would call.
+        valueCut: c0 < N ? x[c0 + Math.floor(0.55 * (N - 1 - c0))] : 2,
+        eqVsCall: (h) => (c0 < N ? Math.max(0, lowerBound(x, h) - c0) / (N - c0) : 1),
+        eqVsBet: (h) => (cum[N] > 0 ? cum[lowerBound(x, h)] / cum[N] : 1),
+      };
+    }
+    return plan;
   }
 
   /*
@@ -667,7 +968,7 @@ function ENGINE() {
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
-      const W = buildRange(stats, actions, strengths, dead);
+      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor);
       const qCont = rangeQuantiles(W, current.ehs);
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead) : W;
       const aggressor = street === 0
@@ -752,13 +1053,18 @@ function ENGINE() {
       Object.assign(sc, {
         n: 0, gainSum: 0, gainSq: 0, foldAll: 0, showdowns: 0, shareSum: 0, wins: 0, ties: 0,
         vsWins: new Float64Array(opps.length), vsTies: new Float64Array(opps.length), vsCount: new Float64Array(opps.length),
-        oppFolds: new Float64Array(opps.length), reraised: 0,
+        oppFolds: new Float64Array(opps.length), reraised: 0, looked: 0,
       });
     }
 
     const heroCombo = COMBO_INDEX[hero[0] * 52 + hero[1]];
     const heroStrength = current.ehs[heroCombo];
     const heroStandsReraise = heroStrength >= (street === 0 ? 0.9 : 0.8);
+
+    // Play out the later streets when hero ends up heads-up on the flop or turn.
+    const lookahead = (street === 3 || street === 4) && input.lookahead !== false;
+    const runouts = lookahead ? makeRunouts(board) : null;
+    const plans = [];
 
     const inPosition = input.inPosition !== false;
     let realize = 1;
@@ -775,6 +1081,54 @@ function ENGINE() {
     const oppScore = new Int32Array(opps.length);
     const oppIn = new Uint8Array(opps.length);
     let done = 0;
+
+    function strengthAt(s, k) {
+      if (s === street) return current.ehs[k];
+      if (s === 4) return runouts.turn(cards[5])[k];
+      return street === 3 ? runouts.river(cards[5], cards[6])[k] : runouts.river(cards[6], -1)[k];
+    }
+
+    // Hero and opponent i are alone with `P` in the pot and hero has put in `heroIn` with
+    // this decision. Bet the remaining streets with both strategies and return hero's gain.
+    // Simplifications: no raises after this decision, and hero only bluffs the river.
+    function playOut(i, P, heroIn, share, rng, startCur) {
+      const plan = plans[i] || (plans[i] = makePlan(opps[i], { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0 }));
+      const oc = oppCombo[i];
+      let left = stack - heroIn, extra = 0;
+      for (let s = startCur ? street : street + 1; s <= 5; s++) {
+        if (left <= 0) break;
+        const t = plan[s];
+        const sh = strengthAt(s, heroCombo), so = strengthAt(s, oc);
+        const oppBets = () => so >= t.vCut || (so < t.airCut && rng() < t.pBluff);
+        const heroCalls = () => {
+          const B = Math.min(left, roundChips(t.betFrac * P, bigBlind));
+          if (t.eqVsBet(sh) < B / (P + 2 * B)) return false;
+          P += 2 * B; extra += B; left -= B;
+          return true;
+        };
+        const heroBets = () => {
+          const B = Math.min(left, roundChips(HERO_BET * P, bigBlind));
+          const value = sh >= t.valueCut;
+          const bluff = !value && s === 5 && t.eqVsCall(sh) < 0.2 && t.foldHero * P - (1 - t.foldHero) * B > 0.05 * P;
+          if (!value && !bluff) return 'check';
+          if (so < t.callCut(B / P)) return 'won';
+          P += 2 * B; extra += B; left -= B;
+          return 'called';
+        };
+        if (s === street) {
+          // Hero checked; the opponent acts behind.
+          if (oppBets() && !heroCalls()) return -heroIn - extra;
+        } else if (inPosition) {
+          if (oppBets()) { if (!heroCalls()) return -heroIn - extra; }
+          else if (heroBets() === 'won') return P - heroIn - extra;
+        } else {
+          const r = heroBets();
+          if (r === 'won') return P - heroIn - extra;
+          if (r === 'check' && oppBets() && !heroCalls()) return -heroIn - extra;
+        }
+      }
+      return share * P - heroIn - extra;
+    }
 
     function runScenario(sc, start, count) {
       const rng = mulberry32((seed + start * 2654435761) >>> 0);
@@ -840,7 +1194,14 @@ function ENGINE() {
             else if (hs === s) sc.vsTies[i]++;
           }
           const share = heroBest ? 1 / nBest : 0;
-          gain = share * realize * finalPot - sc.amount;
+          let inCount = 0, lastIn = -1;
+          for (let i = 0; i < opps.length; i++) if (oppIn[i]) { inCount++; lastIn = i; }
+          if (lookahead && inCount === 1 && sc.amount < stack) {
+            gain = playOut(lastIn, finalPot, sc.amount, share, rng, sc.kind === 'check' && opps[lastIn].pending);
+            sc.looked++;
+          } else {
+            gain = share * (sc.amount >= stack ? 1 : realize) * finalPot - sc.amount;
+          }
           sc.showdowns++;
           sc.shareSum += share;
           if (share === 1) sc.wins++;
@@ -859,6 +1220,12 @@ function ENGINE() {
       return done / target;
     }
 
+    // How likely the bet or raise an opponent just made is a bluff, given their reads.
+    function bluffChance(o) {
+      if (street === 0 || !o.aggressor || o.W.bluffShare == null) return null;
+      return o.W.bluffShare;
+    }
+
     function result() {
       for (const sc of scenarios) {
         if (sc.kind === 'fold') { sc.ev = 0; sc.se = 0; continue; }
@@ -867,6 +1234,7 @@ function ENGINE() {
         sc.se = Math.sqrt(Math.max(0, sc.gainSq / n - sc.ev * sc.ev) / n);
         sc.foldPct = sc.foldAll / n;
         sc.reraisedPct = sc.reraised / n;
+        sc.lookedPct = sc.looked / n;
         sc.equityWhenCalled = sc.showdowns ? sc.shareSum / sc.showdowns : null;
       }
       const ranked = scenarios.slice().sort((a, b) => b.ev - a.ev);
@@ -898,13 +1266,15 @@ function ENGINE() {
       }
 
       return {
-        street, streetName, pot, toCall, stack, bigBlind, realize, inPosition,
+        street, streetName, pot, toCall, stack, bigBlind, realize, inPosition, lookahead,
         scenarios, ranked, best, runnerUp, margin, close: margin < closeThreshold,
         equity, potOdds, hero: heroInfo, impliedOddsNeeded,
         iterations: done,
         opponents: opps.map((o, i) => ({
           name: o.name, stats: o.stats, type: o.type, pending: o.pending, aggressor: o.aggressor,
           grid: o.grid,
+          summary: readSummary(o.stats),
+          bluffChance: bluffChance(o),
           heroVs: base && base.vsCount[i] ? (base.vsWins[i] + base.vsTies[i] / 2) / base.vsCount[i] : null,
           foldToBest: best && best.n ? best.oppFolds[i] / best.n : null,
         })),
@@ -929,6 +1299,7 @@ function ENGINE() {
     RANKS, SUITS, CATEGORY_NAMES, CLASS_NAMES, CLASS_COMBO_COUNT, PREFLOP_ORDER, PLAYER_TYPES, TABLE_PRIORS,
     parseCard, cardToString, evaluate, describeScore, describeHero,
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
+    foldAtSize, valueShare, classifyShows, handPercentile, readSummary,
     createAnalysis, analyzeSync, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
   };
 
@@ -962,8 +1333,38 @@ ENGINE();
     const n = parseInt(String(pos).replace(/\D/g, ''), 10);
     return isNaN(n) ? 0 : n;
   }
+  const MAX_SHOWS = 40;
+  const streetTally = () => ({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 });
+  const facingTally = () => ({ fold: 0, call: 0, raise: 0 });
   function blankTally() {
-    return { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0 };
+    return {
+      pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0,
+      // Preflop re-raising: times they faced an open, and how often they 3-bet it.
+      pf3betOpp: 0, pf3bet: 0,
+      // Continuation bets: preflop raiser's first flop decision, and how others react to it.
+      cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0,
+      // Per-street action counts (the flat counts above are all streets together).
+      st: { flop: streetTally(), turn: streetTally(), river: streetTally() },
+      // Reaction to a bet by its size (fraction of the pot before the bet): <45%, 45-85%, >85%.
+      vs: { small: facingTally(), medium: facingTally(), large: facingTally() },
+      // Their own bet sizes postflop, as fractions of the pot.
+      betSize: { n: 0, sum: 0 },
+      sawFlop: 0, wtsd: 0,
+      // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
+      shows: [],
+    };
+  }
+  // Fills in fields added after a read was first saved.
+  function upgradeTally(t) {
+    const b = blankTally();
+    for (const k of Object.keys(b)) {
+      if (t[k] == null) t[k] = b[k];
+      else if (k === 'st' || k === 'vs') for (const j of Object.keys(b[k])) if (!t[k][j]) t[k][j] = b[k][j];
+    }
+    return t;
+  }
+  function sizeBucket(f) {
+    return f < 0.45 ? 'small' : f < 0.85 ? 'medium' : 'large';
   }
 
   const STREET_BY_STAGE = { pre_flop: 0, flop: 3, turn: 4, river: 5 };
@@ -985,6 +1386,7 @@ ENGINE();
       if (!authId) return null;
       let r = this.db.players[authId];
       if (!r) r = this.db.players[authId] = { name, tally: blankTally() };
+      else r.tally = upgradeTally(r.tally || {});
       if (name) r.name = name;
       return r;
     }
@@ -1005,11 +1407,13 @@ ENGINE();
           id: p.id, auth: p.authUserId, name: p.name, pos: p.posType,
           stageBet: 0, total: 0, folded: false, allin: false,
           seq: { pre: [], flop: [], turn: [], river: [] },
-          pfCat: null, acted: false,
+          pfCat: null, acted: false, faced3: false, cbetSeen: false,
+          agg: [], sizes: {}, shown: [],
         };
       }
       this.hand = {
-        players, street: 0, started: false, board: [], heroUids: [], heroCards: {},
+        players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
+        pfRaiser: null, flopBet: false,
         currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
         finished: false,
       };
@@ -1054,6 +1458,7 @@ ENGINE();
           const heroPos = this.heroPos();
           const list = Array.isArray(data) ? data : [data];
           for (const d of list) {
+            if (d && d.cardData && d.playerPos) h.uidPos[d.cardData.uniqueID] = d.playerPos;
             if (d && d.playerPos === heroPos && d.cardData) {
               h.heroUids.push(d.cardData.uniqueID);
               const c = cardStr(d.cardData);
@@ -1068,6 +1473,8 @@ ENGINE();
           if (h.heroUids.includes(uid)) {
             const c = cardStr(data.cardData);
             if (c) { h.heroCards[uid] = c; this.emit('cards', h); }
+          } else if (h.uidPos[uid]) {
+            this.onReveal(h.uidPos[uid], cardStr(data.cardData));
           }
           break;
         }
@@ -1115,6 +1522,9 @@ ENGINE();
       const street = h.street;
       const key = STREET_KEY[street];
       const added = +d.makeBetValue || 0;
+      let potBefore = 0;
+      for (const x of Object.values(h.players)) potBefore += x.total;
+      const facing = Math.max(0, h.currentBet - p.stageBet);
       let kind = d.actionType;
       if (kind === 'raise') {
         if (street === 0) kind = h.preRaises >= 1 ? '3bet' : 'raise';
@@ -1130,16 +1540,42 @@ ENGINE();
       p.acted = true;
 
       const isHero = p.id === this.heroId();
+      const r = isHero ? null : this.record(p.auth, p.name);
       if (street === 0) {
-        if (kind === 'raise' || kind === '3bet') h.preRaises++;
+        if (r && !p.faced3 && h.preRaises === 1 && kind !== 'check') {
+          p.faced3 = true;
+          r.tally.pf3betOpp++;
+          if (kind === '3bet') r.tally.pf3bet++;
+        }
+        if (kind === 'raise' || kind === '3bet') { h.preRaises++; h.pfRaiser = p.id; }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
         const cat = rank === 2 ? 'pfRaise' : rank === 1 ? 'pfCall' : 'pfFold';
         const order = { pfFold: 0, pfCall: 1, pfRaise: 2 };
         if (!p.pfCat || order[cat] > order[p.pfCat]) p.pfCat = cat;
-      } else if (!isHero) {
-        const r = this.record(p.auth, p.name);
-        const map = { check: 'check', bet: 'bet', call: 'call', raise: 'raise', fold: 'fold' };
-        if (r && map[kind]) r.tally[map[kind]]++;
+      } else {
+        const frac = potBefore > 0 ? Math.min(3, Math.max(0, added - facing) / (potBefore + facing)) : 0;
+        if (kind === 'bet' || kind === 'raise') {
+          p.agg.push({ n: h.board.length, frac: Math.round(frac * 100) / 100 });
+          p.sizes[key] = Math.round(frac * 100) / 100;
+        }
+        // C-bets: the preflop raiser's first flop decision, and replies to their flop bet.
+        const cbetSpot = street === 3 && h.pfRaiser != null;
+        if (r) {
+          const t = r.tally;
+          if (t[kind] != null) t[kind]++;
+          if (key && t.st[key] && t.st[key][kind] != null) t.st[key][kind]++;
+          if (facing > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) {
+            t.vs[sizeBucket(facing / Math.max(1, potBefore - facing))][kind]++;
+          }
+          if (kind === 'bet') { t.betSize.n++; t.betSize.sum += frac; }
+          if (cbetSpot && p.id === h.pfRaiser && !p.cbetSeen && !h.flopBet) { t.cbetOpp++; if (kind === 'bet') t.cbet++; }
+          if (cbetSpot && p.id !== h.pfRaiser && h.flopBet === 'cbet' && !p.vsCbetSeen && facing > 0) { t.vsCbet++; if (kind === 'fold') t.foldCbet++; }
+        }
+        if (street === 3) {
+          if (kind === 'bet' && !h.flopBet) h.flopBet = p.id === h.pfRaiser ? 'cbet' : 'donk';
+          p.cbetSeen = true;
+          if (h.flopBet === 'cbet' && facing > 0) p.vsCbetSeen = true;
+        }
       }
       this.emit('action', { player: p, kind, added });
     }
@@ -1150,13 +1586,37 @@ ENGINE();
       h.finished = true;
       if (h.started) {
         const heroId = this.heroId();
+        const live = Object.values(h.players).filter((p) => !p.folded).length;
         for (const p of Object.values(h.players)) {
           if (p.id === heroId) continue;
           const r = this.record(p.auth, p.name);
-          if (r) r.tally[p.pfCat || 'pfFold']++;
+          if (!r) continue;
+          r.tally[p.pfCat || 'pfFold']++;
+          const sawFlop = h.board.length >= 3 && (p.seq.flop.length > 0 || !p.folded);
+          if (sawFlop) r.tally.sawFlop++;
+          if (sawFlop && !p.folded && live >= 2) r.tally.wtsd++;
         }
       }
       this.emit('handEnd', h);
+      this.emit('save', this.db);
+    }
+
+    // An opponent's hole card was turned face up (showdown, or a voluntary show).
+    // Once both are known, keep the hand with the bets they made, so the engine
+    // can tell how often their bets were value and how often bluffs.
+    onReveal(pos, card) {
+      const h = this.hand;
+      if (!h || !card) return;
+      const p = Object.values(h.players).find((x) => x.pos === pos);
+      if (!p || p.id === this.heroId()) return;
+      if (!p.shown.includes(card)) p.shown.push(card);
+      if (p.shown.length !== 2 || p.logged) return;
+      p.logged = true;
+      if (!p.agg.length || h.board.length < 3) return;
+      const r = this.record(p.auth, p.name);
+      if (!r) return;
+      r.tally.shows.push({ cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice() });
+      if (r.tally.shows.length > MAX_SHOWS) r.tally.shows.splice(0, r.tally.shows.length - MAX_SHOWS);
       this.emit('save', this.db);
     }
 
@@ -1229,7 +1689,8 @@ ENGINE();
           if (street >= n) actions[k] = PatioTracker.streetAction(o.seq[k], n);
         }
         if (street > 0 && actions.pre === 'pending') actions.pre = 'call';
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions };
+        const cbetter = h.pfRaiser === o.id;
+        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter };
       });
 
       return {
@@ -1249,6 +1710,7 @@ ENGINE();
   }
 
   PatioTracker.blankTally = blankTally;
+  PatioTracker.upgradeTally = upgradeTally;
   PatioTracker.cardStr = cardStr;
   if (typeof module !== 'undefined' && module.exports) module.exports = PatioTracker;
   else global.PatioTracker = PatioTracker;
@@ -1268,7 +1730,7 @@ function slim(r) {
   };
   return {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
-    bigBlind: r.bigBlind, inPosition: r.inPosition,
+    bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
     margin: isFinite(r.margin) ? r.margin : null, close: r.close,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
@@ -1278,7 +1740,7 @@ function slim(r) {
         type: { key: o.type.key, label: o.type.label, tip: o.type.tip },
         stats: { hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af, foldToBet: o.stats.foldToBet, confidence: o.stats.confidence },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
-        heroVs: o.heroVs, foldToBest: o.foldToBest
+        heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
       };
     })
   };
@@ -1440,6 +1902,8 @@ function slim(r) {
     return '<div><div class="sec">Reads</div>' + list.map(function (o) {
       return '<div class="opp"><span class="nm">' + esc(o.name) + '</span><span class="ty">' + esc(o.type) + '</span>' +
         '<div class="muted">' + o.hands + ' hand' + (o.hands === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
+        (o.summary ? '<div class="muted">' + esc(o.summary) + '</div>' : '') +
+        (o.bluffChance != null ? '<div class="tip">Bluffing here about ' + pct(o.bluffChance) + ' of the time</div>' : '') +
         (o.tip ? '<div class="tip">' + esc(o.tip) + '</div>' : '') + '</div>';
     }).join('') + '</div>';
   }
@@ -1453,7 +1917,7 @@ function slim(r) {
       if (p.id === heroId) return;
       var r = tracker.db.players[p.auth];
       var st = PokerEngine.computeStats(Object.assign(PatioTracker.blankTally(), r ? r.tally : {}), ui.tableStyle);
-      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet });
+      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
     });
     return out;
   }
@@ -1490,6 +1954,7 @@ function slim(r) {
       if (r.toCall > 0) kv.push(['Needed to call', pct(r.potOdds)]);
       kv.push(['Pot', money(r.pot)]);
       kv.push(['Position', r.inPosition ? 'In position' : 'Out of position']);
+      if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += '<div class="kv">' + kv.map(function (p) { return '<span>' + p[0] + '</span><span>' + p[1] + '</span>'; }).join('') + '</div>';
       html += '<div><div class="sec" data-a="opts">All options ' + (ui.showOptions ? '▾' : '▸') + '</div>';
@@ -1503,7 +1968,7 @@ function slim(r) {
       }
       html += '</div>';
       html += readsHtml(r.opponents.map(function (o) {
-        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' ') };
+        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '), summary: o.summary, bluffChance: o.bluffChance };
       }));
     } else {
       if (!thinking) html += '<div class="status">' + esc(status) + '</div>';
