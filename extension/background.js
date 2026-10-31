@@ -9,9 +9,9 @@ function slim(r) {
   };
   return {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
-    bigBlind: r.bigBlind, inPosition: r.inPosition,
+    bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close,
+    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map((o) => ({
       name: o.name, pending: o.pending, aggressor: o.aggressor,
@@ -21,7 +21,7 @@ function slim(r) {
         foldToBet: o.stats.foldToBet, confidence: o.stats.confidence,
       },
       topClasses: o.grid.topClasses.slice(0, 8).map((c) => c.name),
-      heroVs: o.heroVs, foldToBest: o.foldToBest,
+      heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance,
     })),
   };
 }

@@ -1,0 +1,1210 @@
+[
+ {
+  "ev": "hook:attached",
+  "data": null,
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 1000,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 1000,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:stage_began",
+  "data": {
+   "stageType": "set_blinds",
+   "stageId": 0
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 1000,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 1000,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:dealer_updated",
+  "data": {
+   "dealerSeatPos": "s1",
+   "smallBlindSeatPos": "s1",
+   "bigBlindSeatPos": "s7"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 1000,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 1000,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:small_blind_paid",
+  "data": {
+   "amount": 5,
+   "playerId": 1
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 1000,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 1000,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:big_blind_paid",
+  "data": {
+   "amount": 10,
+   "playerId": 2
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 1000,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:cards_dealt_to_player",
+  "data": [
+   {
+    "playerPos": "s7",
+    "cardData": {
+     "uniqueID": 31
+    }
+   },
+   {
+    "playerPos": "s1",
+    "cardData": {
+     "uniqueID": 41
+    }
+   },
+   {
+    "playerPos": "s7",
+    "cardData": {
+     "uniqueID": 32
+    }
+   },
+   {
+    "playerPos": "s1",
+    "cardData": {
+     "uniqueID": 42
+    }
+   }
+  ],
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:update_card_data",
+  "data": {
+   "cardData": {
+    "uniqueID": 41,
+    "suite": "spades",
+    "value": "K"
+   },
+   "flipCard": true
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:update_card_data",
+  "data": {
+   "cardData": {
+    "uniqueID": 42,
+    "suite": "hearts",
+    "value": "Q"
+   },
+   "flipCard": true
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:stage_began",
+  "data": {
+   "stageType": "pre_flop"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1",
+   "actionType": "raise",
+   "makeBetValue": 25,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 995,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7",
+   "actionType": "call",
+   "makeBetValue": 20,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 990,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:stage_began",
+  "data": {
+   "stageType": "flop"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:cards_deal_to_stack",
+  "data": [
+   {
+    "emitData": {
+     "stackID": "community_stack",
+     "cardData": {
+      "suite": "diamonds",
+      "value": "K"
+     }
+    }
+   },
+   {
+    "emitData": {
+     "stackID": "community_stack",
+     "cardData": {
+      "suite": "hearts",
+      "value": "8"
+     }
+    }
+   },
+   {
+    "emitData": {
+     "stackID": "community_stack",
+     "cardData": {
+      "suite": "spades",
+      "value": "2"
+     }
+    }
+   }
+  ],
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7",
+   "actionType": "check",
+   "makeBetValue": 0,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1",
+   "actionType": "raise",
+   "makeBetValue": 30,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 970,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7",
+   "actionType": "call",
+   "makeBetValue": 30,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 970,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:stage_began",
+  "data": {
+   "stageType": "turn"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 940,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:cards_deal_to_stack",
+  "data": [
+   {
+    "emitData": {
+     "stackID": "community_stack",
+     "cardData": {
+      "suite": "diamonds",
+      "value": "3"
+     }
+    }
+   }
+  ],
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 940,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 940,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7",
+   "actionType": "raise",
+   "makeBetValue": 120,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 940,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 820,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1",
+   "actionType": "call",
+   "makeBetValue": 120,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 940,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 820,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:stage_began",
+  "data": {
+   "stageType": "river"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 820,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 820,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:cards_deal_to_stack",
+  "data": [
+   {
+    "emitData": {
+     "stackID": "community_stack",
+     "cardData": {
+      "suite": "clubs",
+      "value": "A"
+     }
+    }
+   }
+  ],
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 820,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 820,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 820,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 820,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 2,
+   "playerPos": "s7",
+   "actionType": "raise",
+   "makeBetValue": 60,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 820,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 820,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:player_turn_started",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 820,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 760,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "player:game:action_taken",
+  "data": {
+   "playerID": 1,
+   "playerPos": "s1",
+   "actionType": "call",
+   "makeBetValue": 60,
+   "wasServerAutoAction": false
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 820,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 760,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:stage_began",
+  "data": {
+   "stageType": "showdown"
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 760,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 760,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:update_card_data",
+  "data": {
+   "cardData": {
+    "uniqueID": 31,
+    "suite": "clubs",
+    "value": "7"
+   },
+   "flipCard": true
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 760,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 760,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:update_card_data",
+  "data": {
+   "cardData": {
+    "uniqueID": 32,
+    "suite": "clubs",
+    "value": "6"
+   },
+   "flipCard": true
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 760,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 760,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ },
+ {
+  "ev": "game:game_ended",
+  "data": {
+   "endPopupData": {
+    "gameResults": {}
+   }
+  },
+  "snap": {
+   "tableType": "private",
+   "heroAuthId": "H",
+   "bigBlind": 10,
+   "players": [
+    {
+     "id": 1,
+     "authUserId": "H",
+     "name": "Hero",
+     "stack": 760,
+     "posType": "s1",
+     "playState": "playing"
+    },
+    {
+     "id": 2,
+     "authUserId": "V",
+     "name": "Vic",
+     "stack": 760,
+     "posType": "s7",
+     "playState": "playing"
+    }
+   ]
+  }
+ }
+]

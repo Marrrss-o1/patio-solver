@@ -11,9 +11,9 @@ function slim(r) {
   };
   return {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
-    bigBlind: r.bigBlind, inPosition: r.inPosition,
+    bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close,
+    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map(function (o) {
       return {
@@ -21,7 +21,7 @@ function slim(r) {
         type: { key: o.type.key, label: o.type.label, tip: o.type.tip },
         stats: { hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af, foldToBet: o.stats.foldToBet, confidence: o.stats.confidence },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
-        heroVs: o.heroVs, foldToBest: o.foldToBest
+        heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
       };
     })
   };
@@ -69,6 +69,7 @@ function slim(r) {
   var narrow = Math.min(W.innerWidth, W.screen ? W.screen.width : 9999) < 640;
   var ui = Object.assign({ tableStyle: 'typical', x: null, y: null, expanded: !narrow, showOptions: !narrow }, load(UI_KEY) || {});
   var tracker = new PatioTracker(load(DB_KEY) || { players: {} });
+  tracker.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle); };
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
 
@@ -161,6 +162,13 @@ function slim(r) {
     var what = a.getAttribute('data-a');
     if (what === 'toggle') { ui.expanded = !ui.expanded; save(UI_KEY, ui); render(); }
     else if (what === 'opts') { ui.showOptions = !ui.showOptions; save(UI_KEY, ui); render(); }
+    else if (what === 'log') {
+      var url = URL.createObjectURL(new Blob([JSON.stringify(tracker.db.history || [], null, 1)], { type: 'application/json' }));
+      var link = document.createElement('a');
+      link.href = url; link.download = 'patio-hand-log.json';
+      root.appendChild(link); link.click(); link.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    }
     else if (what === 'reset') {
       if (a.getAttribute('data-c') !== '1') {
         a.setAttribute('data-c', '1'); a.textContent = 'Tap again to reset';
@@ -182,7 +190,9 @@ function slim(r) {
     if (!list.length) return '';
     return '<div><div class="sec">Reads</div>' + list.map(function (o) {
       return '<div class="opp"><span class="nm">' + esc(o.name) + '</span><span class="ty">' + esc(o.type) + '</span>' +
-        '<div class="muted">' + o.hands + ' hand' + (o.hands === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
+        '<div class="muted">' + Math.round(o.hands) + ' hand' + (Math.round(o.hands) === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
+        (o.summary ? '<div class="muted">' + esc(o.summary) + '</div>' : '') +
+        (o.bluffChance != null ? '<div class="tip">Bluffing here about ' + pct(o.bluffChance) + ' of the time</div>' : '') +
         (o.tip ? '<div class="tip">' + esc(o.tip) + '</div>' : '') + '</div>';
     }).join('') + '</div>';
   }
@@ -196,7 +206,7 @@ function slim(r) {
       if (p.id === heroId) return;
       var r = tracker.db.players[p.auth];
       var st = PokerEngine.computeStats(Object.assign(PatioTracker.blankTally(), r ? r.tally : {}), ui.tableStyle);
-      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet });
+      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
     });
     return out;
   }
@@ -229,10 +239,12 @@ function slim(r) {
     if (advice) {
       var r = advice.result, c = advice.ctx, best = r.best, kv = [];
       if (r.hero) kv.push(['Your hand', esc(r.hero.made + (r.hero.draws && r.hero.draws.length ? ' + ' + r.hero.draws.map(function (d) { return d.name.toLowerCase(); }).join(', ') : '') + (r.street === 0 && r.hero.topPercent != null ? ' (top ' + Math.max(1, Math.round(r.hero.topPercent)) + '%)' : ''))]);
+      if (r.mix) kv.push(['Close spot, mix it', esc(r.mix.map(function (m) { return m.label + ' ' + pct(m.freq); }).join(' · '))]);
       if (r.equity) kv.push(['Equity vs their ranges', pct(r.equity.share)]);
       if (r.toCall > 0) kv.push(['Needed to call', pct(r.potOdds)]);
       kv.push(['Pot', money(r.pot)]);
       kv.push(['Position', r.inPosition ? 'In position' : 'Out of position']);
+      if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += '<div class="kv">' + kv.map(function (p) { return '<span>' + p[0] + '</span><span>' + p[1] + '</span>'; }).join('') + '</div>';
       html += '<div><div class="sec" data-a="opts">All options ' + (ui.showOptions ? '▾' : '▸') + '</div>';
@@ -246,7 +258,7 @@ function slim(r) {
       }
       html += '</div>';
       html += readsHtml(r.opponents.map(function (o) {
-        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' ') };
+        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '), summary: o.summary, bluffChance: o.bluffChance };
       }));
     } else {
       if (!thinking) html += '<div class="status">' + esc(status) + '</div>';
@@ -255,7 +267,7 @@ function slim(r) {
     var n = Object.keys(tracker.db.players).length;
     html += '<div class="ft"><select>' + ['tight', 'typical', 'loose'].map(function (s) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
-    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="reset">Reset reads</button></div>';
+    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
     body.innerHTML = html;
     place();
@@ -274,6 +286,7 @@ function slim(r) {
       thinking = false;
       if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
       advice = { result: res.result, ctx: built, stale: false };
+      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0);
       render();
     });
   }

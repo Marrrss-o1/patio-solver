@@ -6,6 +6,7 @@ const E = require('../src/engine.js');
 const T = require('../src/tracker.js');
 
 let failures = 0;
+const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 function test(name, fn) {
   try { fn(); console.log('ok   ' + name); }
   catch (e) { failures++; console.log('FAIL ' + name + '\n     ' + (e && e.message)); }
@@ -67,9 +68,10 @@ test('real hand: opponent tally after the hand', () => {
   const { t } = replay(real);
   const tally = t.db.players.V.tally;
   // BB checked preflop (pfFold); bet flop, bet turn, folded to the raise.
-  assert.strictEqual(tally.pfFold, 1);
-  assert.strictEqual(tally.bet, 2);
-  assert.strictEqual(tally.fold, 1);
+  // The fixture ends with the next hand's set_blinds, which ages counts by 1%.
+  near(tally.pfFold, 0.99);
+  near(tally.bet, 1.98);
+  near(tally.fold, 0.99);
 });
 
 test('real hand: solver returns a sane recommendation on the turn', () => {
@@ -145,6 +147,292 @@ test('3-handed: solver handles two opponents', () => {
   const r = E.analyzeSync(Object.assign({}, x.input, { iterations: 4000 }));
   assert.strictEqual(r.opponents.length, 2);
   assert.ok(r.best && typeof r.best.ev === 'number');
+});
+
+// ---------------------------------------------------------------------------
+// 3. Synthetic heads-up hand to showdown: Vic calls an open, check-calls the
+//    c-bet, bets pot on the turn and 1/6 pot on the river, then shows 7c6c.
+// ---------------------------------------------------------------------------
+const sd = require(path.join(__dirname, 'fixtures/synth-showdown.json'));
+
+test('showdown hand: detailed tallies', () => {
+  const t = replay(sd).t.db.players.V.tally;
+  assert.strictEqual(t.pf3betOpp, 1);
+  assert.strictEqual(t.pf3bet, 0);
+  assert.deepStrictEqual(t.st.flop, { check: 1, bet: 0, call: 1, raise: 0, fold: 0 });
+  assert.strictEqual(t.st.turn.bet, 1);
+  assert.strictEqual(t.st.river.bet, 1);
+  assert.strictEqual(t.vs.medium.call, 1);            // called 30 into 60
+  assert.strictEqual(t.vsCbet, 1);
+  assert.strictEqual(t.foldCbet, 0);
+  assert.strictEqual(t.betSize.n, 2);
+  assert.ok(Math.abs(t.betSize.sum - (1 + 60 / 360)) < 1e-9);
+  assert.strictEqual(t.sawFlop, 1);
+  assert.strictEqual(t.wtsd, 1);
+});
+
+test('showdown hand: revealed cards are logged with their bets', () => {
+  const shows = replay(sd).t.db.players.V.tally.shows;
+  assert.strictEqual(shows.length, 1);
+  assert.deepStrictEqual(shows[0].cards, ['7c', '6c']);
+  assert.deepStrictEqual(shows[0].board, ['Kd', '8h', '2s', '3d', 'Ac']);
+  assert.deepStrictEqual(shows[0].agg, [{ n: 4, frac: 1 }, { n: 5, frac: 0.17 }]);
+});
+
+test('showdown hand: bet sizes reach the solver input', () => {
+  const x = replay(sd).turns[3];
+  assert.strictEqual(x.input.pot, 420);
+  assert.strictEqual(x.input.toCall, 60);
+  assert.deepStrictEqual(x.input.opponents[0].sizes, { turn: 1, river: 0.17 });
+});
+
+test('showdown hand: hero c-bet is counted as hero being the preflop raiser', () => {
+  const x = replay(sd).turns[1];
+  assert.strictEqual(x.input.opponents[0].pfAggressor, false);
+});
+
+test('old saved reads get the new fields', () => {
+  const db = { players: { V: { name: 'Vic', tally: { pfFold: 3, pfCall: 2, pfRaise: 1, check: 4, bet: 2, call: 1, raise: 0, fold: 3 } } } };
+  const t = replay(sd, db).t.db.players.V.tally;
+  near(t.pfFold, 3 * 0.99);
+  near(t.pfCall, 2 * 0.99 + 1);
+  assert.strictEqual(t.shows.length, 1);
+  assert.strictEqual(t.st.river.bet, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 4. Engine: opponent modelling from the new reads
+// ---------------------------------------------------------------------------
+const C = (s) => s.split(' ').map(E.parseCard);
+const tallyWith = (extra) => Object.assign(T.blankTally(), { pfFold: 60, pfCall: 45, pfRaise: 25, check: 60, bet: 36, call: 30, raise: 6, fold: 36 }, extra);
+const bluffShow = { cards: ['7c', '6c'], board: ['Kd', '8h', '2s', '3d', 'Ac'], agg: [{ n: 4, frac: 1 }, { n: 5, frac: 1 }] };
+const valueShow = { cards: ['Ah', 'Kc'], board: ['Kd', '8h', '2s', '3d', 'Ac'], agg: [{ n: 4, frac: 1 }, { n: 5, frac: 1 }] };
+
+test('engine: shown hands are classified as value or bluff', () => {
+  const c = E.classifyShows([bluffShow, valueShow]);
+  assert.strictEqual(c.bluff, 2);
+  assert.strictEqual(c.value, 2);
+  assert.strictEqual(c.bigBluff, 2);
+});
+
+test('engine: bluffs at showdown lower the value share of big bets', () => {
+  const plain = E.computeStats(tallyWith({}), 'typical');
+  const bluffer = E.computeStats(tallyWith({ shows: Array(6).fill(0).map(() => ({ ...bluffShow })) }), 'typical');
+  const honest = E.computeStats(tallyWith({ shows: Array(6).fill(0).map(() => ({ ...valueShow })) }), 'typical');
+  assert.ok(bluffer.valueShareBig < plain.valueShareBig - 0.15, `${bluffer.valueShareBig} vs ${plain.valueShareBig}`);
+  assert.ok(honest.valueShareBig > plain.valueShareBig);
+  assert.strictEqual(bluffer.shown.bluffs, 12);
+});
+
+test('engine: fold rate follows the bet sizes they actually fold to', () => {
+  // Never folds to small bets, always folds to big ones.
+  const st = E.computeStats(tallyWith({ vs: { small: { fold: 0, call: 30, raise: 0 }, medium: { fold: 8, call: 8, raise: 0 }, large: { fold: 30, call: 0, raise: 0 } } }), 'typical');
+  const base = E.computeStats(tallyWith({}), 'typical');
+  assert.ok(E.foldAtSize(st, 0.33, 3) < E.foldAtSize(base, 0.33, 3) - 0.15);
+  assert.ok(E.foldAtSize(st, 1.2, 3) > E.foldAtSize(base, 1.2, 3) + 0.15);
+  assert.ok(E.foldAtSize(st, 0.33, 3) < E.foldAtSize(st, 0.66, 3));
+  assert.ok(E.foldAtSize(st, 0.66, 3) < E.foldAtSize(st, 1.2, 3));
+});
+
+test('engine: per-street reads move that street only', () => {
+  const st = E.computeStats(tallyWith({ st: { flop: { check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, turn: { check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, river: { check: 0, bet: 0, call: 0, raise: 0, fold: 40 } } }), 'typical');
+  assert.ok(st.byStreet[5].foldToBet > st.byStreet[3].foldToBet + 0.2);
+  assert.ok(Math.abs(st.byStreet[3].foldToBet - st.foldToBet) < 1e-9);
+});
+
+test('engine: 3-bet range follows the observed 3-bet rate', () => {
+  const tight = E.computeStats(tallyWith({ pf3betOpp: 30, pf3bet: 1 }), 'typical');
+  const loose = E.computeStats(tallyWith({ pf3betOpp: 30, pf3bet: 9 }), 'typical');
+  const width = (st) => E.preflopRange(st, '3bet').reduce((a, b) => a + b, 0);
+  assert.ok(width(loose) > 2 * width(tight));
+});
+
+test('engine: a known bluffer is read as bluffing more often', () => {
+  const input = (tally) => ({
+    hero: C('Qs Qd'), board: C('Kd 8h 2s 3c Ac'), pot: 200, toCall: 200, stack: 1000, bigBlind: 10,
+    opponents: [{ name: 'V', tally, actions: { pre: 'call', flop: 'checkcall', turn: 'bet', river: 'bet' }, sizes: { turn: 1, river: 1 } }],
+    iterations: 3000,
+  });
+  const honest = E.analyzeSync(input(tallyWith({ shows: Array(8).fill(0).map(() => ({ ...valueShow })) })));
+  const bluffer = E.analyzeSync(input(tallyWith({ shows: Array(8).fill(0).map(() => ({ ...bluffShow })) })));
+  assert.ok(bluffer.opponents[0].bluffChance > honest.opponents[0].bluffChance + 0.1,
+    `${bluffer.opponents[0].bluffChance} vs ${honest.opponents[0].bluffChance}`);
+  assert.ok(bluffer.ranked.find((s) => s.kind === 'call').ev > honest.ranked.find((s) => s.kind === 'call').ev);
+});
+
+// ---------------------------------------------------------------------------
+// 5. Engine: lookahead over later streets
+// ---------------------------------------------------------------------------
+const flopSpot = (hero, extra) => Object.assign({
+  hero: C(hero), board: C('7s Kc 2d'), pot: 100, toCall: 0, stack: 1000, bigBlind: 10, inPosition: true,
+  opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check' } }], iterations: 6000,
+}, extra);
+
+test('lookahead: used heads-up on the flop and turn, not preflop or river', () => {
+  assert.strictEqual(E.analyzeSync(flopSpot('7h 7d')).lookahead, true);
+  assert.strictEqual(E.analyzeSync(flopSpot('7h 7d', { board: C('7s Kc 2d 9h') })).lookahead, true);
+  assert.strictEqual(E.analyzeSync(flopSpot('7h 7d', { board: C('7s Kc 2d 9h 3c') })).lookahead, false);
+  assert.strictEqual(E.analyzeSync(flopSpot('7h 7d', { board: [], opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] })).lookahead, false);
+});
+
+test('lookahead: a set is worth more than this street alone, and betting beats checking', () => {
+  const now = E.analyzeSync(flopSpot('7h 7d', { lookahead: false }));
+  const ahead = E.analyzeSync(flopSpot('7h 7d'));
+  const ev = (r, k) => Math.max(...r.ranked.filter((s) => s.kind === k).map((s) => s.ev));
+  assert.ok(ev(ahead, 'bet') > ev(now, 'bet') + 50, `${ev(ahead, 'bet')} vs ${ev(now, 'bet')}`);
+  assert.ok(ev(ahead, 'bet') > ev(ahead, 'check'));
+});
+
+test('lookahead: an open-ended draw can call a pot-size bet on implied odds', () => {
+  const spot = flopSpot('6c 5d', { board: C('8h 9s Kc'), pot: 200, toCall: 100, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'bet' } }] });
+  const now = E.analyzeSync(Object.assign({}, spot, { lookahead: false }));
+  const ahead = E.analyzeSync(spot);
+  const call = (r) => r.ranked.find((s) => s.kind === 'call').ev;
+  assert.ok(call(ahead) > call(now) + 20, `${call(ahead)} vs ${call(now)}`);
+});
+
+test('lookahead: real hand flop decision stays sane', () => {
+  const x = replay(real).turns[1];
+  const r = E.analyzeSync(Object.assign({}, x.input, { iterations: 6000, mix: false, seed: 7 }));
+  assert.strictEqual(r.lookahead, true);
+  // Top pair on a monotone board facing a big bet: calling is close, never a clear fold.
+  const call = r.ranked.find((s) => s.kind === 'call');
+  assert.ok(call.ev > -0.05 * r.pot, 'call EV ' + call.ev);
+  r.ranked.forEach((s) => assert.ok(isFinite(s.ev)));
+});
+
+// ---------------------------------------------------------------------------
+// 6. Ideas from the poker-AI research write-up
+// ---------------------------------------------------------------------------
+test('mixing: close spots come back as frequencies, and the seed picks one', () => {
+  // A flop spot where checking and a small bet come out close.
+  const base = flopSpot('Ah 5c', { board: C('As 9c 4d'), iterations: 3000 });
+  let mixed = null;
+  for (let seed = 1; seed < 40 && !mixed; seed++) {
+    const r = E.analyzeSync(Object.assign({}, base, { seed, board: C(['As 9c 4d', 'Kd 8s 3c', '7h 6h 2c', 'Qs Jd 5h'][seed % 4]) }));
+    if (r.mix) mixed = r;
+  }
+  assert.ok(mixed, 'expected at least one close spot');
+  assert.strictEqual(mixed.mix.length, 2);
+  assert.ok(Math.abs(mixed.mix[0].freq + mixed.mix[1].freq - 1) < 1e-9);
+  assert.ok(mixed.mix[0].freq >= 0.5);
+  assert.ok(mixed.mix.some((m) => m.kind === mixed.best.kind && m.amount === mixed.best.amount));
+});
+
+test('tracker passes a fresh seed with each decision', () => {
+  const t = replay(real).turns;
+  assert.ok(t.every((x) => Number.isInteger(x.input.seed)));
+});
+
+test('overbets: 2x pot is offered on the turn and river, not the flop', () => {
+  const has2x = (b) => E.analyzeSync(flopSpot('7h 7d', { board: C(b), iterations: 500 })).scenarios.some((s) => s.amount === 200);
+  assert.strictEqual(has2x('7s Kc 2d'), false);
+  assert.strictEqual(has2x('7s Kc 2d 9h'), true);
+  assert.strictEqual(has2x('7s Kc 2d 9h 3c'), true);
+});
+
+test('bet size: a big bet reads more polarized (fewer medium hands) than a small one', () => {
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(C('Kd 8h 2s')) };
+  const st = E.computeStats({}, 'typical');
+  const avg = (size) => {
+    const W = E.buildRange(st, { pre: 'call', flop: 'bet' }, strengths, C('Kd 8h 2s'), { flop: size });
+    let a = 0, t = 0;
+    for (let k = 0; k < W.length; k++) { t += W[k]; if (strengths[3].hs[k] > 0.45 && strengths[3].hs[k] < 0.75) a += W[k]; }
+    return a / t;
+  };
+  assert.ok(avg(1.2) < avg(0.3) - 0.05, `${avg(1.2)} vs ${avg(0.3)}`);
+});
+
+test('confidence: thin reads lean toward balanced folding, big samples follow the read', () => {
+  const never = (n) => E.computeStats(Object.assign(T.blankTally(), { pfFold: n, pfCall: n, check: n, bet: n, call: 2 * n, fold: 0 }), 'typical');
+  assert.ok(never(2).exploitWeight < never(60).exploitWeight);
+  assert.ok(never(2).foldToBet > never(60).foldToBet);
+});
+
+test('lookahead: robust EV sits between the read and the worst opponent version', () => {
+  const r = E.analyzeSync(flopSpot('Ah Kd', { board: C('Kc 7s 2d 9h') }));
+  assert.ok(r.robustWeight > 0);
+  for (const sc of r.ranked) {
+    if (sc.kind === 'fold') continue;
+    assert.ok(sc.evWorst <= sc.evRead + 1e-9);
+    assert.ok(sc.ev <= sc.evRead + 1e-9 && sc.ev >= sc.evWorst - 1e-9);
+  }
+});
+
+test('position: preflop ranges follow position reads', () => {
+  const tight = Object.assign(T.blankTally(), { pfFold: 40, pfCall: 15, pfRaise: 5, pos: { early: { n: 30, vpip: 2, pfr: 1 }, late: { n: 30, vpip: 18, pfr: 4 }, blinds: { n: 0, vpip: 0, pfr: 0 } } });
+  const st = E.computeStats(tight, 'typical');
+  assert.ok(st.byPos.late.vpip > 2 * st.byPos.early.vpip);
+  const strengths = { 0: E.boardStrength([]) };
+  const width = (pos) => E.buildRange(st, { pre: 'call' }, strengths, [], null, null, pos).reduce((a, b) => a + b, 0);
+  assert.ok(width('late') > width('early'));
+});
+
+test('position: tracker groups seats and counts preflop by position', () => {
+  const { t, turns } = replay(three);
+  // Button s3 (Ann) is late; Bob (SB) and Hero (BB) are blinds.
+  assert.strictEqual(turns[0].input.opponents.find((o) => o.name === 'Ann').position, 'late');
+  assert.strictEqual(turns[0].input.opponents.find((o) => o.name === 'Bob').position, 'blinds');
+  const { t: t2 } = replay(sd);
+  assert.deepStrictEqual(t2.db.players.V.tally.pos.blinds, { n: 1, vpip: 1, pfr: 0 });
+});
+
+test('read accuracy: shown hands are scored against the predicted range', () => {
+  const t = new T({ players: {} });
+  t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical');
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const show = t.db.players.V.tally.shows[0];
+  assert.deepStrictEqual(show.actions, { pre: 'call', flop: 'checkcall', turn: 'bet', river: 'bet' });
+  assert.ok(show.fit && show.fit.top >= 0 && show.fit.top <= 1 && show.fit.lr >= 0, JSON.stringify(show.fit));
+  const st = E.computeStats(t.db.players.V.tally, 'typical');
+  assert.strictEqual(st.accuracy.n, 1);
+  assert.ok(/range read right/.test(E.readSummary(st)));
+});
+
+test('read accuracy: ranges that keep missing get less trust', () => {
+  const base = { pfFold: 30, pfCall: 20, pfRaise: 10, check: 30, bet: 15, call: 15, fold: 15 };
+  const shows = (top) => Array(10).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit: { top, lr: top < 0.5 ? 2 : 0.2 } }));
+  const good = E.computeStats(Object.assign(T.blankTally(), base, { shows: shows(0.3) }), 'typical');
+  const bad = E.computeStats(Object.assign(T.blankTally(), base, { shows: shows(0.9) }), 'typical');
+  assert.ok(good.exploitWeight > bad.exploitWeight + 0.1);
+  assert.ok(good.accuracy.vsGuess > 1 && bad.accuracy.vsGuess < 1);
+});
+
+test('read accuracy: players who keep showing weaker hands get weaker ranges', () => {
+  const base = { pfFold: 30, pfCall: 20, pfRaise: 10, check: 30, bet: 15, call: 15, fold: 15 };
+  const shows = (sq) => Array(12).fill(0).map(() => ({ cards: ['2c', '3d'], board: ['Kd', '8h', '2s'], agg: [], fit: { top: 0.5, lr: 1, sq } }));
+  const weak = E.computeStats(Object.assign(T.blankTally(), base, { shows: shows(0.2) }), 'typical');
+  const plain = E.computeStats(Object.assign(T.blankTally(), base), 'typical');
+  assert.ok(weak.strengthBias < -0.15);
+  const board = C('Kd 8h 2s');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
+  const avg = (st) => {
+    const W = E.buildRange(st, { pre: 'call', flop: 'call' }, strengths, board);
+    let a = 0, t = 0;
+    for (let k = 0; k < W.length; k++) { a += W[k] * strengths[3].ehs[k]; t += W[k]; }
+    return a / t;
+  };
+  assert.ok(avg(weak) < avg(plain) - 0.03, `${avg(weak)} vs ${avg(plain)}`);
+});
+
+test('recency: older counts fade by 1% per hand the player is dealt into', () => {
+  const db = { players: { V: { name: 'Vic', tally: Object.assign(T.blankTally(), { fold: 100 }) } } };
+  const t = replay(sd, db).t;
+  near(t.db.players.V.tally.fold, 99);
+});
+
+test('hand log: hands are kept with actions, shown cards and advice', () => {
+  const t = new T({ players: {} });
+  t.on((type, p) => { if (type === 'turn' && p.isHero) t.noteAdvice('Call $60', 12.5); });
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const log = t.db.history;
+  assert.strictEqual(log.length, 1);
+  assert.deepStrictEqual(log[0].hero, ['Ks', 'Qh']);
+  assert.strictEqual(log[0].pot, 480);
+  assert.strictEqual(log[0].advice.length, 4);
+  const vic = log[0].players.find((p) => p.name === 'Vic');
+  assert.deepStrictEqual(vic.shown, ['7c', '6c']);
+  assert.deepStrictEqual(vic.actions.river, ['bet']);
 });
 
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
