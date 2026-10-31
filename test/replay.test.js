@@ -822,6 +822,28 @@ test('turn solver: multiway turns are solved against the field on the computer',
   assert.strictEqual(two('Ah Td', { turnSolver: false }).solver, null);
 });
 
+test('flop solver: computer mode only; heads-up and against the field', () => {
+  const flop = (h, extra) => E.analyzeSync(Object.assign({
+    hero: C(h), board: C('Kh 8h 4c'), pot: 20, toCall: 8, stack: 100, bigBlind: 1, inPosition: true, mix: false, seed: 5,
+    iterations: 2000, flopIterations: 8, heroActions: { pre: 'call' },
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }],
+  }, extra));
+  assert.strictEqual(flop('Ah 5h').solver, null);
+  assert.strictEqual(E.solvableSpot({ board: C('Kh 8h 4c'), opponents: [{}] }), null);
+  assert.strictEqual(E.solvableSpot({ board: C('Kh 8h 4c'), opponents: [{}], flopSolver: true }), 'flop');
+  const draw = flop('Ah 5h', { flopSolver: true }), air = flop('Qc 2d', { flopSolver: true });
+  assert.strictEqual(draw.solver.kind, 'flop');
+  assert.notStrictEqual(draw.best.kind, 'fold');
+  assert.strictEqual(air.best.kind, 'fold');
+  for (const r of [draw, air]) assert.ok(r.ranked.every((x) => isFinite(x.ev)));
+  const field = flop('Ah 5h', { flopSolver: true, pot: 34, opponents: [
+    { name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true },
+    { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call' } }] });
+  assert.strictEqual(field.solver.kind, 'flop');
+  assert.strictEqual(field.solver.field, 2);
+  assert.ok(field.ranked.every((x) => isFinite(x.ev)));
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
