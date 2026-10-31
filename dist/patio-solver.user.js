@@ -129,6 +129,31 @@ function ENGINE() {
     return TOP5[any];
   }
 
+  // Scores of one board plus many two-card hands. Without a possible flush a hand's score
+  // depends only on the ranks, so each pair of hole-card ranks is evaluated once per board
+  // and looked up after that. Use: setBoard(cards, n), then scoreHole(a, b) for each hand.
+  const SB_BUF = new Int32Array(9), SB_CNT = new Int32Array(4), SB_T = new Int32Array(169);
+  let SB_N = 0, SB_ALL = false;
+  function setBoard(cards, n) {
+    SB_N = n;
+    SB_CNT.fill(0);
+    SB_T.fill(-1);
+    for (let i = 0; i < n; i++) { const c = cards[i]; SB_BUF[i] = c; SB_CNT[c & 3]++; }
+    SB_ALL = SB_CNT[0] >= 5 || SB_CNT[1] >= 5 || SB_CNT[2] >= 5 || SB_CNT[3] >= 5;
+  }
+  function scoreHole(a, b) {
+    const sa = a & 3, sb = b & 3;
+    if (!SB_ALL && (sa === sb ? SB_CNT[sa] < 3 : SB_CNT[sa] < 4 && SB_CNT[sb] < 4)) {
+      const key = (a >> 2) * 13 + (b >> 2);
+      const t = SB_T[key];
+      if (t >= 0) return t;
+      SB_BUF[SB_N] = a; SB_BUF[SB_N + 1] = b;
+      return (SB_T[key] = evaluate(SB_BUF, SB_N + 2));
+    }
+    SB_BUF[SB_N] = a; SB_BUF[SB_N + 1] = b;
+    return evaluate(SB_BUF, SB_N + 2);
+  }
+
   function scoreCategory(score) {
     return score >> 20;
   }
@@ -303,17 +328,13 @@ function ENGINE() {
   function handPercentile(hole, board) {
     const dead = new Uint8Array(52);
     board.forEach((c) => { dead[c] = 1; });
-    const buf = new Int32Array(7);
-    for (let i = 0; i < board.length; i++) buf[i] = board[i];
-    const n = board.length;
-    buf[n] = hole[0]; buf[n + 1] = hole[1];
-    const mine = evaluate(buf, n + 2);
+    setBoard(board, board.length);
+    const mine = scoreHole(hole[0], hole[1]);
     let below = 0, ties = 0, total = 0;
     for (let k = 0; k < NUM_COMBOS; k++) {
       const a = COMBO_HI[k], b = COMBO_LO[k];
       if (dead[a] || dead[b] || a === hole[0] || a === hole[1] || b === hole[0] || b === hole[1]) continue;
-      buf[n] = a; buf[n + 1] = b;
-      const sc = evaluate(buf, n + 2);
+      const sc = scoreHole(a, b);
       total++;
       if (sc < mine) below++; else if (sc === mine) ties++;
     }
@@ -584,18 +605,28 @@ function ENGINE() {
     };
   }
 
+  // Percentile of each valid combo's score among all valid combos (ties share the middle).
+  // Scores are below 2^24, so a 3-pass radix sort orders them (much faster than sorting floats).
+  const RX_A = new Int32Array(NUM_COMBOS), RX_B = new Int32Array(NUM_COMBOS), RX_CNT = new Int32Array(256);
   function percentiles(scores, valid, count, out) {
-    const keys = new Float64Array(count);
-    for (let i = 0; i < count; i++) keys[i] = scores[valid[i]] * 2048 + valid[i];
-    keys.sort();
+    let src = RX_A, dst = RX_B;
+    for (let i = 0; i < count; i++) src[i] = valid[i];
+    for (let shift = 0; shift < 24; shift += 8) {
+      RX_CNT.fill(0);
+      for (let i = 0; i < count; i++) RX_CNT[(scores[src[i]] >> shift) & 255]++;
+      let sum = 0;
+      for (let b = 0; b < 256; b++) { const c = RX_CNT[b]; RX_CNT[b] = sum; sum += c; }
+      for (let i = 0; i < count; i++) { const k = src[i]; dst[RX_CNT[(scores[k] >> shift) & 255]++] = k; }
+      const t = src; src = dst; dst = t;
+    }
     let i = 0;
     const denom = Math.max(1, count - 1);
     while (i < count) {
-      const s = Math.floor(keys[i] / 2048);
+      const s = scores[src[i]];
       let j = i;
-      while (j < count && Math.floor(keys[j] / 2048) === s) j++;
+      while (j < count && scores[src[j]] === s) j++;
       const p = (i + (j - i - 1) / 2) / denom;
-      for (let x = i; x < j; x++) out[keys[x] % 2048] = p;
+      for (let x = i; x < j; x++) out[src[x]] = p;
       i = j;
     }
   }
@@ -619,11 +650,11 @@ function ENGINE() {
     const scores = new Int32Array(NUM_COMBOS);
     const valid = new Int16Array(NUM_COMBOS);
     let count = 0;
+    setBoard(buf, n);
     for (let k = 0; k < NUM_COMBOS; k++) {
       const a = COMBO_HI[k], b = COMBO_LO[k];
       if (dead[a] || dead[b]) continue;
-      buf[n] = a; buf[n + 1] = b;
-      scores[k] = evaluate(buf, n + 2);
+      scores[k] = scoreHole(a, b);
       valid[count++] = k;
     }
     percentiles(scores, valid, count, hs);
@@ -637,13 +668,13 @@ function ENGINE() {
       for (let x = 0; x < 52; x++) {
         if (dead[x]) continue;
         buf[n] = x;
+        setBoard(buf, n + 1);
         let c2 = 0;
         for (let i = 0; i < count; i++) {
           const k = valid[i];
           const a = COMBO_HI[k], b = COMBO_LO[k];
           if (a === x || b === x) continue;
-          buf[n + 1] = a; buf[n + 2] = b;
-          scores[k] = evaluate(buf, n + 3);
+          scores[k] = scoreHole(a, b);
           valid2[c2++] = k;
         }
         percentiles(scores, valid2, c2, hs2);
@@ -1036,12 +1067,12 @@ function ENGINE() {
       const dead = new Uint8Array(52);
       for (const c of b) dead[c] = 1;
       for (let i = 0; i < 5; i++) buf[i] = b[i];
+      setBoard(buf, 5);
       let count = 0;
       for (let k = 0; k < NUM_COMBOS; k++) {
         const a = COMBO_HI[k], c = COMBO_LO[k];
         if (dead[a] || dead[c]) continue;
-        buf[5] = a; buf[6] = c;
-        scores[k] = evaluate(buf, 7);
+        scores[k] = scoreHole(a, c);
         valid[count++] = k;
       }
       percentiles(scores, valid, count, tmp);
@@ -1194,13 +1225,11 @@ function ENGINE() {
     const local = new Int32Array(NUM_COMBOS).fill(-1);
     idx.forEach((k, i) => { local[k] = i; });
     const hi = new Uint8Array(N), lo = new Uint8Array(N);
-    const buf = new Int32Array(7);
-    for (let i = 0; i < 5; i++) buf[i] = board[i];
     const score = new Int32Array(N);
+    setBoard(board, 5);
     for (let i = 0; i < N; i++) {
       hi[i] = COMBO_HI[idx[i]]; lo[i] = COMBO_LO[idx[i]];
-      buf[5] = hi[i]; buf[6] = lo[i];
-      score[i] = evaluate(buf, 7);
+      score[i] = scoreHole(hi[i], lo[i]);
     }
     const order = Array.from({ length: N }, (_, i) => i).sort((a, b) => score[a] - score[b]);
     const h0 = local[heroCombo];
@@ -1223,28 +1252,53 @@ function ENGINE() {
 
     // Blocker-aware showdown masses: for each hand, the other side's reach that is below,
     // tied with and above it, and the total, skipping hands that share a card.
-    const below = new Float64Array(N), tie = new Float64Array(N), tot = new Float64Array(N);
+    const tot = new Float64Array(N);
     const cum = new Float64Array(52), grp = new Float64Array(52), all = new Float64Array(52);
-    function masses(r) {
+    // Hands in showdown order (cards and tie groups precomputed), so the loop below does no searching.
+    const oHi = new Uint8Array(N), oLo = new Uint8Array(N), gEnd = new Int32Array(N), rs = new Float64Array(N);
+    for (let j = 0; j < N; j++) { oHi[j] = hi[order[j]]; oLo[j] = lo[order[j]]; }
+    for (let g = 0; g < N;) {
+      let e = g;
+      const s = score[order[g]];
+      while (e < N && score[order[e]] === s) e++;
+      gEnd[g] = e;
+      g = e;
+    }
+    // Showdown value of every hand against reach r (pot potF, `inv` chips put in by the side
+    // being valued), written straight into v: potF * (below + tie / 2) - inv * total.
+    function showValues(r, v, potF, inv) {
       cum.fill(0); all.fill(0);
       let T = 0, cT = 0;
-      for (let i = 0; i < N; i++) { T += r[i]; all[hi[i]] += r[i]; all[lo[i]] += r[i]; }
+      for (let i = 0; i < N; i++) { const x = r[i]; T += x; all[hi[i]] += x; all[lo[i]] += x; }
+      for (let j = 0; j < N; j++) rs[j] = r[order[j]];
       let g = 0;
       while (g < N) {
-        let e = g;
-        const s = score[order[g]];
-        while (e < N && score[order[e]] === s) e++;
-        let gT = 0;
-        for (let j = g; j < e; j++) { const i = order[j]; gT += r[i]; grp[hi[i]] += r[i]; grp[lo[i]] += r[i]; }
-        for (let j = g; j < e; j++) {
-          const i = order[j];
-          below[i] = cT - cum[hi[i]] - cum[lo[i]];
-          tie[i] = gT - grp[hi[i]] - grp[lo[i]] + r[i];
-          tot[i] = T - all[hi[i]] - all[lo[i]] + r[i];
+        const e = gEnd[g];
+        if (e === g + 1) {
+          // A hand with no ties: the general formula's tie mass is exactly 0 here.
+          const i = order[g], h = oHi[g], l = oLo[g], x = rs[g];
+          const bl = cT - cum[h] - cum[l], tie = 0;
+          v[i] = potF * (bl + tie / 2) - inv * (T - all[h] - all[l] + x);
+          cT += x; cum[h] += x; cum[l] += x;
+          g = e;
+          continue;
         }
-        for (let j = g; j < e; j++) { const i = order[j]; cT += r[i]; cum[hi[i]] += r[i]; cum[lo[i]] += r[i]; grp[hi[i]] = 0; grp[lo[i]] = 0; }
+        let gT = 0;
+        for (let j = g; j < e; j++) { const x = rs[j]; gT += x; grp[oHi[j]] += x; grp[oLo[j]] += x; }
+        for (let j = g; j < e; j++) {
+          const i = order[j], h = oHi[j], l = oLo[j], x = rs[j];
+          v[i] = potF * ((cT - cum[h] - cum[l]) + (gT - grp[h] - grp[l] + x) / 2) - inv * (T - all[h] - all[l] + x);
+        }
+        for (let j = g; j < e; j++) { const x = rs[j], h = oHi[j], l = oLo[j]; cT += x; cum[h] += x; cum[l] += x; grp[h] = 0; grp[l] = 0; }
         g = e;
       }
+    }
+    // Value g * (the other side's reach not sharing a card) for every hand.
+    function foldValues(r, v, g) {
+      all.fill(0);
+      let T = 0;
+      for (let i = 0; i < N; i++) { const x = r[i]; T += x; all[hi[i]] += x; all[lo[i]] += x; }
+      for (let i = 0; i < N; i++) v[i] = g * (T - all[hi[i]] - all[lo[i]] + r[i]);
     }
     function totals(r) {
       all.fill(0);
@@ -1263,13 +1317,18 @@ function ENGINE() {
     function fixedStrategy(acts, facingFrac, vsRaise) {
       const bf = clamp(st5.betFreq, 0.05, 0.9), vrB = valueShare(oppStats, oppBetFrac);
       const nA = acts.length, s = new Float64Array(nA * N);
+      // Everything that does not depend on the hand, worked out once per decision.
+      const vr = valueShare(oppStats, oppBetFrac);
+      const foldCut = facingFrac != null && !vsRaise ? (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5) : 0;
+      const raiseCut = 1 - clamp(st5.raiseFreq, 0.02, 0.3);
+      const hasRaise = acts.some((a) => a.kind === 'raise');
+      const kinds = acts.map((a) => a.kind);
+      const pr = new Float64Array(nA);
       for (let i = 0; i < N; i++) {
         const q = qO[idx[i]];
-        const pr = new Float64Array(nA);
         if (facingFrac == null) {
-          const bf = clamp(st5.betFreq, 0.05, 0.9), vr = valueShare(oppStats, oppBetFrac);
           const pBet = sigmoid((q - (1 - bf * vr)) / 0.035) + (1 - sigmoid((q - (1 - bf * vr)) / 0.035)) * sigmoid((bf * (1 - vr) - q) / 0.035);
-          acts.forEach((a, j) => { pr[j] = a.kind === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1); });
+          for (let j = 0; j < nA; j++) pr[j] = kinds[j] === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1);
         } else {
           let pCont;
           if (vsRaise && toCall > 0) {
@@ -1279,15 +1338,14 @@ function ENGINE() {
             // They bet inside the tree: value hands continue, bluffs mostly fold.
             pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
           } else {
-            pCont = sigmoid((q - (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5)) / 0.04);
+            pCont = sigmoid((q - foldCut) / 0.04);
           }
-          const pRaise = sigmoid((q - (1 - clamp(st5.raiseFreq, 0.02, 0.3))) / 0.03);
-          const hasRaise = acts.some((a) => a.kind === 'raise');
-          acts.forEach((a, j) => {
-            if (a.kind === 'fold') pr[j] = 1 - pCont;
-            else if (a.kind === 'raise') pr[j] = pCont * pRaise;
+          const pRaise = sigmoid((q - raiseCut) / 0.03);
+          for (let j = 0; j < nA; j++) {
+            if (kinds[j] === 'fold') pr[j] = 1 - pCont;
+            else if (kinds[j] === 'raise') pr[j] = pCont * pRaise;
             else pr[j] = pCont * (hasRaise ? 1 - pRaise : 1);
-          });
+          }
         }
         let t = 0;
         for (let j = 0; j < nA; j++) t += pr[j];
@@ -1328,81 +1386,98 @@ function ENGINE() {
       const nA = acts.length;
       n.regret = new Float64Array(nA * N);
       n.sum = new Float64Array(nA * N);
-      if (player === 1) n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
+      // Work buffers, reused on every visit (each node is visited once per traversal).
+      n.s = new Float64Array(nA * N);
+      n.v = new Float64Array(N);
+      n.reach = n.kids.map(() => new Float64Array(N));
+      if (player === 1) {
+        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
+        n.pFixed = n.fixed.map((x) => p * x);
+      }
+      n.sIter = 0;
       return n;
     }
     const root = toCall > 0 ? node(0, 0, 0, toCall, 1, true) : node(0, 0, 0, 0, 1, !heroFirst);
+    // Terminal nodes get their own value buffer too.
+    (function addBuffers(n) {
+      for (const k of n.kids) { if (k.term) k.v = new Float64Array(N); else addBuffers(k); }
+    })(root);
 
     // ----- Discounted CFR: positive regrets discounted by t^1.5/(t^1.5+1), negative regrets
     // reset to zero (as in CFR+), average strategy weighted by (t/(t+1))^2 -----
     function strategy(n, out) {
-      const nA = n.acts.length;
+      const nA = n.acts.length, regret = n.regret;
       for (let i = 0; i < N; i++) {
         let t = 0;
-        for (let a = 0; a < nA; a++) { const r = n.regret[a * N + i]; if (r > 0) t += r; }
+        for (let a = 0; a < nA; a++) { const r = regret[a * N + i]; if (r > 0) t += r; }
         for (let a = 0; a < nA; a++) {
-          const r = n.regret[a * N + i];
+          const r = regret[a * N + i];
           out[a * N + i] = t > 0 ? (r > 0 ? r / t : 0) : 1 / nA;
         }
       }
-      if (n.player === 1) for (let j = 0; j < nA * N; j++) out[j] = p * n.fixed[j] + (1 - p) * out[j];
+      if (n.player === 1) { const pf = n.pFixed, q = 1 - p; for (let j = 0; j < nA * N; j++) out[j] = pf[j] + q * out[j]; }
       return out;
     }
     let iter = 0;
+    // Returns the node's value buffer (valid until the node is visited again).
     function cfr(n, trav, rH, rO, avg) {
       if (n.term) {
-        const v = new Float64Array(N);
+        const v = n.v;
         const potF = P0 + n.hIn + n.oIn;
         if (n.term === 'fold') {
           const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
-          totals(trav === 0 ? rO : rH);
-          const g = trav === 0 ? heroGain : P0 - heroGain;
-          for (let i = 0; i < N; i++) v[i] = g * tot[i];
+          foldValues(trav === 0 ? rO : rH, v, trav === 0 ? heroGain : P0 - heroGain);
         } else {
-          masses(trav === 0 ? rO : rH);
-          for (let i = 0; i < N; i++) {
-            const heroish = potF * (below[i] + tie[i] / 2) - (trav === 0 ? n.hIn : n.oIn) * tot[i];
-            v[i] = heroish;
-          }
           // For the opponent the same formula holds from their side: they win the pot when
           // the hero hand is below theirs. (Zero-sum up to the sunk pot.)
+          showValues(trav === 0 ? rO : rH, v, potF, trav === 0 ? n.hIn : n.oIn);
         }
         return v;
       }
       const nA = n.acts.length;
-      const s = new Float64Array(nA * N);
+      const s = n.s;
       if (avg) {
+        const sum = n.sum;
         for (let i = 0; i < N; i++) {
           let t = 0;
-          for (let a = 0; a < nA; a++) t += n.sum[a * N + i];
-          for (let a = 0; a < nA; a++) s[a * N + i] = t > 0 ? n.sum[a * N + i] / t : 1 / nA;
+          for (let a = 0; a < nA; a++) t += sum[a * N + i];
+          for (let a = 0; a < nA; a++) s[a * N + i] = t > 0 ? sum[a * N + i] / t : 1 / nA;
         }
-      } else strategy(n, s);
-      const v = new Float64Array(N);
+      } else if (n.player === 0 || n.sIter !== iter) {
+        // The opponent's regrets only change in their own traversal (the second one), so the
+        // strategy worked out in hero's traversal of this iteration is still current there.
+        strategy(n, s);
+        if (n.player === 1) n.sIter = iter;
+      }
+      const v = n.v;
+      v.fill(0);
       const own = n.player === trav;
       const vals = own ? [] : null;
+      const base = n.player === 0 ? rH : rO;
       for (let a = 0; a < nA; a++) {
-        const r2 = new Float64Array(N);
-        const base = n.player === 0 ? rH : rO;
-        for (let i = 0; i < N; i++) r2[i] = base[i] * s[a * N + i];
+        const r2 = n.reach[a];
+        const off = a * N;
+        for (let i = 0; i < N; i++) r2[i] = base[i] * s[off + i];
         const va = n.player === 0 ? cfr(n.kids[a], trav, r2, rO, avg) : cfr(n.kids[a], trav, rH, r2, avg);
-        if (own) { vals.push(va); for (let i = 0; i < N; i++) v[i] += s[a * N + i] * va[i]; }
+        if (own) { vals.push(va); for (let i = 0; i < N; i++) v[i] += s[off + i] * va[i]; }
         else for (let i = 0; i < N; i++) v[i] += va[i];
       }
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
         const reach = n.player === 0 ? rH : rO;
+        const regret = n.regret, sum = n.sum;
         for (let a = 0; a < nA; a++) {
+          const va = vals[a];
           for (let i = 0; i < N; i++) {
             const j = a * N + i;
-            const r = n.regret[j];
-            n.regret[j] = (r > 0 ? r * pos : 0) + vals[a][i] - v[i];
-            n.sum[j] = n.sum[j] * w + reach[i] * s[j];
+            const r = regret[j];
+            regret[j] = (r > 0 ? r * pos : 0) + va[i] - v[i];
+            sum[j] = sum[j] * w + reach[i] * s[j];
           }
         }
       }
-      if (own && avg) n.vals = vals;
+      if (own && avg) n.vals = vals.map((x) => x.slice());
       return v;
     }
     const iterations = cfg.iterations || RIVER_ITERATIONS;
@@ -1464,11 +1539,11 @@ function ENGINE() {
       idx.forEach((k, i) => { S.hi[i] = COMBO_HI[k]; S.lo[i] = COMBO_LO[k]; S.w[i] = Math.max(0, W[k]); S.local[k] = i; });
       for (const c of rivers) {
         buf[4] = c;
+        setBoard(buf, 5);
         const score = new Int32Array(n), valid = new Uint8Array(n), list = [];
         for (let i = 0; i < n; i++) {
           if (S.hi[i] === c || S.lo[i] === c) continue;
-          buf[5] = S.hi[i]; buf[6] = S.lo[i];
-          score[i] = evaluate(buf, 7);
+          score[i] = scoreHole(S.hi[i], S.lo[i]);
           valid[i] = 1;
           list.push(i);
         }
@@ -1493,25 +1568,27 @@ function ENGINE() {
 
     // ----- blocker-aware showdown masses: for each hand of side T, the other side's reach
     // below, tied with and in total, skipping hands that share a card -----
-    const below = new Float64Array(NMAX), tie = new Float64Array(NMAX), tot = new Float64Array(NMAX);
+    const tot = new Float64Array(NMAX);
     const cum = new Float64Array(52), grp = new Float64Array(52), all = new Float64Array(52);
-    function masses(r, X, T, c) {
-      const oo = X.R[c].order, os = X.R[c].score, to = T.R[c].order, ts = T.R[c].score;
+    // Adds sc * (potF * (below + tie / 2) - myIn * total) to out[i] for every hand i of T that
+    // is live with river card c (the showdown sweep and the value written in one pass).
+    function showAdd(r, X, T, c, out, sc, potF, myIn) {
+      const RX = X.R[c], RT = T.R[c];
+      const oo = RX.order, os = RX.score, xv = RX.valid, to = RT.order, ts = RT.score;
       const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo, cross = T.cross;
+      const no = oo.length, nt = to.length;
       cum.fill(0); all.fill(0);
       let tt = 0;
-      for (let j = 0; j < oo.length; j++) { const i = oo[j], x = r[i]; tt += x; all[xh[i]] += x; all[xl[i]] += x; }
+      for (let j = 0; j < no; j++) { const i = oo[j], x = r[i]; tt += x; all[xh[i]] += x; all[xl[i]] += x; }
       let a = 0, b = 0, cT = 0;
-      while (b < to.length) {
+      while (b < nt) {
         const s = ts[to[b]];
-        while (a < oo.length && os[oo[a]] < s) { const i = oo[a], x = r[i]; cT += x; cum[xh[i]] += x; cum[xl[i]] += x; a++; }
+        while (a < no && os[oo[a]] < s) { const i = oo[a], x = r[i]; cT += x; cum[xh[i]] += x; cum[xl[i]] += x; a++; }
         let a2 = a, gT = 0;
-        while (a2 < oo.length && os[oo[a2]] === s) { const i = oo[a2], x = r[i]; gT += x; grp[xh[i]] += x; grp[xl[i]] += x; a2++; }
-        while (b < to.length && ts[to[b]] === s) {
-          const i = to[b], h = th[i], l = tl[i], same = cross[i] >= 0 && X.R[c].valid[cross[i]] ? r[cross[i]] : 0;
-          below[i] = cT - cum[h] - cum[l];
-          tie[i] = gT - grp[h] - grp[l] + same;
-          tot[i] = tt - all[h] - all[l] + same;
+        while (a2 < no && os[oo[a2]] === s) { const i = oo[a2], x = r[i]; gT += x; grp[xh[i]] += x; grp[xl[i]] += x; a2++; }
+        while (b < nt && ts[to[b]] === s) {
+          const i = to[b], h = th[i], l = tl[i], ci = cross[i], same = ci >= 0 && xv[ci] ? r[ci] : 0;
+          out[i] += sc * (potF * ((cT - cum[h] - cum[l]) + (gT - grp[h] - grp[l] + same) / 2) - myIn * (tt - all[h] - all[l] + same));
           b++;
         }
         for (let j = a; j < a2; j++) { const i = oo[j]; grp[xh[i]] = 0; grp[xl[i]] = 0; }
@@ -1522,6 +1599,14 @@ function ENGINE() {
       let tt = 0;
       for (let i = 0; i < X.n; i++) { const x = r[i]; tt += x; all[X.hi[i]] += x; all[X.lo[i]] += x; }
       for (let i = 0; i < T.n; i++) tot[i] = tt - all[T.hi[i]] - all[T.lo[i]] + (T.cross[i] >= 0 ? r[T.cross[i]] : 0);
+    }
+    // out[i] = g * (the other side's reach not sharing a card with hand i of T).
+    function foldValues(r, X, T, out, g) {
+      all.fill(0);
+      let tt = 0;
+      const xh = X.hi, xl = X.lo, th = T.hi, tl = T.lo, cross = T.cross, nx = X.n, nt = T.n;
+      for (let i = 0; i < nx; i++) { const x = r[i]; tt += x; all[xh[i]] += x; all[xl[i]] += x; }
+      for (let i = 0; i < nt; i++) { const ci = cross[i]; out[i] = g * (tt - all[th[i]] - all[tl[i]] + (ci >= 0 ? r[ci] : 0)); }
     }
 
     // ----- the read's strategy for the opponent -----
@@ -1670,20 +1755,13 @@ function ENGINE() {
       const myIn = trav === 0 ? n.hIn : n.oIn;
       if (n.term === 'fold') {
         const heroGain = n.winner === 0 ? P0 + n.oIn : -n.hIn;
-        const g = trav === 0 ? heroGain : P0 - heroGain;
-        totals(r, X, T);
-        for (let i = 0; i < T.n; i++) out[i] = g * tot[i];
+        foldValues(r, X, T, out, trav === 0 ? heroGain : P0 - heroGain);
         return;
       }
       const potF = P0 + n.hIn + n.oIn;
       out.fill(0, 0, T.n);
-      const cards = n.term === 'show' ? [n.card] : sample;
-      const sc = n.term === 'show' ? 1 : scale;
-      for (const c of cards) {
-        masses(r, X, T, c);
-        const ord = T.R[c].order;
-        for (let j = 0; j < ord.length; j++) { const i = ord[j]; out[i] += sc * (potF * (below[i] + tie[i] / 2) - myIn * tot[i]); }
-      }
+      if (n.term === 'show') { showAdd(r, X, T, n.card, out, 1, potF, myIn); return; }
+      for (let k = 0; k < sample.length; k++) showAdd(r, X, T, sample[k], out, scale, potF, myIn);
     }
     function cfr(n, trav, rH, rO, avg, d, out) {
       if (n.term) { terminal(n, trav, rH, rO, out); return; }
@@ -2036,7 +2114,7 @@ function ENGINE() {
     const root = node(0, 0, 0, cfg.raises || 4, 0, 1, cfg.villainRaised, 0);
 
     // ----- Discounted CFR over classes -----
-    const acc = new Float64Array(NC), tot = new Float64Array(NC), live = new Int32Array(NC);
+    const acc = new Float64Array(NC), tot = new Float64Array(NC), live = new Int32Array(NC), lw = new Float64Array(NC);
     const mass = (r, v, g) => classMass(r, v, g);
     function terminal(n, trav, rH, rO) {
       const v = n.v || (n.v = new Float64Array(NC));
@@ -2052,22 +2130,44 @@ function ENGINE() {
         // Only the opponent's classes that still reach this leaf.
         let mx = 0, nz = 0;
         for (let b = 0; b < NC; b++) if (rO[b] > mx) mx = rO[b];
-        for (let b = 0; b < NC; b++) if (rO[b] > 1e-7 * mx) live[nz++] = b;
-        for (let a = 0; a < NC; a++) {
+        for (let b = 0; b < NC; b++) if (rO[b] > 1e-7 * mx) { live[nz] = b; lw[nz] = rO[b]; nz++; }
+        // Four rows at a time: each row keeps its own running sum in the same order, so the
+        // results are the same, but the four additions don't wait on each other.
+        let a = 0;
+        for (; a + 3 < NC; a += 4) {
+          let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+          const r0 = a * NC, r1 = r0 + NC, r2 = r1 + NC, r3 = r2 + NC;
+          for (let j = 0; j < nz; j++) {
+            const b = live[j], w = lw[j];
+            s0 += X[r0 + b] * w; s1 += X[r1 + b] * w; s2 += X[r2 + b] * w; s3 += X[r3 + b] * w;
+          }
+          v[a] = potF * s0 - n.hIn * tot[a];
+          v[a + 1] = potF * s1 - n.hIn * tot[a + 1];
+          v[a + 2] = potF * s2 - n.hIn * tot[a + 2];
+          v[a + 3] = potF * s3 - n.hIn * tot[a + 3];
+        }
+        for (; a < NC; a++) {
           let s2 = 0;
           const row = a * NC;
-          for (let j = 0; j < nz; j++) { const b = live[j]; s2 += X[row + b] * rO[b]; }
+          for (let j = 0; j < nz; j++) s2 += X[row + live[j]] * lw[j];
           v[a] = potF * s2 - n.hIn * tot[a];
         }
       } else {
         classMass(rH, tot, 1);
         acc.fill(0);
-        let mx = 0;
+        let mx = 0, nz = 0;
         for (let a = 0; a < NC; a++) if (rH[a] > mx) mx = rH[a];
-        for (let a = 0; a < NC; a++) {
-          const ph = rH[a];
-          if (ph <= 1e-7 * mx) continue;
-          const row = a * NC;
+        for (let a = 0; a < NC; a++) if (rH[a] > 1e-7 * mx) live[nz++] = a;
+        // Four hero classes per pass over acc (added in the same order as one at a time).
+        let j = 0;
+        for (; j + 3 < nz; j += 4) {
+          const a0 = live[j], a1 = live[j + 1], a2 = live[j + 2], a3 = live[j + 3];
+          const p0 = rH[a0], p1 = rH[a1], p2 = rH[a2], p3 = rH[a3];
+          const r0 = a0 * NC, r1 = a1 * NC, r2 = a2 * NC, r3 = a3 * NC;
+          for (let b = 0; b < NC; b++) acc[b] = acc[b] + p0 * X[r0 + b] + p1 * X[r1 + b] + p2 * X[r2 + b] + p3 * X[r3 + b];
+        }
+        for (; j < nz; j++) {
+          const a = live[j], ph = rH[a], row = a * NC;
           for (let b = 0; b < NC; b++) acc[b] += ph * X[row + b];
         }
         for (let b = 0; b < NC; b++) v[b] = potF * (tot[b] - acc[b]) - n.oIn * tot[b];
