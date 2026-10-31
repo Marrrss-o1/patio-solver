@@ -280,13 +280,97 @@
     return w;
   }
 
-  const TABLE_PRIORS = {
-    tight: { vpip: 0.20, pfr: 0.14, af: 2.0, betFreq: 0.40, foldToBet: 0.52, raiseFreq: 0.09 },
-    typical: { vpip: 0.28, pfr: 0.14, af: 1.8, betFreq: 0.38, foldToBet: 0.45, raiseFreq: 0.09 },
-    loose: { vpip: 0.40, pfr: 0.13, af: 1.4, betFreq: 0.34, foldToBet: 0.36, raiseFreq: 0.08 },
+  // ---------- Population priors for reads ----------
+  // Each kind of decision is a family of yes/no choices, seen in a few contexts:
+  //   vpip    plays the hand (calls or raises preflop), by position group
+  //   pfr     raises, given that they play the hand, by position group
+  //   bet     bets when nobody has bet yet: c-bet spots, other flop spots, turn, river
+  //   fold    folds when facing a bet, by street
+  //   raise   raises when facing a bet, given that they don't fold, by street
+  // `mu` is the population's rate in each context ('all' = over every context), `tau` how far
+  // a typical player sits from the population on the log-odds scale, and `tauC` how much a
+  // player's rate in one context can differ from their own rate in the others.
+  // `rates` are single-context stats as [population rate, prior strength in hands].
+  // 'home' is fitted from the owner's hand logs (test/fit-priors.js), so a friend seen for the
+  // first time is read as the home game's average player, not a generic amateur. 'solid' is
+  // the old 'typical' (a sound regular); it stands for hero's own range.
+  const READ_PRIORS = {
+    home: {
+      vpip: { mu: { all: 0.644, early: 0.667, late: 0.733, blinds: 0.584, other: 0.644 }, tau: 0.35, tauC: 0.3 },
+      pfr: { mu: { all: 0.253, early: 0.243, late: 0.241, blinds: 0.258, other: 0.253 }, tau: 1.15, tauC: 0.3 },
+      bet: { mu: { all: 0.272, cbet: 0.351, flop: 0.181, turn: 0.257, river: 0.422, other: 0.272 }, tau: 0.5, tauC: 0.3 },
+      fold: { mu: { all: 0.46, allMW: 0.541, flop: 0.378, turn: 0.435, river: 0.575, flopMW: 0.53, turnMW: 0.482, riverMW: 0.677, flopOld: 0.49, turnOld: 0.458, riverOld: 0.632, other: 0.46 }, tau: 0.35, tauC: 0.3 },
+      raise: { mu: { all: 0.19, flop: 0.21, turn: 0.14, river: 0.244, other: 0.19 }, tau: 0.35, tauC: 0.3 },
+      rates: {
+        threeBet: [0.165, 10], callBig: [0.51, 6], foldAfterAgg: [0.351, 8], foldCbet: [0.348, 5], wtsd: [0.277, 5],
+        f3bet: [0.133, 5], fourBet: [0.5, 5], limp: [0.572, 6],
+      },
+      // Response to a single open raise by its size (raise-to <= 2.5bb, <= 3.5bb, more):
+      // continue (call or 3-bet) and 3-bet, as shares of their chances to respond.
+      // Fitted on 78 responses: they continue against three in four opens of up to 3.5bb and 3-bet
+      // a quarter of them (min-raise wars); bigger opens get about half.
+      vsOpen: { small: [0.75, 0.3], medium: [0.72, 0.25], large: [0.49, 0.17], k: 6 },
+      // betSize is their usual bet (the median; the mean is pulled up by shoves).
+      af: 1.28, betSize: 0.5,
+      // Range tilt (see buildRange) for lines with a bet or raise and for check/call lines: the
+      // friends' shown hands sit a little lower than the model puts them after checking and
+      // calling. After betting they fit +0.15, but showdowns over-sample value there (bluffs that
+      // win uncontested are never shown), so it stays 0. k is the penalty that keeps a player near
+      // it; kUp is for reading a betting line stronger than this.
+      tilt: { agg: 0, pas: -0.15, k: 6, kUp: 20 },
+      // Range noise (see applyAction): the share of each line's hands that take it whatever
+      // their strength. The friends' showdowns fit about half.
+      noise: { mu: 0.45, k: 6 },
+      // Players who re-raised preflop (3-bet or more) fold less to bets after the flop: 38% against
+      // 51% for everyone in the logs (25% on the flop and turn). Odds multiplier on their fold
+      // rates (the benchmark's best; a single open raise made no difference there).
+      reraisedFold: 0.65,
+    },
+    solid: {
+      vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
+      pfr: { mu: { all: 0.5, early: 0.5, late: 0.5, blinds: 0.5, other: 0.5 }, tau: 0.8, tauC: 0.35 },
+      bet: { mu: { all: 0.38, cbet: 0.6, flop: 0.38, turn: 0.38, river: 0.38, other: 0.38 }, tau: 0.8, tauC: 0.45 },
+      fold: { mu: { all: 0.45, allMW: 0.5, flop: 0.45, turn: 0.45, river: 0.45, flopMW: 0.5, turnMW: 0.5, riverMW: 0.5, flopOld: 0.45, turnOld: 0.45, riverOld: 0.45, other: 0.45 }, tau: 0.8, tauC: 0.45 },
+      raise: { mu: { all: 0.165, flop: 0.165, turn: 0.165, river: 0.165, other: 0.165 }, tau: 0.8, tauC: 0.45 },
+      rates: {
+        threeBet: [0.063, 10], callBig: [0.21, 6], foldAfterAgg: [0.18, 8], foldCbet: [0.45, 5], wtsd: [0.3, 5],
+        f3bet: [0.5, 5], fourBet: [0.45, 5], limp: [0.3, 6],
+      },
+      vsOpen: { small: [0.38, 0.07], medium: [0.32, 0.06], large: [0.26, 0.05], k: 6 },
+      af: 1.8, betSize: 0.6,
+      tilt: { agg: 0, pas: 0, k: 6, kUp: 20 },
+      noise: { mu: 0.25, k: 6 },
+      reraisedFold: 1,
+    },
   };
+  // A table style shifts the home prior: tighter players play fewer hands and fold more.
+  function shiftedPrior(base, d) {
+    const out = JSON.parse(JSON.stringify(base));
+    for (const fam of Object.keys(d)) {
+      const f = out[fam];
+      if (f && f.mu) for (const k of Object.keys(f.mu)) f.mu[k] = sigmoid(logit(f.mu[k]) + d[fam]);
+    }
+    return out;
+  }
+  READ_PRIORS.tight = shiftedPrior(READ_PRIORS.home, { vpip: -0.9, pfr: 0.2, fold: 0.3, bet: 0.1 });
+  READ_PRIORS.loose = shiftedPrior(READ_PRIORS.home, { vpip: 0.5, pfr: -0.2, fold: -0.3, bet: -0.1 });
+  READ_PRIORS.typical = READ_PRIORS.home;
+  // Hero's own range (for hero's story and the river and turn solvers) is read as a solid
+  // regular's, not as the home game's average player: hero plays the solver's advice.
+  const HERO_STYLE = 'solid';
+  function readPrior(style) {
+    if (style && typeof style === 'object' && style.vpip && style.vpip.mu) return style;
+    return READ_PRIORS[style] || READ_PRIORS.home;
+  }
+  // The old flat summary of each style (kept for anything that reads it).
+  const TABLE_PRIORS = {};
+  for (const k of Object.keys(READ_PRIORS)) {
+    const p = READ_PRIORS[k];
+    const ftb = p.fold.mu.all;
+    TABLE_PRIORS[k] = { vpip: p.vpip.mu.all, pfr: p.vpip.mu.all * p.pfr.mu.all, af: p.af, betFreq: p.bet.mu.all, foldToBet: ftb, raiseFreq: (1 - ftb) * p.raise.mu.all };
+  }
 
-  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, aggVsN: 0, aggVsFold: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0 };
+  const EMPTY_TALLY = { pfFold: 0, pfCall: 0, pfRaise: 0, check: 0, bet: 0, call: 0, raise: 0, fold: 0, pf3betOpp: 0, pf3bet: 0, pfBigOpp: 0, pfBigCall: 0, aggVsN: 0, aggVsFold: 0, cbetOpp: 0, cbet: 0, vsCbet: 0, foldCbet: 0, sawFlop: 0, wtsd: 0, limpOpp: 0, limp: 0, f3betOpp: 0, f3bet: 0, pf4bet: 0 };
   const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
@@ -329,6 +413,13 @@
   // A bet counts as value when the hand was in the top 30% of all hands on that board,
   // a bluff when it was in the bottom 45% (semi-bluffs with draws count as bluffs).
   const showCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  // A hand shown after its owner folded never reached the end of the line it would be scored
+  // against, so it says nothing about that line's range (friends often show folded hands).
+  // It still counts in classifyShows: bets made before the fold are real bluffs.
+  function foldedShow(sh) {
+    return !!(sh && (sh.folded || Object.values(sh.actions || {}).some((a) => a === 'fold')));
+  }
+
   function classifyShows(shows) {
     const out = { value: 0, bluff: 0, mid: 0, bigValue: 0, bigBluff: 0, bigMid: 0, hands: 0 };
     for (const sh of shows || []) {
@@ -352,25 +443,179 @@
     return out;
   }
 
-  function computeStats(tally, tableStyle) {
+  // ---------- Per-player reads ----------
+  // A player's tally split into the contexts of each decision family, as [times, chances].
+  function tallyCells(t) {
+    const z = (x) => Math.max(0, x || 0);
+    const cell = (x, n) => [Math.min(z(x), z(n)), z(n)];
+    const pos = t.pos || {};
+    const vpip = {}, pfr = {};
+    let hn = 0, hv = 0, hr = 0;
+    for (const k of ['early', 'late', 'blinds']) {
+      const x = Object.assign({ n: 0, vpip: 0, pfr: 0 }, pos[k] || {});
+      vpip[k] = cell(x.vpip, x.n); pfr[k] = cell(x.pfr, x.vpip);
+      hn += z(x.n); hv += z(x.vpip); hr += z(x.pfr);
+    }
+    const hands = z(t.pfFold) + z(t.pfCall) + z(t.pfRaise), played = z(t.pfCall) + z(t.pfRaise);
+    vpip.other = cell(played - hv, hands - hn);
+    pfr.other = cell(z(t.pfRaise) - hr, played - hv);
+    const st = (k) => Object.assign({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, (t.st && t.st[k]) || {});
+    const f = st('flop'), tu = st('turn'), r = st('river');
+    const bet = {
+      cbet: cell(t.cbet, t.cbetOpp),
+      flop: cell(f.bet - z(t.cbet), f.bet + f.check - z(t.cbetOpp)),
+      turn: cell(tu.bet, tu.bet + tu.check),
+      river: cell(r.bet, r.bet + r.check),
+    };
+    const fold = {}, raise = {};
+    // Folds are split into heads-up and multiway spots (friends fold far more often when others
+    // are still in), plus counts saved before the split was tracked, which keep the mixed rate.
+    const part = (src, k) => Object.assign({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, (src && src[k]) || {});
+    for (const [k, x] of [['flop', f], ['turn', tu], ['river', r]]) {
+      const mw = part(t.stMw, k), old = part(t.stOld, k);
+      const facing = (y) => y.fold + y.call + y.raise;
+      fold[k] = cell(x.fold - mw.fold - old.fold, facing(x) - facing(mw) - facing(old));
+      fold[k + 'MW'] = cell(mw.fold, facing(mw));
+      fold[k + 'Old'] = cell(old.fold, facing(old));
+      raise[k] = cell(x.raise, x.call + x.raise);
+    }
+    // Counts from reads saved before per-street tallies existed.
+    const sum = (key) => f[key] + tu[key] + r[key];
+    bet.other = cell(z(t.bet) - sum('bet'), z(t.bet) + z(t.check) - sum('bet') - sum('check'));
+    fold.other = cell(z(t.fold) - sum('fold'), z(t.fold) + z(t.call) + z(t.raise) - sum('fold') - sum('call') - sum('raise'));
+    raise.other = cell(z(t.raise) - sum('raise'), z(t.call) + z(t.raise) - sum('call') - sum('raise'));
+    return { vpip, pfr, bet, fold, raise };
+  }
+
+  // One player's rates in a decision family: rate_c = sigmoid(mu_c + u + v_c), where u (prior
+  // spread tau, see T_DF) is how the player differs from the population across the whole family and v_c
+  // (prior N(0, tauC^2)) a smaller difference in one context. Maximum a posteriori by Newton
+  // steps. Because u is shared, a few flop decisions also inform the turn and river, and the
+  // population's street and position effects apply from a player's first hand.
+  // `certainty` is the share of the between-player spread that the player's data has resolved
+  // (0 = nothing seen, near 1 = many hands).
+  // The spread between players is a Student-t (3 degrees of freedom) on the log-odds scale:
+  // like a normal with sd tau for players near the average, with heavier tails, so a real
+  // outlier (a friend who plays every hand) is learned in tens of hands, not hundreds.
+  const T_DF = 3;
+  function fitFamily(cells, fam) {
+    const keys = Object.keys(fam.mu).filter((k) => k !== 'all' && k !== 'allMW');
+    const m = {};
+    for (const k of keys) m[k] = logit(clamp(fam.mu[k], 0.01, 0.99));
+    const t2 = fam.tau * fam.tau, ic2 = 1 / (fam.tauC * fam.tauC);
+    let u = 0, H = -1 / t2;
+    for (let it = 0; it < 40; it++) {
+      // Prior gradient and a always-negative curvature (iteratively reweighted).
+      const w = (T_DF + 1) / (T_DF * t2 + u * u);
+      let g = -w * u, h = -w;
+      for (const k of keys) {
+        const c = cells[k];
+        if (!c || !(c[1] > 0)) continue;
+        const p = sigmoid(m[k] + u);
+        g += c[0] - c[1] * p; h -= c[1] * p * (1 - p);
+      }
+      const step = clamp(g / h, -1, 1);
+      u -= step; H = h;
+      if (Math.abs(step) < 1e-6) break;
+    }
+    const rate = {}, n = {};
+    for (const k of keys) {
+      const c = cells[k] || [0, 0];
+      let v = 0;
+      if (c[1] > 0) {
+        for (let it = 0; it < 12; it++) {
+          const p = sigmoid(m[k] + u + v);
+          const g = c[0] - c[1] * p - v * ic2, h = -c[1] * p * (1 - p) - ic2;
+          const step = g / h;
+          v -= step;
+          if (Math.abs(step) < 1e-6) break;
+        }
+      }
+      rate[k] = sigmoid(m[k] + u + v);
+      n[k] = c[1];
+    }
+    const sd = Math.sqrt(-1 / H);
+    return {
+      u, sd, rate, n,
+      all: sigmoid(logit(clamp(fam.mu.all, 0.01, 0.99)) + u),
+      allMW: fam.mu.allMW != null ? sigmoid(logit(clamp(fam.mu.allMW, 0.01, 0.99)) + u) : null,
+      certainty: clamp(1 - (sd * sd) / t2, 0, 1),
+    };
+  }
+
+  const tallyNumbers = (t, out, sign) => {
+    for (const k of Object.keys(t || {})) {
+      if (k === 'shows' || k === 'pred') continue;
+      const v = t[k];
+      if (typeof v === 'number') out[k] = (out[k] || 0) + sign * v;
+      else if (v && typeof v === 'object' && !Array.isArray(v)) tallyNumbers(v, out[k] || (out[k] = {}), sign);
+    }
+    return out;
+  };
+  // Every known player's counts added up: the table's own population, so the prior follows
+  // the friends actually being played even when they differ from the logs it was fitted on.
+  function poolTally(tallies) {
+    const out = {};
+    for (const t of tallies || []) if (t) tallyNumbers(t, out, 1);
+    return out;
+  }
+
+  // Blend the fitted prior's population rates with the pooled table (minus the player
+  // being read), weighted by how many decisions the table has shown in each family.
+  const POOL_K = 120;
+  function pooledPrior(base, pool, own) {
+    if (!pool) return base;
+    const rest = tallyNumbers(own || {}, tallyNumbers(pool, {}, 1), -1);
+    const cells = tallyCells(Object.assign({}, EMPTY_TALLY, rest));
+    const out = Object.assign({}, base);
+    for (const fam of ['vpip', 'pfr', 'bet', 'fold', 'raise']) {
+      const b = base[fam], c = cells[fam];
+      const mu = {};
+      let X = 0, N = 0;
+      for (const k of Object.keys(b.mu)) {
+        if (k === 'all' || k === 'allMW') { if (k === 'allMW') mu.allMW = b.mu.allMW; continue; }
+        const x = c[k] ? c[k][0] : 0, nn = c[k] ? c[k][1] : 0;
+        X += x; N += nn;
+        // Per context, add the pooled counts to the prior's rate as pseudo-counts.
+        mu[k] = (x + POOL_K * b.mu[k]) / (nn + POOL_K);
+      }
+      mu.all = (X + POOL_K * b.mu.all) / (N + POOL_K);
+      out[fam] = Object.assign({}, b, { mu });
+    }
+    return out;
+  }
+
+  // Beta-binomial rate: (times + k * prior) / (chances + k).
+  const betaRate = (x, n, prior, k) => (Math.max(0, x || 0) + k * prior) / (Math.max(0, n || 0) + k);
+
+  // ctx.multiway: the read is for a pot with two or more opponents, so fold rates are the
+  // player's multiway ones (stats.read keeps both, for predictAction).
+  function computeStats(tally, tableStyle, pool, ctx) {
+    const mwCtx = !!(ctx && ctx.multiway);
     const t = Object.assign({}, EMPTY_TALLY, tally || {});
-    const pr = TABLE_PRIORS[tableStyle] || TABLE_PRIORS.typical;
+    const prior = pooledPrior(readPrior(tableStyle), pool, tally);
+    const R = prior.rates;
     const hands = t.pfFold + t.pfCall + t.pfRaise;
     const unopened = t.check + t.bet;
     const facing = t.fold + t.call + t.raise;
-    const KP = 8, KF = 6, KA = 3;
+    const KA = 3;
 
-    const vpip = (t.pfCall + t.pfRaise + KP * pr.vpip) / (hands + KP);
-    const pfr = Math.min(vpip, (t.pfRaise + KP * pr.pfr) / (hands + KP));
+    const cells = tallyCells(t);
+    const fam = {};
+    for (const k of ['vpip', 'pfr', 'bet', 'fold', 'raise']) fam[k] = fitFamily(cells[k], prior[k]);
+    const vpip = fam.vpip.all;
+    const pfr = vpip * fam.pfr.all;
+    const foldHU = fam.fold.all, foldMW = fam.fold.allMW != null ? fam.fold.allMW : foldHU;
+    const foldToBet = mwCtx ? foldMW : foldHU;
     const stats = {
       hands,
       postflopActions: unopened + facing,
       vpip,
       pfr,
-      af: (t.bet + t.raise + KA * pr.af) / (t.call + KA),
-      betFreq: (t.bet + KF * pr.betFreq) / (unopened + KF),
-      foldToBet: (t.fold + KF * pr.foldToBet) / (facing + KF),
-      raiseFreq: (t.raise + KF * pr.raiseFreq) / (facing + KF),
+      af: (t.bet + t.raise + KA * prior.af) / (t.call + KA),
+      betFreq: fam.bet.all,
+      foldToBet,
+      raiseFreq: (1 - foldToBet) * fam.raise.all,
       raw: {
         vpip: hands ? (t.pfCall + t.pfRaise) / hands : null,
         pfr: hands ? t.pfRaise / hands : null,
@@ -379,38 +624,60 @@
         foldToBet: facing ? t.fold / facing : null,
         raiseFreq: facing ? t.raise / facing : null,
       },
+      // How far this player sits from the population in each family (log-odds) and how sure we are.
+      families: {},
     };
+    for (const k of Object.keys(fam)) stats.families[k] = { u: fam[k].u, sd: fam[k].sd, certainty: fam[k].certainty };
 
     // Preflop 3-bet and flop c-bet frequencies.
-    stats.threeBet = (t.pf3bet + 10 * clamp(pr.pfr * 0.45, 0.04, 0.1)) / (t.pf3betOpp + 10);
-    // How often they call (or re-raise) a big preflop raise or shove, as a share of all their hands.
-    // Home-game players call shoves much wider than the bet-size math says, so the prior follows
-    // their looseness rather than pot odds.
-    stats.callBig = (t.pfBigCall + 6 * clamp(0.75 * stats.vpip, 0.18, 0.45)) / (t.pfBigOpp + 6);
+    stats.threeBet = betaRate(t.pf3bet, t.pf3betOpp, R.threeBet[0], R.threeBet[1]);
+    // 4-bet: re-raising after they raised and got 3-bet.
+    stats.fourBet = clamp(betaRate(t.pf4bet, t.f3betOpp, R.fourBet[0], R.fourBet[1]), 0.15, 0.95);
+    stats.foldTo3bet = betaRate(t.f3bet, t.f3betOpp, R.f3bet[0], R.f3bet[1]);
+    stats.limp = betaRate(t.limp, t.limpOpp, R.limp[0], R.limp[1]);
+    // How often they call (or re-raise) a big preflop raise or shove. Home-game players call
+    // shoves much wider than the bet-size math says, so the prior follows their looseness.
+    const cbPrior = clamp(R.callBig[0] * Math.sqrt(vpip / Math.max(0.05, prior.vpip.mu.all)), 0.18, 0.6);
+    stats.callBig = betaRate(t.pfBigCall, t.pfBigOpp, cbPrior, R.callBig[1]);
     stats.raw.callBig = t.pfBigOpp ? t.pfBigCall / t.pfBigOpp : null;
     // Folding to a bet after they already bet or raised this hand: their range is strong by then,
     // so this is much lower than their overall fold rate.
-    stats.foldAfterAgg = (t.aggVsFold + 8 * clamp(0.4 * stats.foldToBet, 0.08, 0.25)) / (t.aggVsN + 8);
+    const faPrior = clamp(R.foldAfterAgg[0] * foldToBet / Math.max(0.05, prior.fold.mu.all), 0.06, 0.4);
+    stats.foldAfterAgg = betaRate(t.aggVsFold, t.aggVsN, faPrior, R.foldAfterAgg[1]);
     stats.raw.foldAfterAgg = t.aggVsN ? t.aggVsFold / t.aggVsN : null;
-    stats.cbet = (t.cbet + 5 * clamp(pr.betFreq + 0.22, 0.4, 0.75)) / (t.cbetOpp + 5);
-    stats.foldToCbet = (t.foldCbet + 5 * stats.foldToBet) / (t.vsCbet + 5);
-    stats.wtsd = (t.wtsd + 5 * 0.3) / (t.sawFlop + 5);
+    stats.cbet = fam.bet.rate.cbet;
+    stats.foldToCbet = betaRate(t.foldCbet, t.vsCbet, fam.fold.rate.flop, R.foldCbet[1]);
+    stats.wtsd = betaRate(t.wtsd, t.sawFlop, R.wtsd[0], R.wtsd[1]);
     stats.raw.threeBet = t.pf3betOpp ? t.pf3bet / t.pf3betOpp : null;
     stats.raw.cbet = t.cbetOpp ? t.cbet / t.cbetOpp : null;
     stats.raw.foldToCbet = t.vsCbet ? t.foldCbet / t.vsCbet : null;
     stats.raw.wtsd = t.sawFlop ? t.wtsd / t.sawFlop : null;
 
-    // Per street, shrunk toward the all-streets numbers.
-    const KS = 5;
+    // Response to a single open raise, by its size in big blinds (for the preflop solver).
+    // The prior follows the population's response to that size, moved by this player's looseness.
+    stats.vsOpen = {};
+    const vo = t.vsOpen || {};
+    const looser = fam.vpip.u;
+    for (const key of ['small', 'medium', 'large']) {
+      const x = Object.assign({ fold: 0, call: 0, raise: 0 }, vo[key] || {});
+      const n = x.fold + x.call + x.raise;
+      const [c0, r0] = prior.vsOpen[key];
+      const cont = betaRate(x.call + x.raise, n, sigmoid(logit(c0) + looser), prior.vsOpen.k);
+      const threeBet = Math.min(cont, betaRate(x.raise, n, clamp(r0 * stats.threeBet / Math.max(0.01, R.threeBet[0]), 0.01, 0.4), prior.vsOpen.k));
+      stats.vsOpen[key] = { cont, threeBet, n };
+    }
+
+    // Per street.
     stats.byStreet = {};
     for (const n of [3, 4, 5]) {
-      const x = Object.assign({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, (t.st && t.st[STREET_KEYS[n]]) || {});
-      const u = x.check + x.bet, f = x.fold + x.call + x.raise;
+      const k = STREET_KEYS[n];
+      const x = Object.assign({ check: 0, bet: 0, call: 0, raise: 0, fold: 0 }, (t.st && t.st[k]) || {});
+      const ftb = fam.fold.rate[mwCtx && fam.fold.rate[k + 'MW'] != null ? k + 'MW' : k];
       stats.byStreet[n] = {
-        betFreq: (x.bet + KS * stats.betFreq) / (u + KS),
-        foldToBet: (x.fold + KS * stats.foldToBet) / (f + KS),
-        raiseFreq: (x.raise + KS * stats.raiseFreq) / (f + KS),
-        samples: u + f,
+        betFreq: fam.bet.rate[k],
+        foldToBet: ftb,
+        raiseFreq: (1 - ftb) * fam.raise.rate[k],
+        samples: x.check + x.bet + x.fold + x.call + x.raise,
       };
     }
 
@@ -428,7 +695,7 @@
 
     // Their usual bet size, as a fraction of the pot.
     const bs = t.betSize || { n: 0, sum: 0 };
-    stats.betSize = clamp((bs.sum + 3 * 0.6) / (bs.n + 3), 0.2, 2);
+    stats.betSize = clamp((bs.sum + 3 * prior.betSize) / (bs.n + 3), 0.2, 2);
 
     // Value share of their bets: the aggression-based guess, corrected by hands they showed.
     const vr0 = clamp(0.9 - 0.08 * (stats.af - 1), 0.55, 0.9);
@@ -444,29 +711,21 @@
     stats.raw.bluffShare = V + B ? B / (V + B) : null;
     stats.bluffShare = 1 - vr;
 
-    // Preflop by position group, shrunk toward their overall numbers scaled by how
-    // much looser people usually play late and tighter early.
+    // Preflop by position group.
     stats.byPos = {};
-    for (const g of Object.keys(POS_SCALE)) {
-      const x = Object.assign({ n: 0, vpip: 0, pfr: 0 }, (t.pos && t.pos[g]) || {});
-      const pv = clamp(vpip * POS_SCALE[g], 0.05, 0.95), pp = clamp(stats.pfr * POS_SCALE[g], 0.02, pv);
-      const v = (x.vpip + 8 * pv) / (x.n + 8);
-      stats.byPos[g] = { vpip: v, pfr: Math.min(v, (x.pfr + 8 * pp) / (x.n + 8)), hands: x.n };
+    for (const g of ['early', 'late', 'blinds']) {
+      const v = fam.vpip.rate[g];
+      stats.byPos[g] = { vpip: v, pfr: v * fam.pfr.rate[g], hands: fam.vpip.n[g] };
     }
 
     const n = hands + stats.postflopActions / 2;
     stats.confidence = n < 10 ? 'guess' : n < 40 ? 'low' : n < 120 ? 'medium' : 'solid';
 
-    // Confidence-pinned exploitation (restricted Nash response): trust the read with
-    // weight p, which grows from 0.5 with no hands to 0.9 at about 120, and fill the rest
-    // with balanced play: fold f/(1+f) to a bet of f x pot (minimum defense), and bet
-    // value:bluff in the (1+f):f ratio that makes calling break even.
-    // The floor is 0.5, not the 0.2 the papers use: the default read is already a
-    // typical amateur, which is a better guess for a home game than balanced play.
     // Read accuracy: where each shown hand sat in the range we would have put them on.
     // A well-calibrated range has the shown hand in its more likely half about half the
-    // time. Reads that keep missing get less trust.
-    const fits = (t.shows || []).map((x) => x && x.fit).filter((f) => f && f.top != null);
+    // time. Hands shown after folding are left out (the line we scored them on never finished).
+    const fits = (t.shows || []).filter((x) => x && !x.folded && !(x.actions && Object.values(x.actions).includes('fold')))
+      .map((x) => x.fit).filter((f) => f && f.top != null && f.v === FIT_VERSION);
     const hits = fits.filter((f) => f.top < 0.5).length;
     stats.accuracy = fits.length ? {
       n: fits.length, hits,
@@ -477,21 +736,88 @@
     // toward zero until there are several showdowns.
     const sqs = fits.filter((f) => f.sq != null);
     stats.strengthBias = clamp(sqs.reduce((a, f) => a + (f.sq - 0.5), 0) / (sqs.length + 4), -0.3, 0.3);
-    // Maximum-likelihood tilt, separately for lines where they bet or raised and lines where they
-    // only checked and called, with a penalty that keeps thin data near no tilt.
+    // Range tilt learned from showdowns, separately for lines where they bet or raised and lines
+    // where they only checked and called: maximum a posteriori around the population's tilt, with
+    // a stiffer penalty for reading a betting line stronger than the population (shown hands
+    // over-sample value: bluffs that win uncontested are never seen).
+    const tp = prior.tilt || { agg: 0, pas: 0, k: 6, kUp: 20 };
     const fitTilt = (agg) => {
+      const mu = agg ? tp.agg : tp.pas;
       const fl = fits.filter((f) => f.tl && f.tl.length === TILTS.length && !!f.agg === agg);
-      if (fl.length < 3) return null;
-      let best = 0, bestV = -Infinity;
-      TILTS.forEach((tau, i) => {
-        const v = fl.reduce((a, f) => a + f.tl[i], 0) - 6 * tau * tau;
+      if (!fl.length) return mu;
+      const sum = TILTS.map((_, i) => fl.reduce((a, f) => a + f.tl[i], 0));
+      let best = mu, bestV = -Infinity;
+      for (let j = 0; j <= 60; j++) {
+        const tau = TILTS[0] + (j / 60) * (TILTS[TILTS.length - 1] - TILTS[0]);
+        let i = 0;
+        while (i < TILTS.length - 2 && tau > TILTS[i + 1]) i++;
+        const w = (tau - TILTS[i]) / (TILTS[i + 1] - TILTS[i]);
+        const d = tau - mu;
+        const v = sum[i] * (1 - w) + sum[i + 1] * w - (agg && d > 0 ? tp.kUp : tp.k) * d * d;
         if (v > bestV) { bestV = v; best = tau; }
-      });
-      return best;
+      }
+      return Math.round(best * 1000) / 1000;
     };
+    // How noisy their lines are (see applyAction): maximum a posteriori on the log-odds scale
+    // around the population's level, from each show's likelihood at every NOISES level.
+    const nz = prior.noise || { mu: 0.45, k: 3 };
+    stats.rangeNoise = nz.mu;
+    const fn = fits.filter((f) => f.nl && f.nl.length === NOISES.length);
+    if (fn.length) {
+      const sum = NOISES.map((_, i) => fn.reduce((a, f) => a + f.nl[i], 0));
+      const L = NOISES.map(logit), l0 = logit(nz.mu);
+      let best = nz.mu, bestV = -Infinity;
+      for (let j = 0; j <= 50; j++) {
+        const x = L[0] + (j / 50) * (L[L.length - 1] - L[0]);
+        let i = 0;
+        while (i < L.length - 2 && x > L[i + 1]) i++;
+        const w = (x - L[i]) / (L[i + 1] - L[i]);
+        const v = sum[i] * (1 - w) + sum[i + 1] * w - nz.k * (x - l0) * (x - l0);
+        if (v > bestV) { bestV = v; best = sigmoid(x); }
+      }
+      stats.rangeNoise = Math.round(best * 1000) / 1000;
+    }
+    // On bets and raises the noise hands are mostly weak or medium ones, so it scales with how
+    // often their shown bets were bluffs compared with the guess from their aggression: an honest
+    // bettor's bets stay value-heavy, a known bluffer's get wider.
+    stats.rangeNoiseAgg = Math.round(clamp(stats.rangeNoise * clamp((1 - vr) / Math.max(0.05, 1 - vr0), 0.25, 2), 0.02, 0.85) * 1000) / 1000;
     stats.tiltAgg = fitTilt(true);
     stats.tiltPas = fitTilt(false);
-    const trust = clamp(((hits + 2) / (fits.length + 4)) / 0.5, 0.5, 1.1);
+
+    // Unblended read, for predicting what they do (predictAction) rather than for deciding.
+    const fr = fam.fold.rate;
+    stats.read = {
+      foldToBet: stats.foldToBet,
+      byStreet: { 3: stats.byStreet[3].foldToBet, 4: stats.byStreet[4].foldToBet, 5: stats.byStreet[5].foldToBet },
+      foldBySize: Object.assign({}, stats.foldBySize),
+      hu: { all: foldHU, 3: fr.flop, 4: fr.turn, 5: fr.river },
+      mw: { all: foldMW, 3: fr.flopMW != null ? fr.flopMW : fr.flop, 4: fr.turnMW != null ? fr.turnMW : fr.turn, 5: fr.riverMW != null ? fr.riverMW : fr.river },
+      multiway: mwCtx,
+    };
+    // A player who re-raised preflop this hand (ctx.reraised) folds less after the flop.
+    stats.reraisedFold = prior.reraisedFold != null ? prior.reraisedFold : 1;
+    if (ctx && ctx.reraised && stats.reraisedFold !== 1) {
+      const sc = (f) => oddsScale(f, stats.reraisedFold);
+      stats.foldToBet = sc(stats.foldToBet);
+      for (const k of [3, 4, 5]) stats.byStreet[k].foldToBet = sc(stats.byStreet[k].foldToBet);
+      for (const [key] of SIZE_BUCKETS) stats.foldBySize[key] = sc(stats.foldBySize[key]);
+      stats.foldToCbet = sc(stats.foldToCbet);
+      stats.foldAfterAgg = sc(stats.foldAfterAgg);
+    }
+
+    // Confidence-pinned exploitation (restricted Nash response): trust the read with
+    // weight p and fill the rest with balanced play: fold f/(1+f) to a bet of f x pot
+    // (minimum defense), and bet value:bluff in the (1+f):f ratio that makes calling break even.
+    // p grows from 0.5 with no hands (the home game's average player, a better guess than
+    // balanced play) to 0.9 at about 120, scaled by how well the read has predicted this player:
+    // where their shown hands sat in the predicted ranges (a calibrated range has about half in
+    // its likelier half) and how it did on every action against an average player's read.
+    const certainty = 0.4 * fam.fold.certainty + 0.3 * fam.bet.certainty + 0.3 * fam.vpip.certainty;
+    stats.certainty = certainty;
+    const pd = t.pred && t.pred.n > 0 ? t.pred : null;
+    stats.predAccuracy = pd ? { n: pd.n, gain: (pd.pop - pd.read) / pd.n } : null;
+    const actTrust = pd ? clamp(1 + (3 * (pd.pop - pd.read)) / (pd.n + 30), 0.75, 1.05) : 1;
+    const trust = clamp((((hits + 2) / (fits.length + 4)) / 0.5) * actTrust, 0.5, 1.1);
     const p = clamp((0.5 + (0.4 * n) / 120) * trust, 0.3, 0.95);
     stats.exploitWeight = p;
     const mix = (read, eq) => p * read + (1 - p) * eq;
@@ -502,6 +828,56 @@
     stats.valueShareBig = mix(stats.valueShareBig, eqValueShare(1.1));
     stats.valueShareSmall = mix(stats.valueShareSmall, eqValueShare(0.33));
     return stats;
+  }
+
+  // For tracker.predictor: [the read's probabilities, an average player's] for a decision.
+  // style() and pool() give the current table style and pooled counts.
+  function makePredictor(style, pool) {
+    let cache = null;
+    return (tally, d) => {
+      const s = style ? style() : 'typical', pl = pool ? pool() : null;
+      if (!cache || cache.s !== s || cache.n !== (pl && pl.pfFold)) cache = { s, n: pl && pl.pfFold, st: computeStats({}, s, pl) };
+      return [predictAction(computeStats(tally, s, pl), d), predictAction(cache.st, d)];
+    };
+  }
+
+  // The read's probability for each thing a player can do at a decision, from their stats.
+  // d: { kind: 'pf' | 'vo' | 'open' | 'face', n: street (3, 4, 5), pos, cbet, toBB (vo), frac: bet faced as a
+  // fraction of the pot before it, aggLine: they bet or raised earlier this hand }.
+  // Used to score reads against what players really did (test/reads-bench.js, tracker.pred).
+  function predictAction(stats, d) {
+    if (d.kind === 'pf') {
+      const g = d.pos && stats.byPos && stats.byPos[d.pos] ? stats.byPos[d.pos] : stats;
+      return { fold: 1 - g.vpip, call: g.vpip - g.pfr, raise: g.pfr };
+    }
+    if (d.kind === 'vo') {
+      // First response to an open raise to d.toBB big blinds, as the preflop solver reads it.
+      const r = vsOpenRead(stats, d.toBB) || { cont: stats.vpip, threeBet: stats.threeBet };
+      return { fold: 1 - r.cont, call: r.cont - r.threeBet, raise: r.threeBet };
+    }
+    const bs = stats.byStreet[d.n] || stats;
+    if (d.kind === 'open') {
+      const b = d.cbet ? stats.cbet : bs.betFreq;
+      return { check: 1 - b, bet: b };
+    }
+    const rd = stats.read || { foldToBet: stats.foldToBet, byStreet: {}, foldBySize: stats.foldBySize };
+    // Heads-up or multiway fold rates as the decision needs (the size corrections stay as read).
+    const side = d.mw != null && rd.hu ? (d.mw ? rd.mw : rd.hu) : null;
+    const s2 = Object.assign({}, stats, { foldToBet: side ? side.all : rd.foldToBet, foldBySize: rd.foldBySize, foldShift: 0, byStreet: {} });
+    if (side) {
+      // foldBySize was built around the context's overall rate: move it with the switch.
+      const shift = side.all - rd.foldToBet;
+      s2.foldBySize = {};
+      for (const k of Object.keys(rd.foldBySize)) s2.foldBySize[k] = clamp(rd.foldBySize[k] + shift, 0.01, 0.99);
+    }
+    for (const k of [3, 4, 5]) s2.byStreet[k] = Object.assign({}, stats.byStreet[k], { foldToBet: side ? side[k] : rd.byStreet[k] != null ? rd.byStreet[k] : stats.byStreet[k].foldToBet });
+    let fold = d.frac != null ? foldAtSize(s2, d.frac, d.n) : s2.byStreet[d.n].foldToBet;
+    if (d.aggLine && stats.foldAfterAgg != null) fold *= clamp(stats.foldAfterAgg / Math.max(0.05, s2.foldToBet), 0.15, 1);
+    if (d.reraised && stats.reraisedFold != null) fold = oddsScale(fold, stats.reraisedFold);
+    const cont = 1 - fold;
+    const ftbN = s2.byStreet[d.n].foldToBet;
+    const raiseShare = clamp(bs.raiseFreq / Math.max(0.02, 1 - ftbN), 0.005, 0.9);
+    return { fold, call: cont * (1 - raiseShare), raise: cont * raiseShare };
   }
 
   const PLAYER_TYPES = {
@@ -536,6 +912,8 @@
     const r = stats.raw || {}, parts = [];
     const acc = stats.accuracy;
     if (acc) parts.push('range read right ' + acc.hits + ' of ' + acc.n + ' showdowns (' + acc.vsGuess.toFixed(1) + '× better than a guess)');
+    const pa = stats.predAccuracy;
+    if (pa && pa.n >= 20) parts.push('actions read ' + Math.round(Math.abs(pa.gain) * 100) + '% ' + (pa.gain >= 0 ? 'better' : 'worse') + ' than an average player');
     if (r.threeBet != null) parts.push('3-bet ' + p(r.threeBet));
     if (r.cbet != null) parts.push('c-bet ' + p(r.cbet));
     const fs = r.foldBySize;
@@ -546,30 +924,37 @@
   }
 
   // Score a shown hand against the range the engine would have put that player on.
-  // Returns { top, lr }: top = share of the range's weight on hands it rated more likely
-  // than the real one (0 = our top guess), lr = the real hand's weight / the range's average.
-  function scoreShow(show, tally, tableStyle) {
+  // Returns { top, lr, sq, tl, nl, agg, v }: top = share of the range's weight on hands it rated
+  // more likely than the real one (0 = our top guess), lr = the real hand's weight / the range's
+  // average, sq = where the hand sat by strength inside the range. tl and nl are the shown hand's
+  // log-likelihood with the range tilted by each TILTS step and with each NOISES level, so
+  // computeStats can learn this player's tilt and noise from their showdowns.
+  const FIT_VERSION = 2;
+  const NOISES = [0.1, 0.25, 0.4, 0.55, 0.7, 0.85];
+  function scoreShow(show, tally, tableStyle, pool) {
     const hole = show.cards.map(parseCard), board = show.board.map(parseCard);
     if (hole.length !== 2 || hole.some((x) => x < 0) || board.some((x) => x < 0) || board.length < 3) return null;
-    const stats = computeStats(tally, tableStyle);
+    if (foldedShow(show)) return null;
+    const stats = computeStats(tally, tableStyle, pool);
     const strengths = { 0: boardStrength([]) };
     for (const n of [3, 4, 5]) if (board.length >= n) strengths[n] = boardStrength(board.slice(0, n));
-    const W = buildRange(stats, show.actions || {}, strengths, board, show.sizes, show.pfAggressor, show.position, true);
+    const args = [show.actions || {}, strengths, board, show.sizes, show.pfAggressor, show.position];
+    const W0 = buildRange(stats, ...args, true);
+    const W = buildRange(stats, ...args);
     const k = COMBO_INDEX[hole[0] * 52 + hole[1]];
     // Where the real hand ranked by strength (on the final board) inside our range.
     const sq = rangeQuantiles(W, strengths[board.length].hs)[k];
-    // How likely the shown hand is under the range tilted weaker or stronger by each TILTS step,
-    // so computeStats can pick the tilt that best explains this player's showdowns.
     const lastN = [5, 4, 3].find((n) => strengths[n] && (show.actions || {})[STREET_KEYS[n]]) || board.length;
-    const qT = rangeQuantiles(W, strengths[lastN].ehs);
-    const tl = TILTS.map((tau) => {
+    const qT = rangeQuantiles(W0, strengths[lastN].ehs);
+    const ll = (w) => {
       let tot = 0, n = 0;
-      for (let j = 0; j < NUM_COMBOS; j++) {
-        if (!(W[j] > 0)) continue;
-        tot += W[j] * Math.exp(8 * tau * (qT[j] - 0.5)); n++;
-      }
-      const wk = W[k] > 0 ? W[k] * Math.exp(8 * tau * (qT[k] - 0.5)) : 0;
-      return n && tot > 0 ? Math.round(Math.log(Math.max(1e-4, (wk * n) / tot)) * 1000) / 1000 : 0;
+      for (let j = 0; j < NUM_COMBOS; j++) if (w(j) > 0) { tot += w(j); n++; }
+      return n && tot > 0 ? Math.round(Math.log(Math.max(1e-4, (w(k) * n) / tot)) * 1000) / 1000 : 0;
+    };
+    const tl = TILTS.map((tau) => ll((j) => (W0[j] > 0 ? W0[j] * Math.exp(8 * tau * (qT[j] - 0.5)) : 0)));
+    const nl = NOISES.map((eps) => {
+      const Wn = buildRange(Object.assign({}, stats, { rangeNoise: eps }), ...args, true);
+      return ll((j) => Wn[j]);
     });
     const agg = ['flop', 'turn', 'river'].some((nm) => { const a = STREET_ACTION_MAP[(show.actions || {})[nm]]; return a === 'bet' || a === 'raise'; });
     let total = 0, above = 0, same = 0, live = 0;
@@ -585,7 +970,7 @@
       top: Math.round(((above + same / 2) / total) * 1000) / 1000,
       lr: Math.round((W[k] / (total / live)) * 100) / 100,
       sq: Math.round(sq * 1000) / 1000,
-      tl, agg,
+      tl, nl, agg, v: FIT_VERSION,
     };
   }
 
@@ -688,12 +1073,31 @@
     return w;
   }
 
-  function preflopRange(stats, action) {
+  const WAR_MIX = 1;
+  function preflopRange(stats, action, sizePre) {
     const cw = new Float64Array(169);
+    let raiseWidth = 1; // re-raising range width, for the floor below
     if (action === 'raise') {
       cw.set(topClassWeights(stats.pfr));
-    } else if (action === '3bet') {
-      cw.set(topClassWeights(clamp(stats.threeBet != null ? stats.threeBet : stats.pfr * 0.4, 0.025, 0.25)));
+    } else if (action === '3bet' || action === '4bet' || action === '5bet') {
+      // Each further re-raise keeps the share of the previous raising range that re-raises again
+      // (`fourBet`). A min-reraise (raising by no more than the raise before, `sizePre` <= 1.25)
+      // narrows half as much, once: these friends click min-raise back and forth with K4s and Q9o.
+      let w = clamp(stats.threeBet != null ? stats.threeBet : stats.pfr * 0.4, 0.025, 0.25);
+      // `fourBet` (share of raises that re-raise again when re-raised) comes from computeStats; 0.45 until then.
+      const fb = stats.fourBet != null ? stats.fourBet : 0.45;
+      const cheap = sizePre != null && sizePre <= 1.25;
+      if (action === '4bet' || (action === '5bet' && cheap)) w = Math.max(0.02, w * (cheap ? Math.sqrt(fb) : fb));
+      else if (action === '5bet') w = Math.max(0.015, w * fb * fb);
+      cw.set(topClassWeights(w));
+      raiseWidth = w;
+      // Raise wars (4-bets and 5-bets) are half premiums, half ordinary hands: of 9 hands shown
+      // from them in the logs, 4 were AA-JJ and 5 were K4s, Q9o, KTo, QJo and A8o. So the
+      // narrow range gets the same mass again spread over the hands they play.
+      if (action === '4bet' || action === '5bet') {
+        const v = Math.max(0.05, stats.vpip), ord = topClassWeights(v);
+        for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + WAR_MIX * (w / v) * ord[i]);
+      }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
       const trap = 0.15 + 0.35 * (1 - stats.pfr / Math.max(stats.vpip, 0.01));
@@ -705,7 +1109,9 @@
       cw.fill(1);
     }
     // Nobody's range is airtight: keep a little weight on every hand they could have played.
-    const floor = action === 'call' ? 0.02 : action === 'raise' || action === '3bet' ? 0.008 : 0;
+    // For narrow re-raising ranges the floor shrinks with the range, or junk would be a third
+    // of a top-1.5% 5-bet range (KQs was told to shove into a 5-bet and a 6-bet).
+    const floor = action === 'call' ? 0.02 : /raise|bet/.test(action) ? Math.min(0.008, 0.06 * raiseWidth) : 0;
     if (floor) for (let i = 0; i < 169; i++) cw[i] = Math.max(cw[i], floor);
     return expandClassWeights(cw);
   }
@@ -734,6 +1140,16 @@
 
   function sigmoid(x) {
     return 1 / (1 + Math.exp(-x));
+  }
+
+  // Scales the odds of a probability: p / (1 - p) times m.
+  function oddsScale(p, m) {
+    const q = clamp(p, 1e-4, 1 - 1e-4);
+    return (q * m) / (q * m + 1 - q);
+  }
+
+  function logit(p) {
+    return Math.log(p / (1 - p));
   }
 
   function clamp(x, lo, hi) {
@@ -811,21 +1227,33 @@
     if (opts && opts.cbet && action === 'check') stats = Object.assign({}, stats, { betFreq: stats.cbet });
     const vr = valueShare(stats, size);
     // Big bets come from a narrower, more polarized range; small bets from a wider one
-    // that includes more medium hands.
-    const sizeScale = !(size > 0) ? 1 : size >= 1 ? 0.8 : size >= BIG_BET ? 0.9 : size < 0.45 ? 1.2 : 1;
+    // that includes more medium hands. Tiny bets and min-raises (under about a third of the pot)
+    // are wider still: at the owner's table they came with K4s, K8o, Q9o and draws, not the nuts.
+    const sizeScale = !(size > 0) ? 1 : size >= 1 ? 0.8 : size >= BIG_BET ? 0.9 : size < 0.45 ? Math.min(1.9, 1.2 + 2 * (0.45 - size)) : 1;
     let P;
     if (action === 'bet') {
       P = aggressionProbs(W, st, clamp(stats.betFreq * sizeScale, 0.03, 0.95), vr);
-      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k]);
+      // Home players also bet medium hands (second pair, weak top pair) "to see where they are".
+      // Without this slice, a friend's TT betting the flop and turn on J-J-Q was ruled out of the range.
+      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? MEDIUM_BET * stats.betFreq * sizeScale : 0);
     } else if (action === 'check') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
       const slow = clamp(0.5 - 0.1 * stats.af, 0.1, 0.45);
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(slow, 1 - P[k]);
     } else if (action === 'raise') {
-      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * sizeScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
+      // Only flop min-raises get the extra width (K8o and a flush draw at the owner's table). Turn and
+      // river raises stay value-heavy even when small: a turn min-raise there was a flush, a 23%
+      // river raise was AA.
+      const rScale = st.street === 3 ? sizeScale : Math.min(sizeScale, 1.2);
+      P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * rScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.02, P[k]);
     } else if (action === 'call') {
-      const q = rangeQuantiles(W, st.ehs);
+      // Calls are ranked with draws counted at twice their one-card gain: home players chase.
+      // Ranked by plain strength, open-enders and flush draws were folded out of turn calling
+      // ranges, and those were exactly the hands friends showed after calling.
+      const callScore = new Float64Array(NUM_COMBOS);
+      for (let k = 0; k < NUM_COMBOS; k++) callScore[k] = st.hs[k] < 0 ? -1 : Math.min(1, st.hs[k] + DRAW_CALL * st.pot[k]);
+      const q = rangeQuantiles(W, callScore);
       const ftb = stats.foldToBet, rf = stats.raiseFreq;
       P = new Float64Array(NUM_COMBOS);
       for (let k = 0; k < NUM_COMBOS; k++) {
@@ -836,6 +1264,19 @@
       }
     } else {
       return W.slice();
+    }
+    // Players are noisy: with chance `rangeNoise` a hand takes this line whatever its strength,
+    // at the line's average rate, so unusual (but real) lines don't wipe out the hands behind them.
+    // Fitted on the owner's showdowns (computeStats): the friends' lines are about half noise.
+    // Big bets are seldom made at random: on bets and raises the noise shrinks as the size grows.
+    const aggr = action === 'bet' || action === 'raise';
+    const noise = aggr && stats.rangeNoiseAgg != null ? stats.rangeNoiseAgg : stats.rangeNoise;
+    const eps = noise > 0 ? Math.min(0.9, noise * (aggr && size > 0 ? clamp(0.6 / size, 0.4, 1.3) : 1)) : 0;
+    if (eps > 0) {
+      let sw = 0, sp = 0;
+      for (let k = 0; k < NUM_COMBOS; k++) if (W[k] > 0) { sw += W[k]; sp += W[k] * P[k]; }
+      const avg = sw > 0 ? sp / sw : 0;
+      for (let k = 0; k < NUM_COMBOS; k++) P[k] = (1 - eps) * P[k] + eps * avg;
     }
     let all = 0, bl = 0;
     for (let k = 0; k < NUM_COMBOS; k++) {
@@ -849,9 +1290,13 @@
   }
 
   const TILTS = [-0.75, -0.5, -0.3, -0.15, 0, 0.15, 0.3, 0.5, 0.75];
+  const DRAW_CALL = 2;
+  const MEDIUM_BET = 0.3;
+  // Preflop lines where the player raised: 'raise', '3bet', '4bet', '5bet'.
+  const PRE_RAISED = /^(raise|\dbet)$/;
   const STREET_ACTION_MAP = {
     check: 'check', bet: 'bet', call: 'call', raise: 'raise',
-    checkcall: 'call', checkraise: 'raise',
+    checkcall: 'call', checkraise: 'raise', betcall: 'bet',
   };
 
   function sumWeights(W) {
@@ -862,7 +1307,7 @@
 
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
     const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
-    let W = preflopRange(pre, actions.pre || 'pending');
+    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre);
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
@@ -872,10 +1317,16 @@
       const st = strengths[len];
       const act = STREET_ACTION_MAP[actions[name]];
       if (!st || !act) continue;
-      const cbet = name === 'flop' && (pfAggressor || (pfAggressor == null && (actions.pre === 'raise' || actions.pre === '3bet')));
+      const cbet = name === 'flop' && (pfAggressor || (pfAggressor == null && PRE_RAISED.test(actions.pre || '')));
       const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet });
       if (sumWeights(next) > 1e-9) W = next;
       W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
+      // Bet, then called a raise: keep the part of the betting range that continues.
+      if (actions[name] === 'betcall') {
+        const after = applyAction(W, st, 'call', stats, null, {});
+        if (sumWeights(after) > 1e-9) W = after;
+        W.bluffShare = null;
+      }
     }
     if (sumWeights(W) <= 1e-9) {
       for (let k = 0; k < NUM_COMBOS; k++) W[k] = dead[COMBO_HI[k]] || dead[COMBO_LO[k]] ? 0 : 1;
@@ -884,7 +1335,9 @@
     // middle of the range we predicted, tilt the range weaker (or stronger) to match.
     const aggLine = ['flop', 'turn', 'river'].some((n) => { const a = STREET_ACTION_MAP[actions[n]]; return a === 'bet' || a === 'raise'; });
     const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
-    const bias = learned != null ? learned : stats.strengthBias || 0;
+    // Without a learned tilt for betting lines, only a weaker-than-expected average is used:
+    // showdowns after bets are the ones that got called, so they look stronger than the bets were.
+    const bias = learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0;
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -1019,7 +1472,7 @@
         cont = Math.max(Math.min(s.vpip, cont), big * callBig);
         return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
-      const raised = opp.actions.pre === 'raise' || opp.actions.pre === '3bet';
+      const raised = PRE_RAISED.test(opp.actions.pre || '');
       const base = raised ? 0.55 : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const floor = big * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
@@ -2768,7 +3221,13 @@
     const dead = hero.concat(board);
 
     const opps = input.opponents.map((o) => {
-      const stats = computeStats(o.tally, tableStyle);
+      const ctx = {
+        multiway: input.opponents.length >= 2,
+        reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
+      };
+      const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
+      // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
+      const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -2776,10 +3235,10 @@
       const qCont = rangeQuantiles(W, current.ehs);
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
-        ? actions.pre === 'raise' || actions.pre === '3bet'
-        : currentAction === 'bet' || currentAction === 'raise' || currentAction === 'checkraise';
+        ? PRE_RAISED.test(actions.pre || '')
+        : currentAction === 'bet' || currentAction === 'betcall' || currentAction === 'raise' || currentAction === 'checkraise';
       return {
-        name: o.name, stats, type: classifyPlayer(stats), actions, pending, aggressor,
+        name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
         // They bet or raised on some street after the flop: from here on their range is strong.
         aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
@@ -2791,7 +3250,7 @@
     // weak-looking line.
     let credibility = 0;
     if (street > 0 && input.heroActions) {
-      const hW = buildRange(computeStats({}, tableStyle), input.heroActions, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
+      const hW = buildRange(computeStats({}, HERO_STYLE), input.heroActions, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
       let a = 0, aw = 0, u = 0, un = 0;
       for (let k = 0; k < NUM_COMBOS; k++) {
         if (current.ehs[k] < 0) continue;
@@ -2977,7 +3436,7 @@
     function planFor(i, v) {
       const key = i * VARIANTS.length + v;
       if (!plans[key]) {
-        const st = Object.assign({}, opps[i].stats, VARIANTS[v]);
+        const st = Object.assign({}, opps[i].statsHU || opps[i].stats, VARIANTS[v]);
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
           { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine });
@@ -3283,7 +3742,7 @@
     if (solved) target = Math.min(target, 6000);
     if (!solved && street === 5 && opps.length === 1 && input.riverSolver !== false && stack > 0) {
       const o = opps[0], oi = input.opponents[0];
-      const heroStats = computeStats({}, tableStyle);
+      const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call', turn: 'call' }, input.heroActions || {});
       solved = riverSolve({
         board, heroCombo, strengths: strengths[5], bigBlind,
@@ -3301,7 +3760,7 @@
     // Computer mode, heads-up turn: solve the turn and the river together.
     if (!solved && street === 4 && opps.length === 1 && input.turnSolver === true && stack > 0) {
       const o = opps[0], oi = input.opponents[0];
-      const heroStats = computeStats({}, tableStyle);
+      const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
       const aggS = clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1);
       const ts = turnSolve({
@@ -3347,7 +3806,7 @@
         let pick = agg;
         if (pick < 0) { pick = 0; for (let i = 1; i < opps.length; i++) if (opps[i].stats.foldToBet < opps[pick].stats.foldToBet) pick = i; }
         const o = opps[pick];
-        const heroStats = computeStats({}, tableStyle);
+        const heroStats = computeStats({}, HERO_STYLE);
         const heroActs = Object.assign({ pre: 'call', flop: 'call', turn: 'call' }, input.heroActions || {});
         solved = riverSolve({
           board, heroCombo, strengths: strengths[5], bigBlind,
@@ -3371,7 +3830,7 @@
       const E = isFinite(stack) ? stack : 100 * bigBlind + pot;
       const field = opps.length > 1;
       const heroPre = (input.heroActions && input.heroActions.pre) || 'pending';
-      const heroCw = classWeights(preflopRange(computeStats({}, tableStyle), heroPre === 'check' ? 'pending' : heroPre));
+      const heroCw = classWeights(preflopRange(computeStats({}, HERO_STYLE), heroPre === 'check' ? 'pending' : heroPre));
       const hc = COMBO_CLASS[heroCombo];
       heroCw[hc] = Math.max(heroCw[hc], 0.05);
       const oppCws = opps.map((o) => classWeights(o.W));
@@ -3605,6 +4064,7 @@
     parseCard, cardToString, evaluate, describeScore, describeHero,
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
+    READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
     createAnalysis, analyzeSync, solvableSpot, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
