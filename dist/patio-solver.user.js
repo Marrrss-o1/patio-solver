@@ -406,6 +406,8 @@ function ENGINE() {
   const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
+  // Pseudo-counts of the size curve behind each player's fold rate in a size bucket (computeStats).
+  const SIZE_K = 64;
   const BIG_BET = 0.75;
 
   // Balanced-play references for a bet of f x pot.
@@ -723,6 +725,11 @@ function ENGINE() {
     // sits at the average size seen in it (tally `fs`/`fn`), not at a fixed point: the small
     // bucket is full of min-bets, which friends call, and read at 1/3 pot it made a third-pot bet
     // look like it gets called as often as a min-bet (44% folds in the logs, 33% predicted).
+    // A player's own folds in a bucket move it only slowly (SIZE_K pseudo-counts of the curve):
+    // in the logs, how a friend reacts to one bet size compared with the others is noise at
+    // the sample sizes a home game gives (with 4 pseudo-counts, facing-bet predictions were
+    // worse than reading every player off the table's average), while their overall fold rate
+    // by street is real.
     stats.foldBySize = {};
     stats.sizeAnchor = {};
     stats.raw.foldBySize = {};
@@ -732,7 +739,7 @@ function ENGINE() {
       const f = (x.fs + 2 * c) / (x.fn + 2);
       stats.sizeAnchor[key] = f;
       const prior = modelFold(stats.foldToBet, f);
-      stats.foldBySize[key] = (x.fold + 4 * prior) / (nf + 4);
+      stats.foldBySize[key] = (x.fold + SIZE_K * prior) / (nf + SIZE_K);
       stats.raw.foldBySize[key] = nf ? x.fold / nf : null;
       stats.raw.foldBySize[key + 'N'] = nf;
     }
@@ -919,7 +926,10 @@ function ENGINE() {
     if (d.aggLine && stats.foldAfterAgg != null) fold *= clamp(stats.foldAfterAgg / Math.max(0.05, s2.foldToBet), 0.15, 1);
     if (d.reraised && stats.reraisedFold != null) fold = oddsScale(fold, stats.reraisedFold);
     const cont = 1 - fold;
-    const ftbN = s2.byStreet[d.n].foldToBet;
+    // Their raise share of continues: raiseFreq is (1 - the street's fold rate) x that share, so
+    // divide by the same fold rate (dividing by the multiway one overstated multiway raises by up
+    // to a third: 14% predicted on multiway flops, 12% real).
+    const ftbN = bs.foldToBet != null ? bs.foldToBet : s2.byStreet[d.n].foldToBet;
     const raiseShare = clamp(bs.raiseFreq / Math.max(0.02, 1 - ftbN), 0.005, 0.9);
     return { fold, call: cont * (1 - raiseShare), raise: cont * raiseShare };
   }

@@ -294,14 +294,19 @@ test('engine: bluffs at showdown lower the value share of big bets', () => {
   assert.strictEqual(bluffer.shown.bluffs, 12);
 });
 
-test('engine: fold rate follows the bet sizes they actually fold to', () => {
-  // Never folds to small bets, always folds to big ones.
-  const st = E.computeStats(tallyWith({ vs: { small: { fold: 0, call: 30, raise: 0 }, medium: { fold: 8, call: 8, raise: 0 }, large: { fold: 30, call: 0, raise: 0 } } }), 'typical');
+test('engine: fold rate follows the bet sizes they actually fold to, slowly', () => {
+  // Never folds to small bets, always folds to big ones, seen n times at each size.
+  const sized = (n) => E.computeStats(tallyWith({ vs: { small: { fold: 0, call: n, raise: 0 }, medium: { fold: n / 2, call: n / 2, raise: 0 }, large: { fold: n, call: 0, raise: 0 } } }), 'typical');
   const base = E.computeStats(tallyWith({}), 'typical');
-  assert.ok(E.foldAtSize(st, 0.33, 3) < E.foldAtSize(base, 0.33, 3) - 0.15);
-  assert.ok(E.foldAtSize(st, 1.2, 3) > E.foldAtSize(base, 1.2, 3) + 0.15);
+  const st = sized(30);
+  assert.ok(E.foldAtSize(st, 0.33, 3) < E.foldAtSize(base, 0.33, 3) - 0.1);
+  assert.ok(E.foldAtSize(st, 1.2, 3) > E.foldAtSize(base, 1.2, 3) + 0.06);
   assert.ok(E.foldAtSize(st, 0.33, 3) < E.foldAtSize(st, 0.66, 3));
   assert.ok(E.foldAtSize(st, 0.66, 3) < E.foldAtSize(st, 1.2, 3));
+  // A few bets of each size barely move it: in the logs, how a friend answers one size compared
+  // with the others was noise at home-game sample sizes (their fold rate by street is not).
+  const few = sized(5);
+  for (const f of [0.33, 0.66, 1.2]) assert.ok(Math.abs(E.foldAtSize(few, f, 3) - E.foldAtSize(base, f, 3)) < 0.04, `size ${f}`);
 });
 
 test('engine: per-street reads move that street most, and the others a little', () => {
@@ -1052,14 +1057,15 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
   const spots = require('./fixtures/real-multiway-flops.json');
   const run = (x) => E.analyzeSync(Object.assign({}, x, { mix: false, seed: 1, iterations: 6000 }));
   const ev = (r, kind) => Math.max(...r.ranked.filter((s) => s.kind === kind).map((s) => s.ev));
-  // The J-high stab: v1.6.0 had the half-pot bet 2.7 above check, from payoffs. With the fold curve
-  // fitted on the logs (friends fold about half the time to a quarter to 0.45 pot multiway, 70% to
-  // 0.45-0.85 pot), a stab can win on folds the logs support, so every bet must stay within noise of
-  // check (1.5 SE) rather than below it.
+  // The J-high stab: v1.6.0 had the bets above check from later streets (bet 8 was 1.72 over check
+  // with 3% everyone-folds, 0.72 chips of fold equity). A stab may win on folds the logs support (the
+  // fitted fold curve, per-player size reads shrunk toward it), but J-high gains little when called,
+  // so no bet may beat checking by more than its immediate fold equity (plus 1.5 SE of noise).
   const stab = run(spots.stabJackHigh);
   const chk = stab.ranked.find((s) => s.kind === 'check');
   for (const b of stab.ranked.filter((s) => s.kind === 'bet' || s.kind === 'allin')) {
-    assert.ok(b.ev - chk.ev < 1.5 * (b.se || 0), `J-high 4-way: bet ${b.amount} EV ${b.ev} vs check ${chk.ev} (SE ${b.se})`);
+    const fe = b.foldPct * spots.stabJackHigh.pot;
+    assert.ok(b.ev - chk.ev <= fe + 1.5 * (b.se || 0), `J-high 4-way: bet ${b.amount} EV ${b.ev} vs check ${chk.ev}, fold equity ${fe} (SE ${b.se})`);
   }
   for (const k of ['raiseMiddlePair', 'raiseKingHigh']) {
     const r = run(spots[k]);
