@@ -290,7 +290,7 @@ function slim(r) {
       thinking = false;
       if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
       advice = { result: res.result, ctx: built, stale: false };
-      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0);
+      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0, res.result, function (sc) { return actionText(sc, built.heroStageBet, res.result.toCall); });
       render();
     });
   }

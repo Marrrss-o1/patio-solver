@@ -74,7 +74,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Counts decay 1% per hand a player is dealt into (`DECAY` in tracker.js), so they are floats. Round before display.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
-- `db.history` keeps the last 150 hands (actions, shown cards, advice) for the "Hand log" export.
+- `db.history` keeps the last 150 hands for the "Hand log" export. Each entry has `log` (every action in order with
+  `amt` added, `to`, `pot` before it, `facing`, `stack` before it, `potPct` for bets/raises, blinds as `sb`/`bb`),
+  each player's starting `stack`, `advice` (pot, price, equity, hand, top 5 options with EVs, reads, hero's actual
+  action in `did` and `followed`), and `net`/`heroNet`/`heroNetBB`, filled in from the next hand's starting stacks.
 - Showdown reads only see hands that were shown, so they over-sample hands that got called. Bluffs that won
   uncontested are invisible unless the player shows voluntarily.
 - Tally format (tracker.js `blankTally`): flat counts plus `st` (per street), `vs` (reaction by facing-bet size),

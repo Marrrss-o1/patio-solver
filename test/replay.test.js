@@ -74,6 +74,44 @@ test('real hand: opponent tally after the hand', () => {
   near(tally.fold, 0.99);
 });
 
+test('hand log: every action with amount, pot, stack, advice match and result', () => {
+  const t = new T({ players: {} });
+  t.on((type, p) => {
+    if (type === 'turn' && p.isHero) {
+      const b = t.solverInput('typical');
+      const r = E.analyzeSync(Object.assign({}, b.input, { iterations: 800, riverIterations: 50, mix: false, seed: 1 }));
+      t.noteAdvice(r.best.kind, r.best.ev, r, (sc) => sc.kind + ' ' + Math.round(sc.amount || 0));
+    }
+  });
+  for (const m of real) {
+    if (m.ev === 'hook:attached') { t.snap = m.snap; continue; }
+    t.handle(m.ev, m.data, m.snap);
+  }
+  const e = t.db.history[0];
+  const acts = e.log.map((x) => `${x.st} ${x.who} ${x.act} ${x.amt}`);
+  assert.deepStrictEqual(acts, [
+    'pre Hero sb 5', 'pre Testforyou bb 10', 'pre Hero call 5', 'pre Testforyou check 0',
+    'flop Testforyou bet 30', 'flop Hero call 30', 'turn Testforyou bet 10', 'turn Hero raise 40', 'turn Testforyou fold 0',
+  ]);
+  const flopBet = e.log[4];
+  assert.strictEqual(flopBet.pot, 20);
+  assert.strictEqual(flopBet.potPct, 150);
+  assert.strictEqual(flopBet.stack, 980);
+  const heroRaise = e.log[7];
+  assert.strictEqual(heroRaise.facing, 10);
+  assert.strictEqual(heroRaise.pot, 90);
+  assert.strictEqual(e.advice.length, 3);
+  for (const a of e.advice) {
+    assert.ok(a.did, 'hero action matched to advice');
+    assert.ok(typeof a.followed === 'boolean');
+    assert.ok(a.options.length >= 2 && a.pot > 0 && a.equity > 0);
+  }
+  assert.strictEqual(e.advice[2].did, 'raise 40');
+  assert.strictEqual(e.players.find((p) => p.hero).stack, 1010);
+  assert.deepStrictEqual(e.net, { Hero: 50, Testforyou: -50 });
+  assert.strictEqual(e.heroNetBB, 5);
+});
+
 test('real hand: solver returns a sane recommendation on the turn', () => {
   const x = replay(real).turns[2];
   const r = E.analyzeSync(Object.assign({}, x.input, { iterations: 6000 }));
