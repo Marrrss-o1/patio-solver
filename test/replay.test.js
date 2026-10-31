@@ -385,6 +385,18 @@ test('reads: vsOpen counts the response to a single open by its size', () => {
   assert.ok(st.vsOpen.large.cont < 0.2 && st.vsOpen.small.cont > 0.5, JSON.stringify(st.vsOpen));
 });
 
+test('reads: players who re-raised preflop fold less after the flop', () => {
+  const t = T.blankTally();
+  const flat = E.computeStats(t, 'typical');
+  const rr = E.computeStats(t, 'typical', null, { reraised: true });
+  assert.ok(rr.foldToBet < flat.foldToBet - 0.08, flat.foldToBet + ' vs ' + rr.foldToBet);
+  assert.ok(rr.byStreet[4].foldToBet < flat.byStreet[4].foldToBet && rr.foldBySize.large < flat.foldBySize.large);
+  // The unblended read is left as it is; predictAction applies the same shift by decision.
+  assert.strictEqual(rr.read.foldToBet, flat.read.foldToBet);
+  const d = { kind: 'face', n: 4, frac: 0.5, mw: false };
+  assert.ok(E.predictAction(flat, Object.assign({ reraised: true }, d)).fold < E.predictAction(flat, d).fold);
+});
+
 test('reads: range noise keeps unusual lines possible, and is learned from showdowns', () => {
   const board = C('6d As Qc');
   const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };

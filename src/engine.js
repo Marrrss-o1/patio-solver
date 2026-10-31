@@ -317,6 +317,9 @@
       // Range noise (see applyAction): the share of each line's hands that take it whatever
       // their strength. The friends' showdowns fit about half.
       noise: { mu: 0.45, k: 6 },
+      // Players who re-raised preflop (3-bet or more) fold far less to bets after the flop: about
+      // 20% in both logs against 50% for everyone. Odds multiplier on their fold rates.
+      reraisedFold: 0.45,
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -332,6 +335,7 @@
       af: 1.8, betSize: 0.6,
       tilt: { agg: 0, pas: 0, k: 6, kUp: 20 },
       noise: { mu: 0.25, k: 6 },
+      reraisedFold: 1,
     },
   };
   // A table style shifts the home prior: tighter players play fewer hands and fold more.
@@ -785,6 +789,16 @@
       mw: { all: foldMW, 3: fr.flopMW != null ? fr.flopMW : fr.flop, 4: fr.turnMW != null ? fr.turnMW : fr.turn, 5: fr.riverMW != null ? fr.riverMW : fr.river },
       multiway: mwCtx,
     };
+    // A player who re-raised preflop this hand (ctx.reraised) folds less after the flop.
+    stats.reraisedFold = prior.reraisedFold != null ? prior.reraisedFold : 1;
+    if (ctx && ctx.reraised && stats.reraisedFold !== 1) {
+      const sc = (f) => oddsScale(f, stats.reraisedFold);
+      stats.foldToBet = sc(stats.foldToBet);
+      for (const k of [3, 4, 5]) stats.byStreet[k].foldToBet = sc(stats.byStreet[k].foldToBet);
+      for (const [key] of SIZE_BUCKETS) stats.foldBySize[key] = sc(stats.foldBySize[key]);
+      stats.foldToCbet = sc(stats.foldToCbet);
+      stats.foldAfterAgg = sc(stats.foldAfterAgg);
+    }
 
     // Confidence-pinned exploitation (restricted Nash response): trust the read with
     // weight p and fill the rest with balanced play: fold f/(1+f) to a bet of f x pot
@@ -849,6 +863,7 @@
     for (const k of [3, 4, 5]) s2.byStreet[k] = Object.assign({}, stats.byStreet[k], { foldToBet: side ? side[k] : rd.byStreet[k] != null ? rd.byStreet[k] : stats.byStreet[k].foldToBet });
     let fold = d.frac != null ? foldAtSize(s2, d.frac, d.n) : s2.byStreet[d.n].foldToBet;
     if (d.aggLine && stats.foldAfterAgg != null) fold *= clamp(stats.foldAfterAgg / Math.max(0.05, s2.foldToBet), 0.15, 1);
+    if (d.reraised && stats.reraisedFold != null) fold = oddsScale(fold, stats.reraisedFold);
     const cont = 1 - fold;
     const ftbN = s2.byStreet[d.n].foldToBet;
     const raiseShare = clamp(bs.raiseFreq / Math.max(0.02, 1 - ftbN), 0.005, 0.9);
@@ -1107,6 +1122,12 @@
 
   function sigmoid(x) {
     return 1 / (1 + Math.exp(-x));
+  }
+
+  // Scales the odds of a probability: p / (1 - p) times m.
+  function oddsScale(p, m) {
+    const q = clamp(p, 1e-4, 1 - 1e-4);
+    return (q * m) / (q * m + 1 - q);
   }
 
   function logit(p) {
@@ -3176,7 +3197,10 @@
     const dead = hero.concat(board);
 
     const opps = input.opponents.map((o) => {
-      const stats = computeStats(o.tally, tableStyle, input.pool, { multiway: input.opponents.length >= 2 });
+      const stats = computeStats(o.tally, tableStyle, input.pool, {
+        multiway: input.opponents.length >= 2,
+        reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
+      });
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;

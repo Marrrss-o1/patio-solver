@@ -69,6 +69,12 @@ function decisions(h) {
     return p ? p.name : null;
   })();
   const nDealt = h.players.length;
+  // Re-raised preflop (3-bet or more): such players fold much less after the flop.
+  const reraisedBy = {};
+  for (const p of h.players) {
+    const pre = p.actions.pre || [];
+    reraisedBy[p.name] = pre.some((a) => /^\dbet$/.test(a)) || pre.filter((a) => a === 'raise').length >= 2;
+  }
   for (const p of opps) {
     const c = pfCat(p.actions.pre);
     if (c) out.push({ name: p.name, kind: 'pf', out: c, pos: p.position, n: nDealt });
@@ -91,7 +97,7 @@ function decisions(h) {
       const pos = (h.players.find((x) => x.name === e.who) || {}).position;
       if (e.facing > 0 && (e.act === 'fold' || e.act === 'call' || e.act === 'raise')) {
         const frac = e.pot - e.facing > 0 ? e.facing / (e.pot - e.facing) : null;
-        out.push({ name: e.who, kind: 'face', n, out: e.act, frac, aggLine: false, pos, mw });
+        out.push({ name: e.who, kind: 'face', n, out: e.act, frac, aggLine: false, pos, mw, reraised: reraisedBy[e.who] });
       } else if (!(e.facing > 0) && (e.act === 'check' || e.act === 'bet')) {
         out.push({ name: e.who, kind: 'open', n, out: e.act, cbet: n === 3 && first && !flopBet[e.st] && pfAgg === e.who, pos, mw });
       }
@@ -106,7 +112,7 @@ function decisions(h) {
         const mw = liveAt(j + 1) >= 3;
         (p.actions[st] || []).forEach((a, i) => {
           if (i === 0 && (a === 'check' || a === 'bet')) out.push({ name: p.name, kind: 'open', n, out: a, cbet: n === 3 && pfAgg === p.name, pos: p.position, mw });
-          else if (a === 'call' || a === 'fold' || a === 'raise') out.push({ name: p.name, kind: 'face', n, out: a, frac: null, pos: p.position, mw });
+          else if (a === 'call' || a === 'fold' || a === 'raise') out.push({ name: p.name, kind: 'face', n, out: a, frac: null, pos: p.position, mw, reraised: reraisedBy[p.name] });
         });
       });
     }
