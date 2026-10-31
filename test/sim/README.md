@@ -10,6 +10,8 @@ node test/sim/run.js --hands 2000 --players 2 --bots maniac --stack 100 \
      --a-opts '{"preflopSolver":false}' --b-opts '{}'                         # paired A/B: preflop solver off vs on
 node test/sim/run.js --hands 2000 --players 4 --bots friends --a-ref main --b-ref my-branch   # two versions of src/
 node test/sim/run.js --hands 2000 --players 2 --bots typical --agent baseline --b-agent solver
+node test/sim/tune.js --arms '{"base":{},"r0":{"patch":{"robust":0}}}' --set f4 --players 4 --bots friends  # tuning sweep
+node test/sim/validate.js <hand-log.json> ... --names <private file> --sizes  # do the bots play like the logs?
 node test/sim/selftest.js                                                      # checks the simulator itself (~40 s)
 node test/sim/profile.js <hand-log.json> ...                                   # a player's numbers from an export
 node test/sim/calibrate.js <hand-log.json> ... --names <private file>         # refits profiles.json from logs
@@ -45,6 +47,11 @@ Measured with a fast bot in hero's seat: 4-handed vs friends the per-deal spread
 and 7.6 bb corrected; heads-up vs the old typical bot, duplicate alone cuts the hands needed for a given precision
 about 3.5x and the correction another 1.6x, so about 6x in all. For A/B runs the pairing adds to that.
 
+5. **One baseline for many arms** (`tune.js`). Every result depends only on the deals and the bots' random numbers,
+   not on what else ran, so a variant played in its own run pairs with a baseline from another run exactly as it
+   would inside one A/B run (checked: same difference to the last digit). `tune.js` plays each arm once and pairs it
+   with one shared baseline, so a sweep of k settings costs k + 1 runs instead of 2k.
+
 `node test/sim/diff.js test/out/sim-<tag>.json` splits an A/B difference by hero's position and starting hand.
 `node test/sim/diff.js <file>:A <file>:B` does the same for variants from two runs of the same deals (same players,
 bots, seed and block size), so a third arm can be added later without replaying the first two.
@@ -65,7 +72,15 @@ bots, seed and block size), so a third arm can be added later without replaying 
   count as facing an open; each bet's size is capped at 2x pot so a few huge bets don't set the mean. Pooled
   over all friends (too few showdowns each), how strong river callers are at showdown sets how loosely they call
   (they call with weaker hands than a strict threshold would, and fold some better ones). WTSD and the share of weak
-  hands among shown bets come out close without being fitted.
+  hands among shown bets come out close without being fitted. Sizing, pooled: re-raises are mostly min-raises
+  (about 4 in 5, a few all-in), raises after the flop a little over half min-raises with some all-ins and the rest
+  about 4.5x, and bet sizes shrink as the pot grows (about pot-size in pots under 6bb, a fifth of the pot above 25bb;
+  log size on log pot slope -0.52, spread 0.63 around it), so the solver faces the cheap big-pot bets and the big
+  small-pot bets the real table makes. Checked with `validate.js` (below): on all 278 hands every stat, fitted or
+  not, is within the logs' sampling noise (RMS z 0.69 fitted, 0.94 pooled, 1.0 unfitted); fitted on half the
+  hands, each friend's own bot predicts the other half better than the average friend's (+0.009 to +0.012
+  log-likelihood per observation). Known gaps: the bots see a few more flops (66% vs 69%) and lead into the
+  preflop raiser more often (24% vs 17%).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
@@ -78,6 +93,35 @@ bots, seed and block size), so a third arm can be added later without replaying 
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 
 Stacks default to 150bb with friend bots (like the real lobby) and 100bb otherwise; big blind 2 chips.
+
+## Tuning sweeps
+
+`--a-patch` / `--b-patch` change solver settings that are constants in `src/engine.js`, by exact text edits to a copy
+of it (`knobs.js`, written to `test/out/tune/<hash>/src`), so a sweep needs no change to the engine until a setting
+wins. Knobs: `exploit` (scales the read's weight against balanced play), `robust` (weight of the worst opponent
+variant, 0.35), `betSizes` (flop/turn bet menu, x pot), `raiseSizes` / `preRaiseSizes`, `riverSizes` (river solver,
+at most 3), `shovePre` ([bb, x pot] below which all-in is offered preflop), `shovePost`, `cred` (hero's-story fold
+shift, x), `raiseEq` (the lookahead's raise threshold). An edit that no longer matches the engine throws, and the
+selftest checks every knob, so a knob can't silently test nothing after the engine changes. Solver inputs that are
+already options (iterations, solvers on or off) go in `--a-opts` / an arm's `opts`.
+
+`tune.js` runs arms (`{ name: { patch, opts } }`, the first is the baseline; inline JSON or a file) as separate
+single-variant runs tagged `tune-<set>-<arm>`, all to 400 deals, then all to the next stage, and so on
+(`--stages 400,1200,2400`; resumable like any tagged run, and a stage can be raised later without replaying). After
+each stage it prints every arm's paired difference from the baseline and writes `test/out/tune-<set>.json`;
+`--prune Z` stops arms more than Z standard errors behind. `--report` prints the table from what's saved. Picking the
+best of many noisy arms overstates it (winner's curse): confirm a winner on fresh deals (`--seed`) before trusting
+its number.
+
+## Checking the bots
+
+`validate.js` plays the calibrated bots against each other (4-handed with the hero bot, as in calibration) and
+compares every stat `profile.js` measures with the real logs, per friend, in units of the real number's sampling
+error (z), fitted and unfitted stats alike. RMS z near 1 and about 5% beyond 2 SE is as good as the logs can tell.
+For a held-out check, fit on half the hands and validate on the other half (`calibrate.js even.json --out p.json
+--names n.json`, then `validate.js odd.json --profiles p.json --names n.json`); "per-friend bots vs the pooled bot" is
+the log-likelihood gain per observation of each friend's own bot over the average friend's on hands it never saw.
+`--sizes` prints the spread of open, re-raise, raise and bet sizes, real vs bots.
 
 ## Speed
 
