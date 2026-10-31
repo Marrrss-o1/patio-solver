@@ -1250,6 +1250,31 @@ test('solver bets are at least the big blind (small pots on the river)', () => {
   for (const s of r.ranked) if (s.kind === 'bet') assert.ok(s.amount >= 10, `bet ${s.amount}`);
 });
 
+test('solver EVs: an option hero never takes is valued with good play after it (check-fold is not a loss)', () => {
+  // Air, first to act on the river. The solver bets it as a bluff every time, so its average
+  // strategy after a check never trained on this hand and stayed near uniform: it called and
+  // shoved 2 times in 3 after checking, and checking showed -18 chips. Checking and then folding
+  // to a bet loses nothing.
+  const spot = { hero: C('6h 2d'), board: C('5c 5d Kc 3d Ac'), pot: 176, toCall: 0, stack: 180, bigBlind: 10, inPosition: false, mix: false, seed: 1,
+    iterations: 3000, riverIterations: 150, heroCommitted: 6,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'check', flop: 'check', turn: 'call', river: '' }, stack: 200, committed: 134, heroIP: false }] };
+  for (const extra of [{}, { riverIterations: 1500 }]) {
+    const r = E.analyzeSync(Object.assign({}, spot, extra));
+    assert.strictEqual(r.solver && r.solver.kind, 'river');
+    const check = r.ranked.find((s) => s.kind === 'check');
+    assert.ok(check.ev >= 0, `check EV ${check.ev}`);
+  }
+  // The same on the turn (turn and river in one solve) and preflop: every check is worth at least 0.
+  const turn = E.analyzeSync(Object.assign({}, spot, { board: C('5c 5d Kc 3d'), turnSolver: true, turnIterations: 12,
+    opponents: [Object.assign({}, spot.opponents[0], { actions: { pre: 'check', flop: 'check', turn: '' } })] }));
+  assert.strictEqual(turn.solver && turn.solver.kind, 'turn');
+  assert.ok(turn.ranked.find((s) => s.kind === 'check').ev >= 0);
+  const bb = E.analyzeSync({ hero: C('7h 2d'), board: [], pot: 20, toCall: 0, stack: 990, bigBlind: 10, inPosition: false, mix: false, seed: 1, iterations: 2000,
+    preflopIterations: 200, heroActions: { pre: 'pending' }, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call' } }] });
+  assert.strictEqual(bb.solver && bb.solver.kind, 'preflop');
+  assert.ok(bb.ranked.find((s) => s.kind === 'check').ev >= 0);
+});
+
 test('blinds: a big blind posted short (all-in for less) does not change the big blind', () => {
   // Ann (s3) is the big blind with 4 chips left; the table's big blind is 10.
   const msgs = [];

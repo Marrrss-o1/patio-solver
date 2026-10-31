@@ -93,6 +93,9 @@ function adviceProblems(inp, res) {
     if (s.ev < -stack - 1e-6) out.push(`${lbl}: EV ${s.ev.toFixed(1)} loses more than the stack`);
     if (s.ev > maxWin) out.push(`${lbl}: EV ${s.ev.toFixed(1)} wins more than is there (${maxWin.toFixed(1)})`);
     if (s.kind === 'fold' && !near(s.ev, 0)) out.push(`fold EV ${s.ev}`);
+    // A solver values each option with hero playing the rest of the hand well, and a check can
+    // always be followed by a fold, so it is never worth less than nothing.
+    if (res.solver && s.kind === 'check' && s.ev < -1e-6) out.push(`${lbl}: EV ${s.ev.toFixed(2)} below 0 (hero can check and then fold)`);
     if (s.freq != null && !(s.freq >= -1e-9 && s.freq <= 1 + 1e-9)) out.push(`${lbl}: frequency ${s.freq}`);
   }
   const fs = res.ranked.reduce((a, s) => a + (s.freq || 0), 0);
