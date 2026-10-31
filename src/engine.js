@@ -1623,6 +1623,7 @@
   // What an opponent did on a street of the lookahead (makePlan's line masks, 2 bits per street).
   const LINE_CALL = 1, LINE_CHECK = 2, LINE_BET = 3;
   const lineAt = (m, s, kind) => (m & ~(3 << (2 * (s - 3)))) | (kind << (2 * (s - 3)));
+  const LINE_SOFT = 0.5;
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
@@ -1736,8 +1737,11 @@
       const kind = (m >> (2 * (b - 3))) & 3;
       const prev = survivors(b, m & (below(b) | ~15));
       const t = plan.at(b, m);
-      const share = b === street && m >> 4 ? ((m >> 4) - 1) / 20 : -1;
-      const cut = share >= 0 ? t.q(1 - share) : t.callCut(HERO_BET), xb = xs[b];
+      // Callers: the share that continued, widened by LINE_SOFT toward the whole range, because
+      // players who called once fold less to the next bet than their read (logs: 33% on the turn
+      // after calling the flop, read about 45%; whole-range quantiles gave 14%).
+      const share = b === street && m >> 4 ? ((m >> 4) - 1) / 20 : 1 - t.foldHero;
+      const cut = t.q(1 - (share + LINE_SOFT * (1 - share))), xb = xs[b];
       const keep = (j) => {
         const x = xb[j];
         if (kind === LINE_CALL) return x >= cut;

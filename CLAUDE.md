@@ -106,11 +106,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the spots it can, and the Monte Carlo's `realize` (position, suitedness, connectedness, pairs, opponent count and
   stack depth) the rest. An opponent's thresholds on later streets come from the hands that would have played
   their line so far in the lookahead (called, checked, or bet: `plan.at(s, m)` with 2-bit `LINE_*` masks per
-  street; the current decision's callers count as called), so every line folds, bets and raises at the read's
-  rate. With whole-range quantiles (v1.6.0 and before) a player who had called the flop folded 14% to a turn bet
-  when the read said 45%, so weak multiway stabs and raises looked good (J-high bet 12 into 24 four-way). The logs
-  agree with the read-rate view: after calling the flop friends fold 33% to a turn bet (27 spots), 51% after a
-  checked flop (41); on the river 71% after calling the turn (21), 60% after a checked turn (48).
+  street; the current decision's callers count as called, at their actual continue rate, `lineCont`), so each
+  line folds, bets and raises at about the read's rate. Callers are only half narrowed (`LINE_SOFT` 0.5: the
+  survivors are the continuing share plus half of the rest), because the logs show players who called once fold
+  less than their read: after calling the flop friends fold 33% to a turn bet (27 spots), 51% after a checked flop
+  (41); on the river 71% after calling the turn (21), 60% after a checked turn (48). The lookahead now gives about
+  30% after a call and 62-68% on the river after a check. With whole-range quantiles (v1.6.0 and before) a player
+  who had called the flop folded only 14% to a turn bet, so weak multiway stabs and raises looked good (J-high bet
+  12 into 24 four-way); with full narrowing (read rate after every call) hero bluffed turns and checked top sets.
+  On the current street players who already checked can't open the betting again.
 - Preflop solver (`preflopSolve`): heads-up preflop spots (one opponent left, any action so far) and opens with
   2-8 players still to act (all pending; they are one "field" whose hand is the strongest continuing one,
   `fieldMax`; no open-limp option there). Discounted CFR over the 169 classes, compatible-pair counts from
@@ -259,7 +263,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up preflop solver alone adds +2 ± 16 there); gain mostly from the blinds (SB +23 ± 11, BB +26 ± 10), UTG
   −9 ± 8. Heads-up preflop solver on minus off: typical bot −4 ± 13 (2,000 deals), maniac +18 ± 20, friends −2 ± 22,
   so about neutral (+2 ± 10 pooled). Multiway river fixes (fieldStats, overcalls) +3.5 ± 16; turn solver on vs off
-  heads-up +1.9 ± 21 and 4-handed +5 ± 20 (1,000 deals); multiway preflop on the refit bots (limpers fold like the
+  heads-up +1.9 ± 21 and 4-handed +5 ± 20, then +20 ± 22 on the size-aware bots (1,000 deals each; pooled 4-handed
+  about +12 ± 15); multiway preflop on the refit bots (limpers fold like the
   friends) +31 ± 18; v1.4.0 vs v1.5.0 main +13 ± 21 4-handed, +12 ± 22 heads-up; side-pot gate (#21) +28 ± 16; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
   against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals). Bots are simple; this is a regression check, not proof
   of an edge against real players.
