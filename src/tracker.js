@@ -730,6 +730,8 @@
       const hi = afterDealer.findIndex((p) => p.id === heroId);
       const rotated = afterDealer.slice(hi + 1).concat(afterDealer.slice(0, hi));
       const opps = rotated.filter((p) => !p.folded);
+      // Players before hero in postflop order act first, so hero is in position against them.
+      const actsBefore = new Set(afterDealer.slice(0, hi).map((p) => p.id));
       if (!opps.length) return { error: 'Everyone else has folded.' };
 
       let pot = 0;
@@ -765,7 +767,7 @@
           // For side pots: chips already in the pot this hand, and chips behind.
           committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null,
           // Chips in on this street (blinds count), so the engine knows what each still owes.
-          bet: o.stageBet };
+          bet: o.stageBet, heroIP: actsBefore.has(o.id) };
       });
 
       return {

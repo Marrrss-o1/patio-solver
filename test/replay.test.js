@@ -1111,5 +1111,19 @@ test('robust EV: shoves on the flop and turn are stress-tested like other bets',
   assert.notStrictEqual(r.best.kind, 'allin');
 });
 
+test('multiway: position is taken against each opponent, not the whole table', () => {
+  // Hero in the big blind on the flop: the small blind acts before hero, the button after.
+  const x = replay(three).turns[1];
+  assert.strictEqual(x.input.inPosition, false);
+  assert.deepStrictEqual(x.input.opponents.map((o) => [o.name, o.heroIP]), [['Ann', false], ['Bob', true]]);
+  // The play-outs (multiway, and heads-up once one folds) use hero's position against each
+  // opponent: a draw that bets is worth more acting last against both than acting first.
+  const spot = (ip) => E.analyzeSync({ hero: C('9h 8h'), board: C('Kd 7c 2h'), pot: 90, toCall: 0, stack: 970, bigBlind: 10, mix: false, seed: 6, iterations: 8000, inPosition: false,
+    opponents: ['A', 'B'].map((n) => ({ name: n, tally: {}, actions: { pre: 'call', flop: 'check' }, heroIP: ip })) });
+  const bet = (r) => r.ranked.find((s) => s.kind === 'bet').evRead;
+  const ip = spot(true), oop = spot(false);
+  assert.ok(bet(ip) > bet(oop) + 3, `${bet(ip)} vs ${bet(oop)}`);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

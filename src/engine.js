@@ -4452,6 +4452,9 @@
     const plans = [];
 
     const inPosition = input.inPosition !== false;
+    // Hero's position against each opponent (acts after them on later streets). The tracker
+    // passes it per opponent; without it, hero's position against the whole table is used.
+    const heroIPvs = input.opponents.map((o) => (o.heroIP != null ? !!o.heroIP : inPosition));
     let realize = 1;
     if (street === 0) {
       // No preflop lookahead (a flop-by-flop playout is too slow for a phone), so how much of
@@ -4590,7 +4593,7 @@
           if (oppBets()) r = heroFaces();
           if (r === false) return -heroIn - extra;
           if (r === 'won') return P - heroIn - extra;
-        } else if (inPosition) {
+        } else if (heroIPvs[i]) {
           if (oppBets()) {
             r = heroFaces();
             if (r === false) return -heroIn - extra;
@@ -4658,7 +4661,7 @@
           for (const i of list) if (opps[i].pending) order.push(i);
           order.push(HERO);
           for (const i of list) if (!opps[i].pending) order.push(i);
-        } else order = inPosition ? list.concat([HERO]) : [HERO].concat(list);
+        } else order = list.filter((i) => heroIPvs[i]).concat([HERO], list.filter((i) => !heroIPvs[i]));
         const opensFrom = s === street ? order.indexOf(HERO) : order.length; // hero can't open after checking
         let bettor = -2, B = 0, at = -1;
         for (let k = 0; k < order.length && bettor === -2; k++) {
