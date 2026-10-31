@@ -2168,6 +2168,18 @@ function ENGINE() {
    */
   const RIVER_ITERATIONS = 250;
 
+  // The solvers' final pass reads each root option's EV for hero's hand. Below the root, hero
+  // takes the best action at each decision (against the opponent's average strategy), so an
+  // option is worth what it is worth if hero plays the rest of the hand well. With the average
+  // strategy there instead, a line hero's hand never takes kept the strategy of the first few
+  // iterations (close to uniform): a check that hero would check-fold showed up as a loss.
+  function bestOf(vals, v, n) {
+    for (let i = 0; i < n; i++) { let m = vals[0][i]; for (let a = 1; a < vals.length; a++) if (vals[a][i] > m) m = vals[a][i]; v[i] = m; }
+  }
+  function bestRows(V, M, nA, out, n) {
+    for (let i = 0; i < n; i++) { let m = V[i]; for (let a = 1; a < nA; a++) if (V[a * M + i] > m) m = V[a * M + i]; out[i] = m; }
+  }
+
   function riverSolve(cfg) {
     const { board, heroCombo, heroW, oppW, oppStats, p, pot: P0, toCall, stack, heroFirst, bigBlind } = cfg;
     const strengths = cfg.strengths;
@@ -2340,7 +2352,7 @@ function ENGINE() {
         add({ kind: 'check', amount: 0 }, lastToAct ? { term: 'show', hIn, oIn } : () => node(1 - player, hIn, oIn, 0, raisesLeft, true));
         const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left ? 'allin' : 'bet', amount: b, frac: b / potNow }, () => node(1 - player, h2, o2, b, raisesLeft, true));
@@ -2426,6 +2438,7 @@ function ENGINE() {
         if (own) { vals.push(va); for (let i = 0; i < N; i++) v[i] += s[off + i] * va[i]; }
         else for (let i = 0; i < N; i++) v[i] += va[i];
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, N);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -2525,6 +2538,7 @@ function ENGINE() {
         if (own) { vals.push(va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, Np); }
         else k.addTo(v.byteOffset, va.byteOffset, Np);
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, N);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -2858,7 +2872,7 @@ function ENGINE() {
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 4 ? turnBets : riverBets) : [betFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
@@ -2968,25 +2982,27 @@ function ENGINE() {
       const nA = n.acts.length, N = sides[n.player].n, s = P.s, R2 = P.r2f, V = P.valf, M = NMAX;
       const reg = n.regret, sum = n.sum, fx = n.fixed;
       const base = n.player === 0 ? rH : rO;
-      if (avg) {
-        for (let i = 0; i < N; i++) {
+      // In the final pass (avg) a hand that never reached this node (or a subgame first built
+      // there) plays its current strategy, not a uniform one.
+      const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
+      for (let i = 0; i < N; i++) {
+        if (avg) {
           let t = 0;
           for (let a = 0; a < nA; a++) t += sum[a * N + i];
-          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * N + i] / t : 1 / nA; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
-        }
-      } else {
-        const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
-        for (let i = 0; i < N; i++) {
-          let t = 0;
-          for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
-          const inv = t > 0 ? 1 / t : 0;
-          for (let a = 0; a < nA; a++) {
-            const r = reg[a * N + i];
-            let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
-            if (mix) x = p * fx[a * N + i] + q1 * x;
-            s[a * N + i] = x;
-            R2[a * M + i] = base[i] * x;
+          if (t > 0) {
+            for (let a = 0; a < nA; a++) { const x = sum[a * N + i] / t; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
+            continue;
           }
+        }
+        let t = 0;
+        for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
+        const inv = t > 0 ? 1 / t : 0;
+        for (let a = 0; a < nA; a++) {
+          const r = reg[a * N + i];
+          let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
+          if (mix) x = p * fx[a * N + i] + q1 * x;
+          s[a * N + i] = x;
+          R2[a * M + i] = base[i] * x;
         }
       }
       for (let a = 0; a < nA; a++) {
@@ -2999,7 +3015,8 @@ function ENGINE() {
         return;
       }
       if (avg) {
-        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
+        if (n.player === 0) bestRows(V, M, nA, out, NT);
+        else for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
         if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
         return;
       }
@@ -3108,16 +3125,17 @@ function ENGINE() {
       }
       const k = KT.k, nA = n.acts.length, Np = n.Np, s = P.s, R2 = P.r2f, V = P.valf, M = MK;
       const base = n.player === 0 ? rH : rO;
+      // The current strategy; in the final pass (avg) the average replaces it for every hand that
+      // reached this node.
+      k.turnStrategy(n.regret.byteOffset, s.byteOffset, R2.byteOffset, base.byteOffset, nA, Np, M,
+        n.player === 1 ? n.fixed.byteOffset : 0, p, 1 - p, 1 / nA);
       if (avg) {
         const N = sides[n.player].n, sum = n.sum;
         for (let i = 0; i < N; i++) {
           let t = 0;
           for (let a = 0; a < nA; a++) t += sum[a * Np + i];
-          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * Np + i] / t : 1 / nA; s[a * Np + i] = x; R2[a * M + i] = base[i] * x; }
+          if (t > 0) for (let a = 0; a < nA; a++) { const x = sum[a * Np + i] / t; s[a * Np + i] = x; R2[a * M + i] = base[i] * x; }
         }
-      } else {
-        k.turnStrategy(n.regret.byteOffset, s.byteOffset, R2.byteOffset, base.byteOffset, nA, Np, M,
-          n.player === 1 ? n.fixed.byteOffset : 0, p, 1 - p, 1 / nA);
       }
       for (let a = 0; a < nA; a++) {
         if (n.player === 0) cfrK(n.kids[a], trav, P.r2[a], rO, avg, d + 1, P.vals[a]);
@@ -3126,7 +3144,8 @@ function ENGINE() {
       const NT = T.n;
       if (n.player !== trav) { k.sumRows(V.byteOffset, out.byteOffset, nA, ev(NT), M); return; }
       if (avg) {
-        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * Np + i] * V[a * M + i]; out[i] = v; }
+        if (n.player === 0) bestRows(V, M, nA, out, NT);
+        else for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * Np + i] * V[a * M + i]; out[i] = v; }
         if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
         return;
       }
@@ -3478,7 +3497,7 @@ function ENGINE() {
         add({ kind: 'check', amount: 0 }, (frc) => (lastToAct ? close(hIn, oIn, frc, oppAgg, nb) : makeNode(n5, card, 1 - player, hIn, oIn, 0, raisesLeft, true, false, frc, oppAgg, q, nb)));
         const fracs = player === 0 ? (n5 === 3 ? flopBets : turnBets) : [betFrac];
         for (const f of fracs) {
-          const b = Math.min(left, round(f * potNow));
+          const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
           const [h2, o2] = after(b);
           add({ kind: b >= left - 1e-9 ? 'allin' : 'bet', amount: b, frac: b / potNow },
@@ -3572,25 +3591,27 @@ function ENGINE() {
       const nA = n.acts.length, N = sides[n.player].n, s = P.s, R2 = P.r2f, V = P.valf, M = NMAX;
       const reg = n.regret, sum = n.sum, fx = n.fixed;
       const base = n.player === 0 ? rH : rO;
-      if (avg) {
-        for (let i = 0; i < N; i++) {
+      // In the final pass (avg) a hand that never reached this node (or a subgame first built
+      // there) plays its current strategy, not a uniform one.
+      const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
+      for (let i = 0; i < N; i++) {
+        if (avg) {
           let t = 0;
           for (let a = 0; a < nA; a++) t += sum[a * N + i];
-          for (let a = 0; a < nA; a++) { const x = t > 0 ? sum[a * N + i] / t : 1 / nA; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
-        }
-      } else {
-        const mix = n.player === 1, q1 = 1 - p, u = 1 / nA;
-        for (let i = 0; i < N; i++) {
-          let t = 0;
-          for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
-          const inv = t > 0 ? 1 / t : 0;
-          for (let a = 0; a < nA; a++) {
-            const r = reg[a * N + i];
-            let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
-            if (mix) x = p * fx[a * N + i] + q1 * x;
-            s[a * N + i] = x;
-            R2[a * M + i] = base[i] * x;
+          if (t > 0) {
+            for (let a = 0; a < nA; a++) { const x = sum[a * N + i] / t; s[a * N + i] = x; R2[a * M + i] = base[i] * x; }
+            continue;
           }
+        }
+        let t = 0;
+        for (let a = 0; a < nA; a++) { const r = reg[a * N + i]; if (r > 0) t += r; }
+        const inv = t > 0 ? 1 / t : 0;
+        for (let a = 0; a < nA; a++) {
+          const r = reg[a * N + i];
+          let x = t > 0 ? (r > 0 ? r * inv : 0) : u;
+          if (mix) x = p * fx[a * N + i] + q1 * x;
+          s[a * N + i] = x;
+          R2[a * M + i] = base[i] * x;
         }
       }
       for (let a = 0; a < nA; a++) {
@@ -3603,7 +3624,8 @@ function ENGINE() {
         return;
       }
       if (avg) {
-        for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
+        if (n.player === 0) bestRows(V, M, nA, out, NT);
+        else for (let i = 0; i < NT; i++) { let v = 0; for (let a = 0; a < nA; a++) v += s[a * N + i] * V[a * M + i]; out[i] = v; }
         if (d === 0) n.vals = P.vals.slice(0, nA).map((x) => Float64Array.from(x.subarray(0, NT)));
         return;
       }
@@ -4217,6 +4239,7 @@ function ENGINE() {
         if (own) { vals.push(avg ? Float64Array.from(va) : va); for (let i = 0; i < NC; i++) v[i] += s[a * NC + i] * va[i]; }
         else for (let i = 0; i < NC; i++) v[i] += va[i];
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, NC);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -4255,6 +4278,7 @@ function ENGINE() {
         if (own) { vals.push(avg ? Float64Array.from(va.subarray(0, NC)) : va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, NP); }
         else k.addTo(v.byteOffset, va.byteOffset, NP);
       }
+      if (own && avg && n.player === 0) bestOf(vals, v, NC);
       if (own && !avg) {
         const pos = Math.pow(iter, 1.5) / (Math.pow(iter, 1.5) + 1);
         const w = Math.pow(iter / (iter + 1), 2);
@@ -5704,7 +5728,7 @@ ENGINE();
       this.hand = {
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
-        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: s.bigBlind || null,
+        currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: this.settingsBB || s.bigBlind || null,
         finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
       };
       this.pendingRaw = null;
@@ -5750,7 +5774,18 @@ ENGINE();
             h.log.push({ st: 'pre', who: p.name, hero: p.id === this.heroId(), act: ev === 'game:big_blind_paid' ? 'bb' : 'sb', amt: data.amount });
           }
           h.currentBet = Math.max(h.currentBet, data.amount);
-          if (ev === 'game:big_blind_paid') h.bigBlind = data.amount;
+          if (ev === 'game:big_blind_paid') {
+            // A big blind posted short (the player is all-in for less) doesn't change the blinds.
+            const sp = p && this.snap && this.snap.players.find((x) => x.id === p.id);
+            const short = sp && sp.stack - data.amount <= 0;
+            h.bigBlind = Math.max(data.amount, this.settingsBB || 0, short ? (this.snap && this.snap.bigBlind) || 0 : 0);
+          }
+          break;
+        }
+        case 'admin:game:new_hand_started': {
+          // The table's settings for the next hand (it comes just before set_blinds).
+          const gs = data && data.gameSettings;
+          if (gs && gs.big_blind > 0) this.settingsBB = +gs.big_blind;
           break;
         }
         case 'game:cards_dealt_to_player':
@@ -5806,6 +5841,7 @@ ENGINE();
         case 'game:game_ended':
         case 'admin:game:game_stopped':
           this.finishHand();
+          if (ev === 'game:game_ended' && h) this.settleFromPayout(h, data);
           break;
         default:
           break;
@@ -6112,8 +6148,39 @@ ENGINE();
       list.push(rec);
     }
 
-    // Stacks only update after the pot is paid, so each hand's result is filled in from the
-    // next hand's starting stacks (rebuys between hands would show up as winnings).
+    // Each hand's result: what the server paid each player at game_ended (winnersInfo: won
+    // plus uncalled bets handed back) minus what they put in. Without a usable payout it is
+    // filled in from the next hand's starting stacks instead (settleLog), where rebuys show up
+    // as winnings and a player who busted and left has no result: in Marwin's log that dropped
+    // his own -60bb hand from the hand log's results.
+    settleFromPayout(h, data) {
+      if (!h.logEntry || h.logEntry.net) return;
+      const gr = data && data.endPopupData && data.endPopupData.gameResults;
+      const info = gr && gr.winnersInfo;
+      if (!info || typeof info !== 'object' || !Object.keys(info).length) return;
+      const list = Object.values(h.players);
+      const won = {};
+      let paid = 0;
+      for (const [auth, w] of Object.entries(info)) {
+        const pd = (w && w.playerData) || {};
+        const p = list.find((x) => x.auth === (pd.authUserId || auth)) || list.find((x) => pd.posType && x.pos === pd.posType);
+        if (!p) return; // a winner this hand doesn't know
+        const x = (+w.wonAmount || 0) + (+w.refundUncalledBetsAmount || 0);
+        won[p.id] = (won[p.id] || 0) + x;
+        paid += x;
+      }
+      // The payout has to account for every chip put in (less any rake), or the tracker missed
+      // something: then the stacks decide.
+      const rake = (gr.sidePotsWithWinners || []).reduce((a, sp) => a + (+(sp && sp.potRake) || 0), 0);
+      const put = list.reduce((a, p) => a + p.total, 0);
+      if (Math.abs(paid + rake - put) > 0.01) return;
+      const net = {};
+      for (const p of list) net[p.name] = Math.round(((won[p.id] || 0) - p.total) * 100) / 100;
+      this.applyNet(h, net);
+    }
+
+    // Stacks only update after the pot is paid, so without a payout (settleFromPayout) each
+    // hand's result is filled in from the next hand's starting stacks.
     settleLog(s) {
       const prev = this.hand;
       if (!prev || !prev.logEntry || prev.logEntry.net) return;
@@ -6122,6 +6189,10 @@ ENGINE();
         const now = s.players.find((x) => x.id === p.id);
         if (now && now.stack != null) net[p.name] = Math.round((+now.stack - p.start) * 100) / 100;
       }
+      this.applyNet(prev, net);
+    }
+
+    applyNet(prev, net) {
       prev.logEntry.net = net;
       const live = Object.values(prev.players).filter((p) => !p.folded).length;
       for (const p of Object.values(prev.players)) {
@@ -6621,7 +6692,7 @@ function slim(r) {
     panel.classList.toggle('stale', !!(advice && advice.stale));
 
     // Bar
-    if (blocked) mainEl.innerHTML = '<span class="act idle">Off at public tables</span>';
+    if (blocked) mainEl.innerHTML = '<span class="act idle">' + (status === WAIT_MSG ? 'Waiting for the table' : 'Off at public tables') + '</span>';
     else if (thinking && !fresh) mainEl.innerHTML = '<span class="act idle"><span class="spin"></span>Thinking…</span>';
     else if (advice) {
       var b = advice.result.best;
@@ -6713,6 +6784,8 @@ function slim(r) {
     'game:cards_deal_to_stack': 1, 'game:card_deal_to_stack': 1, 'player:game:action_taken': 1,
     'game:player_turn_started': 1, 'game:player_turn_ended': 1, 'game:game_ended': 1, 'admin:game:game_stopped': 1
   };
+  var PUBLIC_MSG = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.';
+  var WAIT_MSG = 'Waiting to see what kind of table this is…';
   function snapshot() {
     var gm = W.GameManager, st = (gm && gm.state) || {};
     var bs = (st.settings && st.settings.blind_sizes) || [];
@@ -6727,8 +6800,10 @@ function slim(r) {
   }
   function onEvent(ev, data) {
     var snap = snapshot();
-    if (snap.tableType && snap.tableType !== 'private') {
-      if (!blocked) { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; render(); }
+    // Private lobbies only. A table whose type isn't known yet (page still loading) is off too.
+    if (snap.tableType !== 'private') {
+      var msg = snap.tableType ? PUBLIC_MSG : WAIT_MSG;
+      if (!blocked || status !== msg) { blocked = true; status = msg; render(); }
       return;
     }
     blocked = false;
@@ -6744,8 +6819,8 @@ function slim(r) {
       if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
     });
     tracker.snap = snapshot();
-    if (tracker.snap.tableType && tracker.snap.tableType !== 'private') { blocked = true; status = 'Patio Solver only runs in private lobbies with friends. It stays off at public tables.'; }
-    else if (!tracker.hand) status = 'Connected. Advice starts next hand.';
+    if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
+    else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }
     render();
   }, 300);
 
