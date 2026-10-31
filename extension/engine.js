@@ -808,7 +808,7 @@
     if (action === 'bet') {
       P = aggressionProbs(W, st, clamp(stats.betFreq * sizeScale, 0.03, 0.95), vr);
       // Home players also bet medium hands (second pair, weak top pair) "to see where they are".
-      // Without this slice, mkorn's TT betting the flop and turn on J-J-Q was ruled out of his range.
+      // Without this slice, a friend's TT betting the flop and turn on J-J-Q was ruled out of the range.
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? MEDIUM_BET * stats.betFreq * sizeScale : 0);
     } else if (action === 'check') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
@@ -816,7 +816,7 @@
       for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(slow, 1 - P[k]);
     } else if (action === 'raise') {
       // Only flop min-raises get the extra width (K8o and a flush draw at the owner's table). Turn and
-      // river raises stay value-heavy even when small: Tad's turn min-raise was a flush, mkorn's 23%
+      // river raises stay value-heavy even when small: one friend's turn min-raise was a flush, another's 23%
       // river raise was AA.
       const rScale = st.street === 3 ? sizeScale : Math.min(sizeScale, 1.2);
       P = aggressionProbs(W, st, clamp(stats.raiseFreq * 1.2 * rScale, 0.04, 0.5), clamp(vr + 0.05, 0.6, 0.92));
