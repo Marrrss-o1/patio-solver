@@ -19,8 +19,13 @@ const fs = require('fs');
   const shots = process.argv[3] ? process.argv[3].split(',').map(Number) : [];
   for (let i = 0; i < msgs.length; i++) {
     await page.evaluate(m => window.postMessage(Object.assign({ source: 'patio-solver-hook' }, m), location.origin), msgs[i]);
-    await page.waitForTimeout(msgs[i].ev === 'game:player_turn_started' ? 3500 : 40);
+    await page.waitForTimeout(msgs[i].ev === 'game:player_turn_started' ? +(process.env.WAIT || 3500) : 40);
     if (shots.includes(i)) await page.screenshot({ path: path.join(out, `ext_${i}.png`) });
+    // PANELS=1 prints the panel after each turn (to see the advice the extension gave).
+    if (process.env.PANELS && msgs[i].ev === 'game:player_turn_started') {
+      console.log('--- after message ' + i + ' ---');
+      console.log(await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; }));
+    }
   }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'ext_end.png') });

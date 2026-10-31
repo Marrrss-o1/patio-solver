@@ -1,5 +1,8 @@
 // Heads-up simulation: agent (solver or baseline) vs a scripted amateur bot.
 // Usage: node test/sim.js <hands> <solver|baseline> <station|typical|maniac> <seed>
+// Env: DUP=1 plays every deal twice with the seats and cards swapped (cuts card luck),
+// PF=0 turns the preflop solver off, PFIT=<n> sets its iterations, TURN=1 turns the turn
+// solver on (TURNIT=<n> iterations), TAG=<name> is added to the output file name.
 // Plays the solver (driven through the real tracker, like the overlay) or a simple solid
 // rule-based bot against a scripted amateur. Same seed = same deals, so solver and
 // baseline runs can be compared hand by hand. Per-hand results go to test/out/.
@@ -98,9 +101,11 @@ let lastAdvice = null;
 function solverAct(g, me, r) {
   const b = tracker.solverInput('typical');
   if (b.error) { stats.errors++; return baselineAct(g, me, r); }
-  const res = E.analyzeSync(Object.assign({}, b.input, { iterations: 3000, riverIterations: 120, seed: (r() * 4294967296) >>> 0 }));
+  const res = E.analyzeSync(Object.assign({}, b.input, { iterations: 3000, riverIterations: 120, seed: (r() * 4294967296) >>> 0 },
+    process.env.PF === '0' ? { preflopSolver: false } : {}, process.env.PFIT ? { preflopIterations: +process.env.PFIT } : {},
+    process.env.TURN === '1' ? { turnSolver: true, turnIterations: +(process.env.TURNIT || 30) } : {}));
   const best = res.best;
-  if (process.env.DIAG) DIAG.push({ st: g.board.length, facing: b.input.toCall > 0, f: b.input.toCall / Math.max(1, b.input.pot - b.input.toCall), kind: best.kind, hp: g.board.length ? E.handPercentile(g.hands[0], g.board) : pfStrength(g.hands[0]), eq: res.equity && res.equity.share, solver: !!res.solver, hand: CURHAND });
+  if (process.env.DIAG) DIAG.push({ st: g.board.length, facing: b.input.toCall > 0, f: b.input.toCall / Math.max(1, b.input.pot - b.input.toCall), kind: best.kind, amt: best.amount, toCall: b.input.toCall, pot: b.input.pot, btn: g.btn === 0, cards: g.hands[0].map(cstr).join(''), hp: g.board.length ? E.handPercentile(g.hands[0], g.board) : pfStrength(g.hands[0]), eq: res.equity && res.equity.share, solver: res.solver && res.solver.kind, hand: CURHAND });
   if (best.kind === 'fold') return { t: 'fold' };
   if (best.kind === 'check') return { t: 'check' };
   if (best.kind === 'call') return { t: 'call' };
@@ -110,12 +115,13 @@ function solverAct(g, me, r) {
 // ---------- game ----------
 const DIAG = []; let CURHAND = 0;
 const stats = { net: 0, hands: 0, errors: 0, sq: 0 };
-function play(handNo, rs) {
+function play(handNo, rs, swap) {
   const r = rng32(rs);
   const deck = Array.from({ length: 52 }, (_, i) => i);
   for (let i = 51; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
-  const btn = handNo % 2; // 0 = hero on button
-  const g = { hands: [[deck[0], deck[1]], [deck[2], deck[3]]], boardAll: deck.slice(4, 9), board: [], stack: [START, START], bet: [0, 0], pot: 0, cur: 0, folded: [false, false], btn, raises: 0, pfAgg: -1 };
+  const btn = swap ? 1 - (handNo % 2) : handNo % 2; // 0 = hero on button
+  const hands = swap ? [[deck[2], deck[3]], [deck[0], deck[1]]] : [[deck[0], deck[1]], [deck[2], deck[3]]];
+  const g = { hands, boardAll: deck.slice(4, 9), board: [], stack: [START, START], bet: [0, 0], pot: 0, cur: 0, folded: [false, false], btn, raises: 0, pfAgg: -1 };
   const botR = rng32(rs ^ 0xabcdef);
   const agentR = rng32(rs ^ 0x123457);
   const sbP = btn, bbP = 1 - btn;
@@ -191,11 +197,18 @@ function play(handNo, rs) {
 const NETS = [];
 const N = +HANDS, base = +SEED * 100000;
 const t0 = Date.now();
+const DUP = process.env.DUP === '1';
+const PAIRS = [];
 for (let i = 0; i < N; i++) {
-  CURHAND = i; const net = play(i, base + i);
+  CURHAND = i;
+  const d = DUP ? i >> 1 : i;
+  const net = play(d, base + d, DUP && (i & 1) === 1);
   NETS.push(net); stats.net += net; stats.sq += net * net; stats.hands++;
+  if (DUP && (i & 1)) PAIRS.push(NETS[i - 1] + net);
 }
-const mean = stats.net / N, sd = Math.sqrt(stats.sq / N - mean * mean);
-if (process.env.DIAG) require('fs').writeFileSync(require('path').join(OUT, 'diag_') + BOT + '.json', JSON.stringify({ DIAG, NETS }));
-require('fs').writeFileSync(require('path').join(OUT, 'nets_') + AGENT + '_' + BOT + '_' + SEED + '.json', JSON.stringify(NETS));
+const mean = stats.net / N;
+// With DUP the spread comes from the pairs (both seats of a deal), which is much smaller.
+const sd = DUP ? Math.sqrt(PAIRS.reduce((a, x) => a + x * x, 0) / PAIRS.length - (2 * mean) ** 2) / Math.SQRT2 : Math.sqrt(stats.sq / N - mean * mean);
+if (process.env.DIAG) require('fs').writeFileSync(require('path').join(OUT, 'diag_') + BOT + (process.env.TAG ? '_' + process.env.TAG : '') + '.json', JSON.stringify({ DIAG, NETS }));
+require('fs').writeFileSync(require('path').join(OUT, 'nets_') + AGENT + '_' + BOT + '_' + SEED + (process.env.TAG ? '_' + process.env.TAG : '') + (DUP ? '_dup' : '') + '.json', JSON.stringify(NETS));
 console.log(JSON.stringify({ agent: AGENT, bot: BOT, hands: N, bb100: (mean / BB) * 100, se100: (sd / Math.sqrt(N) / BB) * 100, errors: stats.errors, sec: (Date.now() - t0) / 1000 }));

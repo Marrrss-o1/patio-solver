@@ -102,7 +102,9 @@ function solverAct(g, me, r) {
   const b = tracker.solverInput('typical');
   if (b.error) { stats.errors++; return baselineAct(g, me, r); }
   const t = Date.now();
-  const res = E.analyzeSync(Object.assign({}, b.input, { iterations: +(process.env.ITERS || 3000), riverIterations: 120, seed: (r() * 4294967296) >>> 0 }));
+  const res = E.analyzeSync(Object.assign({}, b.input, { iterations: +(process.env.ITERS || 3000), riverIterations: 120, seed: (r() * 4294967296) >>> 0 },
+    process.env.PF === '0' ? { preflopSolver: false } : {}, process.env.PFIT ? { preflopIterations: +process.env.PFIT } : {},
+    process.env.TURN === '1' ? { turnSolver: true, turnIterations: +(process.env.TURNIT || 30) } : {}));
   stats.ms += Date.now() - t; stats.decisions++;
   if (b.input.opponents.length > 1 && g.board.length) stats.multiDecisions++;
   const best = res.best;
@@ -234,6 +236,6 @@ for (let i = 0; i < H; i++) {
 if (DIAG) require('fs').writeFileSync(require('path').join(OUT, `mdb_${AGENT}_${N}_${SEED}.json`), JSON.stringify(tracker.db));
 if (DIAG) require('fs').writeFileSync(require('path').join(OUT, `mdiag_${AGENT}_${N}_${BOTMIX}_${SEED}.json`), JSON.stringify(diagOut));
 const mean = sum / H, sd = Math.sqrt(sq / H - mean * mean);
-require('fs').writeFileSync(require('path').join(OUT, `mnets_${AGENT}_${N}_${BOTMIX}_${SEED}.json`), JSON.stringify(NETS));
+require('fs').writeFileSync(require('path').join(OUT, `mnets_${AGENT}_${N}_${BOTMIX}_${SEED}${process.env.TAG ? '_' + process.env.TAG : ''}.json`), JSON.stringify(NETS));
 console.log(JSON.stringify({ agent: AGENT, players: N, bots: BOTMIX, hands: H, bb100: +((mean / BB) * 100).toFixed(1), se100: +((sd / Math.sqrt(H) / BB) * 100).toFixed(1),
   errors: stats.errors, msPerDecision: stats.decisions ? Math.round(stats.ms / stats.decisions) : 0, multiDecisions: stats.multiDecisions }));

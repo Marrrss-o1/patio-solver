@@ -4,7 +4,8 @@ self.onmessage = (e) => {
   const { id, mode, input } = e.data;
   try {
     if (mode === 'partial') {
-      self.postMessage({ id, ok: true, partial: PokerEngine.analyzeSync(Object.assign({}, input, { partial: true })).partial });
+      const out = PokerEngine.analyzeSync(Object.assign({}, input, { partial: true }));
+      self.postMessage({ id, ok: true, partial: out.partial, solved: out.solved });
     } else {
       self.postMessage({ id, ok: true, result: slim(PokerEngine.analyzeSync(input)) });
     }

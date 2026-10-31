@@ -353,10 +353,19 @@ test('more tendencies: check-raise, think time, pots won without showdown, raw e
 });
 
 test('preflop: no 25bb shove with 9-5 offsuit, but aces still shove', () => {
-  const spot = (h, bb, tally) => E.analyzeSync({ hero: C(h), board: [], pot: 3, toCall: 1, stack: bb * 2, bigBlind: 2, mix: false, seed: 1,
-    heroPosition: 'blinds', inPosition: false, opponents: [{ name: 'V', tally: tally || {}, actions: { pre: 'pending' } }], iterations: 3000 });
-  for (const bb of [20, 25]) assert.notStrictEqual(spot('9d 5c', bb).best.kind, 'allin', bb + 'bb');
-  assert.strictEqual(spot('Ah As', 25).best.kind, 'allin');
+  const spot = (h, bb, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: [], pot: 3, toCall: 1, stack: bb * 2, bigBlind: 2, mix: false, seed: 1,
+    heroPosition: 'blinds', inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }], iterations: 3000 }, extra));
+  for (const bb of [20, 25]) {
+    assert.notStrictEqual(spot('9d 5c', bb).best.kind, 'allin', bb + 'bb');
+    assert.notStrictEqual(spot('9d 5c', bb, { preflopSolver: false }).best.kind, 'allin', bb + 'bb, Monte Carlo');
+  }
+  // The Monte Carlo (still used for multiway spots it can't solve) shoves aces; the preflop
+  // solver may limp or raise small with them instead (trapping), but never folds them.
+  assert.strictEqual(spot('Ah As', 25, { preflopSolver: false }).best.kind, 'allin');
+  const aa = spot('Ah As', 25);
+  assert.ok(aa.solver && aa.solver.kind === 'preflop');
+  assert.notStrictEqual(aa.best.kind, 'fold');
+  assert.ok(aa.ranked.find((x) => x.kind === 'allin').ev > 0);
   const caller = E.computeStats(tallyWith({ pfBigOpp: 20, pfBigCall: 16 }), 'typical');
   const folder = E.computeStats(tallyWith({ pfBigOpp: 20, pfBigCall: 2 }), 'typical');
   assert.ok(caller.callBig > folder.callBig + 0.3, `${caller.callBig} vs ${folder.callBig}`);
@@ -683,6 +692,87 @@ test('preflop: suited connectors realize more than offsuit junk', () => {
   const pre = (h) => E.analyzeSync({ hero: C(h), board: [], pot: 15, toCall: 5, stack: 1000, bigBlind: 10, iterations: 500,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] }).realize;
   assert.ok(pre('9h 8h') > pre('9h 3c') + 0.05);
+});
+
+test('preflop equity table: known matchups, and the two sides add up to 1', () => {
+  const EQ = E._pf.preflopEquityTable();
+  const cls = (n) => E.CLASS_NAMES.indexOf(n);
+  const eq = (a, b) => EQ[cls(a) * 169 + cls(b)];
+  assert.ok(Math.abs(eq('AA', 'KK') - 0.82) < 0.01, 'AA vs KK ' + eq('AA', 'KK'));
+  assert.ok(Math.abs(eq('AKs', 'QQ') - 0.46) < 0.01, 'AKs vs QQ ' + eq('AKs', 'QQ'));
+  assert.ok(Math.abs(eq('72o', 'AA') - 0.12) < 0.01, '72o vs AA ' + eq('72o', 'AA'));
+  for (let i = 0; i < 300; i++) {
+    const a = (i * 37) % 169, b = (i * 91 + 7) % 169;
+    assert.ok(Math.abs(EQ[a * 169 + b] + EQ[b * 169 + a] - 1) < 1e-9);
+  }
+  // Blocker-aware class totals match the brute-force count of compatible combo pairs.
+  const M = E._pf.preflopCompat(), r = new Float64Array(169).map((_, i) => ((i * 7919) % 101) / 100);
+  const fast = new Float64Array(169);
+  E._pf.classMass(r, fast, 1);
+  for (let a = 0; a < 169; a++) {
+    let slow = 0;
+    for (let b = 0; b < 169; b++) slow += M[a * 169 + b] * r[b];
+    assert.ok(Math.abs(slow - fast[a]) < 1e-6 * Math.max(1, slow));
+  }
+});
+
+const pfSpot = (h, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: [], pot: 1.5, toCall: 0.5, stack: 99.5, bigBlind: 1, inPosition: true, mix: false, seed: 3,
+  iterations: 2000, preflopIterations: 200, opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }], heroActions: { pre: 'pending' } }, extra));
+
+test('preflop solver: heads-up spots are solved range against range', () => {
+  const aa = pfSpot('Ah As'), junk = pfSpot('7c 2d');
+  assert.strictEqual(aa.solver.kind, 'preflop');
+  assert.notStrictEqual(aa.best.kind, 'fold');
+  assert.strictEqual(junk.best.kind, 'fold');
+  assert.ok(aa.ranked.every((x) => isFinite(x.ev) && x.freq >= 0 && x.freq <= 1));
+  // Big blind facing a raise: aces re-raise, 7-2 folds.
+  const bb = (h) => pfSpot(h, { pot: 3.5, toCall: 1.5, stack: 99, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] });
+  assert.ok(['raise', 'allin'].includes(bb('Ad Ac').best.kind));
+  assert.strictEqual(bb('7h 2s').best.kind, 'fold');
+  // Facing a shove the solve is plain equity against the shoving range, as the Monte Carlo says.
+  const shove = (h, extra) => pfSpot(h, Object.assign({ pot: 28, toCall: 22, stack: 22, inPosition: false, iterations: 20000, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] }, extra));
+  for (const h of ['Ah Jc', '6s 6d', 'Kh 9c']) {
+    const a = shove(h), b = shove(h, { preflopSolver: false });
+    const call = (r) => r.ranked.find((x) => x.kind === 'allin').ev;
+    assert.ok(Math.abs(call(a) - call(b)) < 0.8, `${h}: ${call(a)} vs ${call(b)}`);
+  }
+});
+
+test('preflop solver: an open with several players behind is solved against the field', () => {
+  const open = (h) => pfSpot(h, { toCall: 1, stack: 100, inPosition: false, opponents: [1, 2, 3, 4, 5].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'pending' } })) });
+  const aa = open('Ks Kd'), junk = open('9s 4d');
+  assert.strictEqual(aa.solver.field, 5);
+  assert.ok(['raise', 'allin'].includes(aa.best.kind));
+  assert.strictEqual(junk.best.kind, 'fold');
+  // Limpers in front: not an open, so the Monte Carlo handles it.
+  const limped = pfSpot('Ks Kd', { toCall: 1, pot: 3.5, stack: 100, opponents: [{ name: 'L', tally: {}, actions: { pre: 'call' } }, { name: 'B', tally: {}, actions: { pre: 'pending' } }] });
+  assert.strictEqual(limped.solver, null);
+});
+
+const turnSpot = (h, extra) => Object.assign({
+  hero: C(h), board: C('Ts 9s 4d 2c'), pot: 20, toCall: 8, stack: 80, bigBlind: 1, inPosition: true, mix: false, seed: 5, iterations: 2000,
+  opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' } }], heroActions: { pre: 'call', flop: 'call' },
+}, extra);
+
+test('turn solver: computer mode only; raises a big draw, gives up on air', () => {
+  assert.strictEqual(E.analyzeSync(turnSpot('Qs Js')).solver, null);
+  const solve = (h) => E.analyzeSync(turnSpot(h, { turnSolver: true, turnIterations: 40 }));
+  const draw = solve('Qs Js'), air = solve('Ah Kh');
+  assert.strictEqual(draw.solver.kind, 'turn');
+  assert.notStrictEqual(draw.best.kind, 'fold');
+  assert.strictEqual(air.best.kind, 'fold');
+  for (const r of [draw, air]) assert.ok(r.ranked.every((x) => isFinite(x.ev)));
+});
+
+test('turn solver: workers\' solves are averaged in the final pass', () => {
+  const parts = [1, 2].map((seed) => E.analyzeSync(turnSpot('Qs Js', { turnSolver: true, turnIterations: 20, seed, partial: true })));
+  assert.ok(parts.every((p) => p.partial && p.solved && p.solved.kind === 'turn'));
+  const fin = E.analyzeSync(turnSpot('Qs Js', { merge: parts.map((p) => p.partial), solvedMerge: parts.map((p) => p.solved) }));
+  assert.strictEqual(fin.solver.kind, 'turn');
+  assert.strictEqual(fin.solver.runs, 2);
+  const ev = (list, kind) => list.find((a) => a.kind === kind).ev;
+  const mean = (ev(parts[0].solved.actions, 'call') + ev(parts[1].solved.actions, 'call')) / 2;
+  assert.ok(Math.abs(fin.ranked.find((x) => x.kind === 'call').ev - mean) < 1e-9);
 });
 
 test('tracker passes chips committed and behind for side pots', () => {
