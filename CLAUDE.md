@@ -10,11 +10,12 @@ never add code that clicks, sends `player:game:perform_action`, or otherwise pla
 ```
 src/engine.js            The solver (exploitative Monte Carlo + CFR solvers). Pure JS, no deps. Shared by both builds.
                          Holds the 169x169 preflop equity table (`PF_EQ_B64`, written by scripts/preflop-equity.js).
-                         The river and preflop solvers' inner loops also run as WebAssembly SIMD kernels assembled at
-                         load time (`cfrK`, `terminalK`; JS fallback, `useKernels(false)`), bit-identical to the JS
-                         loops. Any change to CFR or leaf code in riverSolve/preflopSolve needs the same change
-                         there; the "kernels: ... bit-identical" test catches drift for the spots it covers. The
-                         extension's manifest allows 'wasm-unsafe-eval' for this.
+                         The river, turn and preflop solvers' inner loops also run as WebAssembly SIMD kernels
+                         assembled at load time (`cfrK`, `terminalK`, the turn solver's showTurn/foldTurn kernels and
+                         per-card data; JS fallback, `useKernels(false)`), bit-identical to the JS loops. Any change
+                         to CFR or leaf code in riverSolve/turnSolve/preflopSolve (cfr loop, showAdd, foldValues)
+                         needs the same change there; the "kernels: ... bit-identical" test catches drift for the
+                         spots it covers. flopSolve is JS only. The manifest allows 'wasm-unsafe-eval' for this.
 src/tracker.js           Socket events -> hand state, opponent tallies, solver input. Pure JS, unit-tested.
 src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
