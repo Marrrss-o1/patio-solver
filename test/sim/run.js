@@ -16,6 +16,7 @@
 //   --a-opts JSON      extra analyzeSync input for A, e.g. '{"preflopSolver":false}'
 //   --b-opts JSON      ... for B; giving any --b-* option turns on the paired A/B run
 //   --a-ref REF        git ref whose src/ A runs (default: the working tree); --b-ref likewise
+//   --a-patch JSON     solver settings changed by text edits to a copy of engine.js (knobs.js), e.g. '{"robust":0.5}'
 //   --b-agent X        agent for B (default: same as A)
 //   --a-bp FILES       blueprint files for A (comma list; --a-bp alone = none), --b-bp likewise; default: env BP
 //   Env PF=0, PFIT=n, TURN=1, TURNIT=n set solver options for both A and B (the old simulators' flags).
@@ -40,6 +41,7 @@ const { Worker, isMainThread, parentPort, workerData } = require('worker_threads
 const { playHand, keyed, shuffled } = require('./game.js');
 const bots = require('./bots.js');
 const { solverAgent, envSolverOpts } = require('./agents.js');
+const { patchedSrc } = require('./knobs.js');
 const E0 = require('../../src/engine.js');
 const ORDER = {}; E0.PREFLOP_ORDER.forEach((nm, i) => { ORDER[nm] = i; });
 // Preflop-order rank of a starting hand (0 = AA).
@@ -78,8 +80,15 @@ function srcForRef(ref) {
   execSync(`git archive ${ref} src | tar -x -C ${JSON.stringify(dir)}`, { cwd: ROOT });
   return path.join(dir, 'src');
 }
+// What a variant's code is, for the resume key: a ref's commit, or for the working tree a hash of src/ itself (so
+// committing other files during a long run doesn't orphan its saved blocks).
 function commitOf(ref) {
-  try { return execSync(`git rev-parse ${ref || 'HEAD'}`, { cwd: ROOT }).toString().trim() + (ref ? '' : '+worktree'); } catch (e) { return String(ref); }
+  if (!ref) {
+    const dir = path.join(ROOT, 'src'), h = require('crypto').createHash('sha1');
+    for (const f of fs.readdirSync(dir).sort()) if (fs.statSync(path.join(dir, f)).isFile()) h.update(f + '\0').update(fs.readFileSync(path.join(dir, f)));
+    return 'src:' + h.digest('hex').slice(0, 16);
+  }
+  try { return execSync(`git rev-parse ${ref}`, { cwd: ROOT }).toString().trim(); } catch (e) { return String(ref); }
 }
 
 function buildConfig(args) {
@@ -91,10 +100,16 @@ function buildConfig(args) {
   const env = envSolverOpts();
   const parse = (s) => (s ? JSON.parse(s) : {});
   const bp = (k) => (args[k] === true ? '' : args[k] != null ? String(args[k]) : undefined);
-  const variants = [{ name: 'A', agent: String(args.agent || 'solver'), src: srcForRef(args['a-ref']), ref: args['a-ref'] || 'working tree', commit: commitOf(args['a-ref']), solver: Object.assign({}, env, parse(args['a-opts'])), bp: bp('a-bp') }];
-  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null) {
-    variants.push({ name: 'B', agent: String(args['b-agent'] || args.agent || 'solver'), src: srcForRef(args['b-ref']), ref: args['b-ref'] || 'working tree', commit: commitOf(args['b-ref']), solver: Object.assign({}, env, parse(args['b-opts'])), bp: bp('b-bp') });
-  }
+  // A variant's src/: a git ref's (or the working tree's), with knobs.js edits on top for --a-patch / --b-patch.
+  const variant = (name, x, agent) => {
+    const patch = parse(args[x + '-patch']);
+    const p = Object.keys(patch).length ? patch : null;
+    return { name, agent, src: patchedSrc(srcForRef(args[x + '-ref']), p, path.join(ROOT, 'test', 'out', 'tune')),
+      ref: (args[x + '-ref'] || 'working tree') + (p ? ' + ' + JSON.stringify(p) : ''), commit: commitOf(args[x + '-ref']) + (p ? ' ' + JSON.stringify(p) : ''),
+      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp') };
+  };
+  const variants = [variant('A', 'a', String(args.agent || 'solver'))];
+  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch']) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
   // Solver opponents: src/ for each solver@ref named in --bots.
   const solverBots = {};
   for (const t of botsSpec.split(',')) {
@@ -317,4 +332,4 @@ if (!isMainThread) {
   }).catch((e) => { console.error(e); process.exit(1); });
 }
 
-module.exports = { buildConfig, parseArgs, playBlock, summarize, lineup, meanSe };
+module.exports = { buildConfig, parseArgs, playBlock, summarize, lineup, meanSe, blockKey };
