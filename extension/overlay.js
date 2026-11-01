@@ -6,9 +6,34 @@
   window.__patioSolverOverlay = true;
 
   const TEST = globalThis.__PS_TEST || null; // used only for in-page testing
-  const store = TEST ? TEST.store : {
-    get: (k) => new Promise((res) => chrome.storage.local.get(k, (v) => res(v[k]))),
-    set: (k, v) => new Promise((res) => chrome.storage.local.set({ [k]: v }, res)),
+  // chrome.storage.local, with failures reported (a full or broken store used to drop saves
+  // without a word). TEST.area replaces it in tests.
+  const settle = (res) => () => {
+    const err = chrome.runtime.lastError;
+    res(err ? { ok: false, error: err.message || String(err) } : { ok: true });
+  };
+  const call = (fn) => new Promise((res) => {
+    try { fn(res); } catch (e) { res({ ok: false, error: (e && e.message) || String(e) }); }
+  });
+  // Reads answer null when they fail, so a failed read is never taken for empty storage.
+  const read = (fn) => new Promise((res) => {
+    try { fn((v) => res(chrome.runtime.lastError ? null : v)); } catch (e) { res(null); }
+  });
+  const local = TEST ? TEST.area : {
+    get: (keys) => read((cb) => chrome.storage.local.get(keys, (v) => cb(v || {}))),
+    set: (items) => call((res) => chrome.storage.local.set(items, settle(res))),
+    remove: (keys) => call((res) => chrome.storage.local.remove(keys, settle(res))),
+    keys: chrome.storage.local.getKeys ? () => read((cb) => chrome.storage.local.getKeys((k) => cb(k || []))) : null,
+  };
+  let saveError = null; // shown on the panel until a save works again
+  const noteSaved = (r) => {
+    const err = r && !r.ok ? r.error || 'unknown error' : null;
+    if (err !== saveError) { saveError = err; render(); }
+    return r;
+  };
+  const store = {
+    get: (k) => local.get(k).then((v) => (v || {})[k]),
+    set: (k, v) => local.set({ [k]: v }).then(noteSaved),
   };
   const analyze = TEST ? TEST.analyze : (input, quick) => new Promise((res) => {
     try {
@@ -23,6 +48,9 @@
 
   const DB_KEY = 'patioSolverDb';
   const UI_KEY = 'patioSolverUi';
+  // Reads under DB_KEY, each hand of the log under its own key (handlog.js).
+  const handLog = PatioHandLog.create(local, DB_KEY);
+  const saveDb = () => (tracker ? handLog.save(tracker.db).then(noteSaved) : null);
 
   let tracker = null;
   let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true };
@@ -157,16 +185,20 @@
       ui.collapsed = !ui.collapsed; store.set(UI_KEY, ui); render();
     } else if (what === 'log') {
       if (!tracker) return;
-      const url = URL.createObjectURL(new Blob([JSON.stringify(tracker.db.history || [], null, 1)], { type: 'application/json' }));
-      const link = document.createElement('a');
-      link.href = url; link.download = 'patio-hand-log.json';
-      root.appendChild(link); link.click(); link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      // Every stored hand (up to 1,000), not only the 150 the page keeps.
+      handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
+        const url = URL.createObjectURL(new Blob([JSON.stringify(hands, null, 1)], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url; link.download = 'patio-hand-log.json';
+        root.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      });
     } else if (what === 'reset') {
       if (!tracker) return;
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
-      tracker.db = { players: {} };
-      store.set(DB_KEY, tracker.db);
+      // The reads start over; the hand log stays.
+      tracker.db = { players: {}, history: tracker.db.history || [] };
+      saveDb();
       a.dataset.confirm = ''; a.textContent = 'Reset reads';
       render();
     } else if (what === 'toggleOpts') {
@@ -276,6 +308,7 @@
     }
     const n = tracker ? Object.keys(tracker.db.players).length : 0;
     html += `<div class="muted">Tracking ${n} player${n === 1 ? '' : 's'}. Reads sharpen as hands pile up.</div>`;
+    if (saveError) html += `<div class="status neg">Couldn't save reads and the hand log: ${esc(saveError)}</div>`;
     body.innerHTML = html;
   }
 
@@ -321,13 +354,14 @@
   async function start() {
     const saved = await store.get(UI_KEY);
     if (saved) ui = Object.assign(ui, saved);
-    const db = (await store.get(DB_KEY)) || { players: {} };
-    tracker = new PatioTracker(db);
+    const loaded = await handLog.load(PatioTracker.MAX_HISTORY, PatioTracker.RAW_KEEP);
+    if (loaded.error) noteSaved({ ok: false, error: loaded.error });
+    tracker = new PatioTracker(loaded.db);
     tracker.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally());
     tracker.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => tracker.poolTally());
     tracker.fitVersion = PokerEngine.FIT_VERSION;
     tracker.on((type) => {
-      if (type === 'save') store.set(DB_KEY, tracker.db);
+      if (type === 'save') saveDb();
       if (type === 'hand') { advice = null; thinking = false; reqId++; status = 'New hand. Waiting for your turn…'; render(); }
       if (type === 'turn') { /* handled below with payload */ }
       if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }

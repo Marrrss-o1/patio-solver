@@ -5,6 +5,7 @@
   "description": "Reads your Poker Patio private lobby as you play and shows solver advice when it's your turn.",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "offscreen"
   ],
   "host_permissions": [
@@ -34,6 +35,7 @@
       "js": [
         "engine.js",
         "tracker.js",
+        "handlog.js",
         "overlay.js"
       ],
       "run_at": "document_idle"

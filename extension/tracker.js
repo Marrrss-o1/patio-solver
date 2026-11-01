@@ -30,7 +30,7 @@
   }
   const MAX_SHOWS = 80;
   const MAX_HISTORY = 150;
-  // Raw events: kept for the newest RAW_KEEP hands only (about 10 KB a hand).
+  // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
   // Each hand a player is dealt into shrinks their older counts by 1%, so the last
   // hundred or so hands carry most of the weight and reads follow players who change.
@@ -946,6 +946,8 @@
   PatioTracker.predSummary = predSummary;
   PatioTracker.blankTally = blankTally;
   PatioTracker.DECAY = DECAY;
+  PatioTracker.MAX_HISTORY = MAX_HISTORY;
+  PatioTracker.RAW_KEEP = RAW_KEEP;
   PatioTracker.accuracySummary = accuracySummary;
   PatioTracker.upgradeTally = upgradeTally;
   PatioTracker.cardStr = cardStr;

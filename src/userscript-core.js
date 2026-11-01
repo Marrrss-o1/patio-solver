@@ -37,17 +37,30 @@ function slim(r) {
   var DB_KEY = 'patioSolverDb', UI_KEY = 'patioSolverUi';
   function load(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
   // The page's localStorage is shared with the game, so if it fills up, raw hand events are
-  // dropped (oldest first) before the reads are ever lost.
+  // dropped (oldest first) before the reads are ever lost. If the reads still can't be saved,
+  // the panel says so until a save works again.
+  var saveError = null;
   function save(k, v) {
+    var err = null;
     for (var tries = 0; tries < 6; tries++) {
-      try { localStorage.setItem(k, JSON.stringify(v)); return; } catch (e) {
+      try { localStorage.setItem(k, JSON.stringify(v)); err = null; break; } catch (e) {
+        err = (e && (e.name || e.message)) || String(e);
         var hist = v && v.history;
-        if (!hist) return;
+        if (!hist) break;
         var withRaw = hist.filter(function (x) { return x.raw; });
-        if (!withRaw.length) return;
+        if (!withRaw.length) break;
         withRaw.slice(0, Math.ceil(withRaw.length / 2)).forEach(function (x) { delete x.raw; });
       }
     }
+    if (k === DB_KEY && err !== saveError) { saveError = err; if (tracker && body) render(); }
+  }
+  // Hands logged since the last "Hand log" export. This phone keeps 150 hands, raw events for 60,
+  // so from LOG_REMIND on the panel asks for an export.
+  var LOG_REMIND = 50;
+  function unexported() {
+    var list = (tracker && tracker.db.history) || [], since = ui.loggedAt || 0, c = 0;
+    for (var i = list.length - 1; i >= 0 && (list[i].t || 0) > since; i--) c++;
+    return c;
   }
 
   // ---------- solver in a background worker ----------
@@ -199,7 +212,9 @@ function slim(r) {
     if (what === 'toggle') { ui.expanded = !ui.expanded; save(UI_KEY, ui); render(); }
     else if (what === 'opts') { ui.showOptions = !ui.showOptions; save(UI_KEY, ui); render(); }
     else if (what === 'log') {
-      var url = URL.createObjectURL(new Blob([JSON.stringify(tracker.db.history || [], null, 1)], { type: 'application/json' }));
+      var hands = tracker.db.history || [];
+      var url = URL.createObjectURL(new Blob([JSON.stringify(hands, null, 1)], { type: 'application/json' }));
+      if (hands.length) { ui.loggedAt = hands[hands.length - 1].t || Date.now(); save(UI_KEY, ui); render(); }
       var link = document.createElement('a');
       link.href = url; link.download = 'patio-hand-log.json';
       root.appendChild(link); link.click(); link.remove();
@@ -211,7 +226,8 @@ function slim(r) {
         setTimeout(function () { a.removeAttribute('data-c'); a.textContent = 'Reset reads'; }, 3000);
         return;
       }
-      tracker.db = { players: {} }; save(DB_KEY, tracker.db); render();
+      // The reads start over; the hand log stays.
+      tracker.db = { players: {}, history: tracker.db.history || [] }; save(DB_KEY, tracker.db); render();
     }
   });
   root.addEventListener('change', function (e) {
@@ -249,6 +265,8 @@ function slim(r) {
 
   function render() {
     var fresh = advice && !advice.stale;
+    var logDue = unexported() >= LOG_REMIND;
+    var logBadge = logDue && !fresh && !thinking ? '<span class="badge">export log</span>' : '';
     dot.className = 'dot' + (blocked ? '' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
@@ -260,8 +278,8 @@ function slim(r) {
       var b = advice.result.best;
       mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + esc(actionText(b, advice.ctx.heroStageBet, advice.result.toCall)) + '</span>' +
         (advice.result.close && fresh ? '<span class="badge">close</span>' : '') +
-        '<span class="ev">' + (advice.stale ? 'last turn' : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>';
-    } else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>';
+        '<span class="ev">' + (advice.stale ? 'last turn' : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>' + logBadge;
+    } else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>' + logBadge;
 
     body.style.display = ui.expanded ? '' : 'none';
     if (!ui.expanded) { place(); return; }
@@ -306,6 +324,8 @@ function slim(r) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
     }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
+    if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log to keep them: this phone keeps the newest 150 hands, with raw events for 60.</div>';
+    if (saveError) html += '<div class="status neg">Couldn\'t save reads: ' + esc(saveError) + '. The page\'s storage may be full; export the hand log.</div>';
     body.innerHTML = html;
     place();
   }
