@@ -5761,7 +5761,7 @@ function ENGINE() {
       if (solved) target = Math.min(target, 6000);
     }
     // Computer mode, heads-up turn: solve the turn and the river together.
-    if (!solved && street === 4 && opps.length === 1 && input.turnSolver === true && stack > 0) {
+    if (!solved && street === 4 && opps.length === 1 && input.turnSolver === true && input.turnSolverHU !== false && stack > 0) {
       const o = opps[0], oi = input.opponents[0];
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
@@ -5783,7 +5783,7 @@ function ENGINE() {
     // field as one opponent whose hand is the live hand with the most turn equity, sampled
     // jointly. Hero's showdown share is scaled by kappa (turnFieldKappa) because the other
     // players can still win on the river.
-    if (!solved && street === 4 && opps.length >= 2 && opps.length <= 4 && mwStack != null && input.turnSolver === true && stack > 0) {
+    if (!solved && street === 4 && opps.length >= 2 && opps.length <= 4 && mwStack != null && input.turnSolver === true && input.turnSolverField !== false && stack > 0) {
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
       const heroW = buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true);
@@ -6242,7 +6242,8 @@ function ENGINE() {
       if (input.flopSolver !== true) return null;
       return n === 1 || (n <= 4 && multiwayStack(input, stack, 3) != null) ? 'flop' : null;
     }
-    if (street === 4) return n === 1 || (n <= 4 && multiwayStack(input, stack, 4) != null) ? 'turn' : null;
+    // turnSolverHU / turnSolverField: false keeps the turn solver off heads-up / against the field.
+    if (street === 4) return (n === 1 && input.turnSolverHU !== false) || (n >= 2 && n <= 4 && input.turnSolverField !== false && multiwayStack(input, stack, 4) != null) ? 'turn' : null;
     if (street === 5) return n === 1 || (n <= 5 && multiwayStack(input, stack, 5) != null) ? 'river' : null;
     return null;
   }
