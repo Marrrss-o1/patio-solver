@@ -8,8 +8,8 @@
 'use strict';
 const E = require('../../src/engine.js');
 const { keyed } = require('./game.js');
-// BOTCLIFF=1: big preflop raises (to more than 30bb) get the logs' cliff (see the facing-a-raise rule below).
-const BOT_CLIFF = process.env.BOTCLIFF === '1';
+// Big preflop raises (to more than 30bb) get the logs' cliff (see the facing-a-raise rule below); BOTCLIFF=0 turns it off.
+const BOT_CLIFF = process.env.BOTCLIFF !== '0';
 
 const RANKS = '23456789TJQKA';
 const ORDER = {}; E.PREFLOP_ORDER.forEach((nm, i) => { ORDER[nm] = i; });
@@ -213,7 +213,7 @@ function homeBot(params) {
         const raiseBB = v.cur / bb;
         // Facing 8bb or more to call (big raises, shoves): their own, fairly size-blind rate up to a raise to 30bb, then
         // a cliff (logs, first time facing a raise to 8bb+: 67-72% continue up to 35bb, 9% at 35-60bb, 4% above; the
-        // bots called a raise to 100bb about half as often as one to 8bb). Only with BOTCLIFF=1 for now.
+        // bots called a raise to 100bb about half as often as one to 8bb).
         const big = toCall >= 8 * bb;
         const cliff = BOT_CLIFF && v.cur > 30 * bb ? Math.pow(30 * bb / v.cur, 2.5) : 1;
         let cont = big ? P.callBig * Math.pow(8 * bb / toCall, 0.25) * cliff : P.cont * Math.pow(3 / Math.max(2, raiseBB), P.contElast);

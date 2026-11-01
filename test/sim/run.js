@@ -38,6 +38,9 @@
 // Output
 //   --tag NAME         output file test/out/sim-<tag>.json (per-deal results), summary printed as JSON
 //   --quiet            no progress lines
+//   --flopinfo         per-hand state when the flop comes (pot, hero's chips in, value before, luck so far), for
+//                      checking the preflop solver's flop leaves
+//   Env BOTCLIFF=0 drops the friend bots' big-raise cliff, BOTPROFILES=<file> reads another profiles file.
 'use strict';
 const path = require('path');
 const fs = require('fs');
@@ -286,7 +289,7 @@ function blockKey(cfg) {
   const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
   if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });
-  if (process.env.BOTCLIFF === '1') k.push('botCliff');
+  if (process.env.BOTCLIFF === '0') k.push('noBotCliff');
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {

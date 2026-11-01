@@ -300,6 +300,27 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   prior 0.75 x VPIP, clamped 0.18-0.45). The old size math had them folding 85%+ to a shove, so it shoved 9-5 at 25bb.
   Players already in the pot (limpers, raisers) get a higher floor. Hand log players carry `fit` and `accuracy`
   (`accuracySummary` in tracker.js); advice `reads` carry trust, accuracy, strengthBias and callBig.
+  Big-raise cliff (v1.8.3, `bigFade`): the first time a friend faces a raise to 8bb+ in a hand they continue
+  72/69/67% at 8-12/12-20/20-35bb, then 9% at 35-60bb and 4% above (96 spots, three logs; players already in the
+  pot: 0 of 24 above 35bb). The callBig floors (pending, limper/raiser, BB seat, vsOpenRead's large opens) were
+  size-blind above 8bb, so a 3-bettor facing a 4-bet to 50bb was read as continuing 75% like one to 26bb. Above a
+  raise-to of 30bb the floors are multiplied by (30bb / raise-to)^2.5, never below 0.25 (`input.bigCliffFloor`;
+  `input.bigCliff: false` turns it off). Simulator, live budget, 2,000 deals 4-handed: +26.3 ± 19.8 and +6.0 ± 19.6
+  (bots with the cliff, seeds 501/502, vs v1.8.1), +22.9 ± 17.1 and +34.3 ± 19.2 (v1.8.3 bots, seeds 511/512, vs
+  v1.8.2), +27.9 ± 20.0 on the old bots; pooled over the four about +22 ± 10, mostly good and medium hands opening
+  and isolating bigger (a --diag run: small blind raises medium hands 43% instead of 15%, weak hands unchanged).
+  On the logs it changes 20 of 331 decisions, all preflop (KK's 4-bet 86 -> 59 chips, JJ 58 -> 41, AA's 4-bet to
+  111bb into three players unchanged: with the 0.25 floor a 3-bettor still continues about 19% there).
+- Raisers facing hero's re-raise (v1.8.3, `input.pfRaisedRead`, default on): the first time a raiser faces a
+  re-raise in a hand the logs show fold 16%, call 42%, re-raise 42% (45 spots), and below 35bb fold 3% (n 39); the
+  bots answer the same (25/32/43%). continueRule's raised branch had them folding 30-45% and re-raising about 12%
+  (`0.55 x mdf / 0.5`, floor by callBig), and the reads' `foldTo3bet` / `fourBet` (home prior 13% / 50%) were
+  computed but unused. Up to a raise-to of 30bb they now answer with those reads; bigger re-raises keep the old
+  rule. Letting the read fade with size instead ((1 - foldTo3bet) x bigFade: 87% up to 30bb, 22% at 50bb+) scored
+  +117 ± 38 against the bots but was an artifact: the preflop solver opened 93-98% of weak hands and 4-bet bluffed
+  to 35bb+ into bots that fold to big raises and never adapt (--diag). The 30bb version plays like the cliff alone
+  (weak hands unchanged). Simulator, live, 2,000 deals 4-handed, v1.8.3 bots, against the cliff alone: +43.7 ± 14.8
+  (seed 512; premium +11.1 ± 4.6, good +17.5 ± 8.2, every seat up), RESULTS_S511.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the

@@ -60,7 +60,7 @@ bots, seed and block size), so a third arm can be added later without replaying 
 
 ## Bots
 
-* `friends`: bots fitted to the friends in Marwin's hand logs (`profiles.json`, ids f1..f11, most hands first; the
+* `friends`: bots fitted to the friends in Marwin's hand logs (`profiles.json`, ids f1..f14, most hands first; the
   names are kept out of this public repo). Each block of deals seats a different lineup. `home:f3` seats one profile,
   `home:pool` the pooled average friend, `home:hero` a bot fitted to Marwin's own play (used during calibration).
   They limp a lot, open 3-5bb, 3-bet with min-raises (raise wars), bet small and min-bet, and call with any pair or
@@ -98,6 +98,24 @@ bots, seed and block size), so a third arm can be added later without replaying 
   come out flat (0.79, 0.77, 0.78, 0.78; slope -0.11 ± 0.10, the pot-size slope works against it); `sizeTell` -0.6
   gives 0.82, 0.78, 0.77, 0.68, slope -0.70 ± 0.07 (0 gives -0.44, -0.8 gives -0.79; 8,000 hands each).
   `--bot-params '{"sizeTell":-0.6}'` plays every friend profile that way; use it for anything that reads bet sizes.
+  Since v1.8.3 profiles.json is fitted with `sizeTell` -0.6 held fixed (`calibrate.js --fixed`), so the default
+  bots already bet that way (shown-bet slope -0.72 ± 0.07).
+* Refit for v1.8.3 (`profiles.json`, 337 hands: the 31 Oct and 1 Nov logs, 14 friends; `calibrate.js ... --hands
+  20000 --rounds 18 --fixed '{"sizeTell":-0.6}'`, cliff on): two more things the friends do.
+  - Big preflop raises: facing a first raise to 8bb or more, friends continue 72/69/67% at 8-12/12-20/20-35bb and
+    then 9% at 35-60bb and 4% above (96 spots; players who had raised or called before: 0 of 24 above 35bb). The
+    bots' big-raise rate was size-blind apart from (8bb / to call)^0.25, so they called a 100bb raise about 14% of
+    the time. Now the continue rate is also multiplied by (30bb / raise-to)^2.5 above 30bb (`BOTCLIFF=0` turns it
+    off): 53/59/75/50/4% (the 35-60bb bucket is mostly players already in the pot, whose threshold is set over all
+    hands; the logs' 8-12bb rate is still higher than the bots').
+  - Heads-up answers: the first answer to a heads-up bet of 25-110% pot was whatever the street fold rates left
+    over once multiway answers were fitted (bots 63%, friends 53%, n 75). `callHu` is a pooled threshold shift for
+    heads-up answers (target `huAnsFold`): bots 52%; by size 19/32/52/60/65% at <25/25-45/45-75/75-110/110%+ pot
+    against the logs' 13/37/52/61/67%. Multiway small bets are still off (bots fold 17% to bets under a quarter of
+    the pot, logs 48%, n 25).
+  validate.js on the 337 hands: fitted RMS z 0.70, pooled 1.04, unfitted 1.14. `profiles-v3.json` is the same
+  refit with `sizeTell` left at 0.6 (the table-step runs on seeds 502/503 in CLAUDE.md used it). The old bots: `BOTCLIFF=0` with
+  `BOTPROFILES=<file>` holding `git show c8d50cb:test/sim/profiles.json` (run.js and exploit.js read BOTPROFILES).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that

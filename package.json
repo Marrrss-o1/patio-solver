@@ -1,6 +1,6 @@
 {
   "name": "patio-solver",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "private": true,
   "description": "Live solver overlay for Poker Patio private lobbies: Chrome extension + iPhone userscript.",
   "scripts": {
