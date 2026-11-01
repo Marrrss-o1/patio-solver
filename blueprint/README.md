@@ -106,6 +106,31 @@ minus off (the first two rows with the 80-90M iteration exports, the last with t
 
 The blueprint is balanced play for a 150bb game among equals. The friends limp, call and defend far wider than
 that, and the reads already exploit it; pulling toward balance folds the blinds more than these opponents
-deserve and slow-plays big pairs against players who would have paid off a raise. It could still help against
-tougher or adapting players, which the bots don't model; the hand log's `bp` field makes that checkable on real
-hands later.
+deserve and slow-plays big pairs against players who would have paid off a raise.
+
+### Narrower uses, also tested (none kept)
+
+A second night looked for places where the blueprint helps instead of blending it everywhere. Same simulator,
+paired on identical deals, 4-handed unless noted, with the shipped files. The switches were tried on a branch and
+not merged, since nothing won:
+
+| use | opponents | deals | B - A (bb/100) |
+|-----|-----------|-------|----------------|
+| Starting point for new players: full blend, no warm-up reads, fresh lineup every 20 deals | friend bots | 3,000 | -75.1 ± 17.7 |
+| Hero's range inside the river solvers (heads-up and multiway) from the blueprint instead of a solid player's | friend bots | 3,000 | +1.5 ± 6.5 |
+| Same, with the computer's turn solver on (`TURN=1`) | friend bots | 2,000 | -17.6 ± 12.3 |
+| Defence: full blend | maniac bots, 150bb | 2,000 | -13.2 ± 24.5 |
+| Defence: full blend | adaptive exploiter (`exploit.js --xp adapt`) | 6,000 | -20.6 ± 12.0 |
+| Defence: blend only when facing a bet after the flop | adaptive exploiter | 6,000 | +3.4 ± 8.4 |
+| Same facing-a-bet blend | friend bots (seed 1) | 3,000 | +16.2 ± 11.6 |
+| Same, fresh deals (seed 2) on v1.7.4 | friend bots | 4,000 | -7.9 ± 10.0 |
+
+The one positive row did not hold up on fresh deals (it was one of nine variants, so a lucky draw was likely);
+pooled, the facing-a-bet blend is +2 ± 8 against the friends and +3 ± 8 against the exploiter, i.e. nothing.
+Against new players it is much worse than the engine's default read (a typical home-game amateur), which is
+the clearest result here. The blueprint as the continuation strategy inside the lookahead was not tried: each
+rollout would need fresh card buckets for every runout (a full strength table per board), far over the time
+budget per decision.
+
+What is left for the blueprint is what ships: the panel line and the hand log's `bp` field, which make it
+checkable on real hands later.
