@@ -6126,7 +6126,8 @@
       if (aggressive(best)) {
         const tol = Math.max(0.02 * (pot + toCall), 1.5 * best.se, 0.1 * bigBlind);
         const near = ranked.filter((sc) => aggressive(sc) && best.ev - sc.ev <= tol);
-        best = near.sort((a, b) => a.amount - b.amount)[0];
+        // Experiment (input.sizePick 'maxPot'): keep the best-EV size unless it is an overbet.
+        if (!(input.sizePick === 'maxPot' && best.amount - toCall <= pot + toCall + 1e-9)) best = near.sort((a, b) => a.amount - b.amount)[0];
       }
       let runnerUp = ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
