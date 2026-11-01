@@ -348,8 +348,11 @@ function ENGINE() {
       // friends' shown hands sit a little lower than the model puts them after checking and
       // calling. After betting they fit +0.15, but showdowns over-sample value there (bluffs that
       // win uncontested are never shown), so it stays 0. k is the penalty that keeps a player near
-      // it; kUp is for reading a betting line stronger than this.
-      tilt: { agg: 0, pas: -0.15, k: 6, kUp: 20 },
+      // it; kUp is for reading a betting line stronger than this. A player's own tilt moves slowly
+      // (k 30, was 6; kUp 100, was 20): a few dozen shows are mostly noise (with the value-share
+      // change, SHOW_VALUE_K: shown hands on the bots' simulated hands x1.75 -> x1.80, real logs
+      // x1.69 -> x1.70, players seen most x1.65 -> x1.70).
+      tilt: { agg: 0, pas: -0.15, k: 30, kUp: 100 },
       // Range noise (see applyAction): the share of each line's hands that take it whatever
       // their strength. The friends' showdowns fit about half.
       noise: { mu: 0.45, k: 6 },
@@ -414,6 +417,8 @@ function ENGINE() {
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
   // Pseudo-counts behind the table's and each player's fold rate in a size bucket (computeStats).
   const TABLE_SIZE_K = 20, SIZE_K = 64;
+  // Pseudo-shows behind each player's value share of their bets (computeStats).
+  const SHOW_VALUE_K = 30;
   const BIG_BET = 0.75;
 
   // Balanced-play references for a bet of f x pot.
@@ -766,11 +771,13 @@ function ENGINE() {
     const bs = t.betSize || { n: 0, sum: 0 };
     stats.betSize = clamp((bs.sum + 3 * prior.betSize) / (bs.n + 3), 0.2, 2);
 
-    // Value share of their bets: the aggression-based guess, corrected by hands they showed.
+    // Value share of their bets: the aggression-based guess, corrected by hands they showed
+    // (SHOW_VALUE_K pseudo-shows; it was 5, which let a handful of shown bluffs or value bets
+    // swing the read: shown-hand likelihood got worse the more a player was seen).
     const vr0 = clamp(0.9 - 0.08 * (stats.af - 1), 0.55, 0.9);
     const sd = classifyShows(t.shows);
     const V = sd.value + sd.mid / 2, B = sd.bluff + sd.mid / 2;
-    const vr = clamp((V + 5 * vr0) / (V + B + 5), 0.3, 0.95);
+    const vr = clamp((V + SHOW_VALUE_K * vr0) / (V + B + SHOW_VALUE_K), 0.3, 0.95);
     const Vb = sd.bigValue + sd.bigMid / 2, Bb = sd.bigBluff + sd.bigMid / 2;
     const Vs = V - Vb, Bs = B - Bb;
     stats.valueShare = vr;
@@ -6340,7 +6347,7 @@ ENGINE();
   }
   const MAX_SHOWS = 80;
   const MAX_HISTORY = 150;
-  // Raw events: kept for the newest RAW_KEEP hands only (about 10 KB a hand).
+  // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
   // Each hand a player is dealt into shrinks their older counts by 1%, so the last
   // hundred or so hands carry most of the weight and reads follow players who change.
@@ -7256,6 +7263,8 @@ ENGINE();
   PatioTracker.predSummary = predSummary;
   PatioTracker.blankTally = blankTally;
   PatioTracker.DECAY = DECAY;
+  PatioTracker.MAX_HISTORY = MAX_HISTORY;
+  PatioTracker.RAW_KEEP = RAW_KEEP;
   PatioTracker.accuracySummary = accuracySummary;
   PatioTracker.upgradeTally = upgradeTally;
   PatioTracker.cardStr = cardStr;
@@ -7303,17 +7312,30 @@ function slim(r) {
   var DB_KEY = 'patioSolverDb', UI_KEY = 'patioSolverUi';
   function load(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
   // The page's localStorage is shared with the game, so if it fills up, raw hand events are
-  // dropped (oldest first) before the reads are ever lost.
+  // dropped (oldest first) before the reads are ever lost. If the reads still can't be saved,
+  // the panel says so until a save works again.
+  var saveError = null;
   function save(k, v) {
+    var err = null;
     for (var tries = 0; tries < 6; tries++) {
-      try { localStorage.setItem(k, JSON.stringify(v)); return; } catch (e) {
+      try { localStorage.setItem(k, JSON.stringify(v)); err = null; break; } catch (e) {
+        err = (e && (e.name || e.message)) || String(e);
         var hist = v && v.history;
-        if (!hist) return;
+        if (!hist) break;
         var withRaw = hist.filter(function (x) { return x.raw; });
-        if (!withRaw.length) return;
+        if (!withRaw.length) break;
         withRaw.slice(0, Math.ceil(withRaw.length / 2)).forEach(function (x) { delete x.raw; });
       }
     }
+    if (k === DB_KEY && err !== saveError) { saveError = err; if (tracker && body) render(); }
+  }
+  // Hands logged since the last "Hand log" export. This phone keeps 150 hands, raw events for 60,
+  // so from LOG_REMIND on the panel asks for an export.
+  var LOG_REMIND = 50;
+  function unexported() {
+    var list = (tracker && tracker.db.history) || [], since = ui.loggedAt || 0, c = 0;
+    for (var i = list.length - 1; i >= 0 && (list[i].t || 0) > since; i--) c++;
+    return c;
   }
 
   // ---------- solver in a background worker ----------
@@ -7465,7 +7487,9 @@ function slim(r) {
     if (what === 'toggle') { ui.expanded = !ui.expanded; save(UI_KEY, ui); render(); }
     else if (what === 'opts') { ui.showOptions = !ui.showOptions; save(UI_KEY, ui); render(); }
     else if (what === 'log') {
-      var url = URL.createObjectURL(new Blob([JSON.stringify(tracker.db.history || [], null, 1)], { type: 'application/json' }));
+      var hands = tracker.db.history || [];
+      var url = URL.createObjectURL(new Blob([JSON.stringify(hands, null, 1)], { type: 'application/json' }));
+      if (hands.length) { ui.loggedAt = hands[hands.length - 1].t || Date.now(); save(UI_KEY, ui); render(); }
       var link = document.createElement('a');
       link.href = url; link.download = 'patio-hand-log.json';
       root.appendChild(link); link.click(); link.remove();
@@ -7477,7 +7501,8 @@ function slim(r) {
         setTimeout(function () { a.removeAttribute('data-c'); a.textContent = 'Reset reads'; }, 3000);
         return;
       }
-      tracker.db = { players: {} }; save(DB_KEY, tracker.db); render();
+      // The reads start over; the hand log stays.
+      tracker.db = { players: {}, history: tracker.db.history || [] }; save(DB_KEY, tracker.db); render();
     }
   });
   root.addEventListener('change', function (e) {
@@ -7515,6 +7540,8 @@ function slim(r) {
 
   function render() {
     var fresh = advice && !advice.stale;
+    var logDue = unexported() >= LOG_REMIND;
+    var logBadge = logDue && !fresh && !thinking ? '<span class="badge">export log</span>' : '';
     dot.className = 'dot' + (blocked ? '' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
@@ -7526,8 +7553,8 @@ function slim(r) {
       var b = advice.result.best;
       mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + esc(actionText(b, advice.ctx.heroStageBet, advice.result.toCall)) + '</span>' +
         (advice.result.close && fresh ? '<span class="badge">close</span>' : '') +
-        '<span class="ev">' + (advice.stale ? 'last turn' : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>';
-    } else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>';
+        '<span class="ev">' + (advice.stale ? 'last turn' : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>' + logBadge;
+    } else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>' + logBadge;
 
     body.style.display = ui.expanded ? '' : 'none';
     if (!ui.expanded) { place(); return; }
@@ -7572,6 +7599,8 @@ function slim(r) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
     }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
+    if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log to keep them: this phone keeps the newest 150 hands, with raw events for 60.</div>';
+    if (saveError) html += '<div class="status neg">Couldn\'t save reads: ' + esc(saveError) + '. The page\'s storage may be full; export the hand log.</div>';
     body.innerHTML = html;
     place();
   }

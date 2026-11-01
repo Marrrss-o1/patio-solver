@@ -84,6 +84,9 @@ STATS.push(
   ['answerLastAfterFolds', B, (t) => [t.mwLastFoldedFold, t.mwLastFoldedN], 'pooled'], ['answerLastAfterCall', B, (t) => [t.mwLastStayedFold, t.mwLastStayedN], 'pooled'],
   ['bothFold2', B, (t) => [t.mw2Fold, t.mw2N]], ['allFold3', B, (t) => [t.mw3Fold, t.mw3N]],
   ['raisedFold', B, (t) => [t.vsRaiseFold, t.vsRaiseN]], ['raisedReraise', B, (t) => [t.vsRaiseRe, t.vsRaiseN], 'pooled'],
+  // Betting a turn or river nobody has bet yet, by the player's own line on the street before.
+  ...['turn', 'river'].flatMap((st) => [['called', 'pooled'], ['aggr', 'pooled'], ['checked', null]].map(([ln, fit]) =>
+    [`open${ln[0].toUpperCase() + ln.slice(1)}${st[0].toUpperCase() + st.slice(1)}`, B, (t) => [t.lineOpen[st][ln], t.lineOpen[st][ln + 'N']], fit])),
   ['shownBetsWeak', B, (t) => { const b = t.shows.flatMap((x) => ['flop', 'turn', 'river'].filter((s) => /bet|raise/.test(x.line[s] || '')).map((s) => x[s])); return [b.filter((v) => v < 0.45).length, b.length]; }],
 );
 const meanOf = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;

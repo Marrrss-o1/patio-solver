@@ -97,4 +97,34 @@ for (const n of [2, 4]) {
   let threw = false; try { applyKnobs(code, { nope: 1 }); } catch (e) { threw = true; }
   ok(threw, 'unknown knob accepted');
 }
+// 6. Budgets (--budget): the solver gets the budget's settings (the explicit flags and --a-opts on top), and runs
+//    without one keep the old 3,000 / 120 default and the same block key, so saved blocks still resume.
+{
+  const { solverAgent } = require('./agents.js');
+  const { blockKey } = require('./run.js');
+  const base = { hands: '10', players: '2', bots: 'typical', quiet: true };
+  const def = buildConfig(base), live = buildConfig(Object.assign({ budget: 'live' }, base));
+  ok(def.budget === null && def.iters === 3000 && def.riverIters === 120, 'default budget changed');
+  ok(blockKey(def) === blockKey(Object.assign({}, def, { budget: undefined })), 'block key changed for runs without a budget');
+  ok(blockKey(live) !== blockKey(def), 'budget not in the block key');
+  const seen = [];
+  const inputOf = (opts) => {
+    const agent = solverAgent(opts);
+    const orig = agent.E.analyzeSync;
+    agent.E.analyzeSync = (input) => { seen.push(input); return orig(Object.assign({}, input, { iterations: 200, turnSolver: false, riverIterations: 20, preflopIterations: 20 })); };
+    try {
+      const deck = shuffled(7);
+      playHand({ n: 2, btn: 0, hands: [[deck[0], deck[1]], [deck[2], deck[3]]], boardAll: deck.slice(4, 9), stacks: [300, 300], sb: 1, bb: 2,
+        seats: [agent, bots.makeBot('station')], hero: 0, names: ['Hero', 'A'], seed: 3, emit: (ev, data, snapFn) => agent.tracker.handle(ev, data, snapFn()) });
+    } finally { agent.E.analyzeSync = orig; }
+    return seen.pop();
+  };
+  const d = inputOf({}), p = inputOf({ budget: 'phone' }), l = inputOf({ budget: 'live' }), o = inputOf({ budget: 'live', iters: 5000, solver: { turnIterations: 7 } });
+  ok(d && d.iterations === 3000 && d.riverIterations === 120 && !d.turnSolver, 'default budget input');
+  ok(p && (p.iterations === 24000 || p.iterations === 16000) && p.riverIterations === undefined && !p.turnSolver, 'phone budget input');
+  ok(l && l.turnSolver === true && l.turnIterations === 100 && (l.iterations === 24000 || l.iterations === 16000), 'live budget input');
+  ok(o && o.iterations === 5000 && o.turnIterations === 7 && o.turnSolver === true, 'flags and opts on top of a budget');
+  let threw = false; try { solverAgent({ budget: 'nope' }); } catch (e) { threw = true; }
+  ok(threw, 'unknown budget accepted');
+}
 console.log(`sim selftest: ${checks} checks passed (${path.basename(__filename)})`);
