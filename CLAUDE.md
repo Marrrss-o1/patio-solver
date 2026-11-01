@@ -424,6 +424,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   predicted 0.47 with it, 0.48 without, actual 0.46, n 65). So it stays: the bots answer each size the same way all
   night and answer hero like each other, the friends don't (heads-up they fold less to each other's bets than the
   read at every size, about 0.05-0.10). A level-neutral table step (shape only) scored no better (0.863).
+  Fewer pseudo-counts predict the logs worse (facing hero's bets 0.912 at 64, 0.915 at 32, 0.920 at 16, 0.928 at 8).
+  Tried and dropped: a Student-t prior on each bucket's shift (same curvature as 64 pseudo-counts at 0, so it learns
+  only a big, steady habit): the same on the logs within 0.001, +11.8 ± 10.2 on plain friend bots (v4, 2,000 deals),
+  -5.1 ± 30.6 against the elastic exploiter. That exploiter's leak (about -52 ± 17 bb/100 against `none`, v4 bots,
+  600 deals) can't be learned from size reads: it is elastic only against hero, and the reads pool every bettor's
+  bets (one block: it folded 17% to hero's small bets, 35% to the others', read 0.31), so SIZE_K 8 was -19.5 ± 19.3.
+  Real friends would give far too few answers to hero's bets per bucket in a session for a hero-only read.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
