@@ -96,8 +96,8 @@ bots, seed and block size), so a third arm can be added later without replaying 
   bets after the flop, 31 Oct + 1 Nov) bigger bets showed weaker hands, mean made-hand percentile 0.84 under 0.45
   pot, 0.78 at 0.45-0.85, 0.70 at 0.85-1.2 and 0.61 above (log size on percentile -0.69 ± 0.33). The bots at 0.6
   come out flat (0.79, 0.77, 0.78, 0.78; slope -0.11 ± 0.10, the pot-size slope works against it); `sizeTell` -0.6
-  gives 0.82, 0.78, 0.77, 0.68, slope -0.70 ± 0.07 (0 gives -0.44, -0.8 gives -0.79; 8,000 hands each). `--bot-params '{"sizeTell":-0.6}'` plays
-  every friend profile that way; use it for anything that reads bet sizes.
+  gives 0.82, 0.78, 0.77, 0.68, slope -0.70 ± 0.07 (0 gives -0.44, -0.8 gives -0.79; 8,000 hands each).
+  `--bot-params '{"sizeTell":-0.6}'` plays every friend profile that way; use it for anything that reads bet sizes.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
