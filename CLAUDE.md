@@ -139,8 +139,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (`turnRiverSamples`), the final pass uses all 48. Hero and opponent hands are indexed separately and pruned
   (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
   line. Sizes are `turnBets`/`turnRiverBets`/`turnRaises` in the input (at most 3 bets or 2 raises, so a node has
-  at most 4 actions). ~25-45 ms per iteration in the cloud sandbox; each offscreen worker solves for `turnMs` and
-  the results are averaged.
+  at most 4 actions). A half-pot raise for hero next to the pot-size one (`turnRaises` [0.5, 1]) lost -24.2 ± 15.1
+  (1,000 deals 4-handed, turn solver on in both, v1.7.4). ~25-45 ms per iteration in the cloud sandbox; each
+  offscreen worker solves for `turnMs` and the results are averaged.
 - Flop solver (`flopSolve`, computer only: `input.flopSolver === true`; the offscreen pool's `FLOP_SOLVER` turns it
   on, currently off): flop and turn betting in one Discounted CFR with the river checked down (leaves average the
   showdown over sampled rivers; `flopRiverBet` = beta replaces that with a crude river: the hand that is ahead bets
@@ -300,6 +301,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   +48.3 ± 14.6 vs v1.7.2 (2,000 deals 4-handed). Tried and dropped: linking families (bet effect -> raise prior,
   VPIP -> fold), more shrinkage on vsOpen / 3-bet / foldAfterAgg (all under 0.003 log-loss); EV - 1 SE size
   tie-break -6.2 ± 12.7.
+- Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
+  raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
+  often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
+  statsHU too; predictAction and the tracker's predictor take d.checked). Facing-bet log-loss: old session 0.895 ->
+  0.877, new 0.869 -> 0.857, each session alone fits about the same. Bots fold the same way (after checking 59%, old
+  read 54%). Simulator -9.5 ± 14.2 and +15.0 ± 14.1 on two seeds (neutral).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
@@ -337,6 +344,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   bets and 2% to 3-bets, and the base bots answer hero's flop raises fold 37% / call 49% / raise 14% (logs: 32 / 47 /
   16). Bots are simple; this is a regression check, not proof
   of an edge against real players.
+- Tuning sweep (sim thread, fresh-deal confirmations vs current constants, 4-handed refit bots): robustWeight
+  0.35->0.7 -13.8 ± 11.5 (2,400 deals; +21.9 in the sweep), exploitWeight x0.75 +2.8 ± 12.7, credibility off
+  +18.1 ± 13.9 (not taken: bots ignore hero's line; logs fold 58% after an aggressive hero line vs 46% after a passive one,
+  n 24/50), postflop raise sizes [0.6, 1] -> [0.6, 1, 1.5] +9.5 ± 11.7 on v1.7.1 but -3.1 ± 8.6 over 4,000 deals on
+  v1.7.4. Bet menus, river sizes, shove thresholds and the 0.8 raise-equity cut lost or stayed flat by 1,200 deals.
+  No constants changed. Knobs: test/sim/knobs.js, tune.js.
+- Monte Carlo budgets (speed thread): against a 384,000-iteration reference on 104 logged postflop spots, 24,000
+  (phone) picks the same 97% of the time (0.001 bb per decision), 48,000 97%, 96,000 100%. No build needs a bigger
+  budget; only the sim's --iters 3000 is under-converged, so confirm sim winners at 24,000.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
