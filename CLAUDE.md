@@ -127,6 +127,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   bluffs after a call. Live budget, on vs off: 4-handed +17.9 ± 18.7, +18.2 ± 19.7 (Mac, seeds 301/302) and
   -2.5 ± 14.9 (cloud, seed 7), pooled about +9 ± 10 over 3,000 deals; heads-up +8.0 ± 27.5 and +29.5 ± 20.3 (pooled
   about +19 ± 17).
+  Tried and dropped: narrowing a player who checks a later street and then calls hero's bet from the hands that
+  checked (instead of their whole range on that street) for the next street. Live budget, on vs off, 1,000 deals each:
+  4-handed +23.6 ± 15.4, +20.7 ± 14.5 (Mac) and -7.7 ± 16.1 (cloud), heads-up +22.6 ± 22.7, -52.0 ± 22.1 (Mac) and
+  -25.0 ± 18.5 (cloud); all six pooled +1.6 ± 7.1 (rule set before the last runs: merge at +1 SE). The bots check-call
+  with capped ranges anyway; in the logs, hands shown after a check-call are polarized (19 shows, quantiles in the
+  predicted range mostly under 0.25 or over 0.75), so real check-callers keep more strong hands than that model.
+  Tried and dropped: hero bluffing the turn heads-up in the lookahead, with the river's rule. It broke the
+  multiway-stab guard test (a weak stab came out 4.9 chips over checking, from turn bluffs after getting called).
+  Building the reads' check-call ranges from the checking hands (applyAction 'check' before 'call' in buildRange)
+  scored shown hands on those lines worse (x1.64 -> x1.40, 19 shows; other lines unchanged).
 - Preflop solver (`preflopSolve`): heads-up preflop spots (one opponent left, any action so far) and opens with
   2-8 players still to act (all pending; they are one "field" whose hand is the strongest continuing one,
   `fieldMax`; no open-limp option there). Discounted CFR over the 169 classes, compatible-pair counts from
@@ -256,8 +266,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   'all' is the old rule, 'none' drops it. Live budget, 4-handed, 1,000 deals: 'unacted' vs 'all' +9.9 ± 17.7,
   'none' vs 'all' -0.1 ± 23.4. Sticky exploiter (600 deals): +19.5 ± 15.0 and +12.0 ± 31.9; 'none' also dropped
   the scale in the plans' later streets and brought the floats back (51 river bets after a turn call with under 30%
-  equity, against 14; 'unacted' 19). Not done: in the turn solver's river subgames after an in-tree turn bet
-  (`aggScaleIfAgg`) the scale still applies when they check the river.
+  equity, against 14; 'unacted' 19). In the turn solver's river subgames after an in-tree turn bet
+  (`aggScaleIfAgg`) the scale still applies when they check the river: skipping it there too lost -23.1 ± 13.8
+  4-handed (Mac, live, seed 311) against +16.8 ± 20.6 heads-up (seed 312), so it stays.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
 - `db.history` keeps the last 150 hands in the page; the extension stores each hand under its own key
@@ -406,6 +417,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (audit thread, #55): it matched the full solve on only 53-79% of flops and 36-42% of turns, and at the real budget
   the solver scored +46 ± 21 bb/100 over the default (4-handed, 1,000 deals); the turn solver at the real budget
   scored -6 ± 21. Results before #55 were measured at the default and may not hold at `--budget live`.
+  Audit round 9 checked that: the night's changes together (main before #21 vs main after #67, 4-handed) came out
+  about +18 ± 18 at `--budget live` over two seeds, +6 ± 20 at `--budget phone` and +50 ± 28 at the default, while
+  the per-PR gains in these notes add up to about +270. Bisecting #35 to #42 found no single culprit; #42 (+30 at
+  the default, -9 at phone) and #35 (+25 / -4) differ most between budgets, and #37 is the only one up at phone
+  (+26 ± 21). So the single-PR gains measured before #55 are optimistic; nothing was reverted. The heads-up turn
+  solver at the live budget is neutral (+3 ± 11).
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
