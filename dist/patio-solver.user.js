@@ -357,6 +357,12 @@ function ENGINE() {
       // 51% for everyone in the logs (25% on the flop and turn). Odds multiplier on their fold
       // rates (the benchmark's best; a single open raise made no difference there).
       reraisedFold: 0.65,
+      // Facing a bet after checking on that street, friends fold more and check-raise about half
+      // as often as their raise rate says; facing a bet before acting on the street (a lead into
+      // them) they raise more. Odds multiplier on folds, multipliers on the raise share of
+      // continues. Fitted on the facing-bet log-loss of both sessions in the logs (old format
+      // 0.895 -> 0.877, new 0.869 -> 0.857; each session alone picks about these values).
+      line: { checkedFold: 1.25, checkedRaise: 0.5, unactedRaise: 1.4 },
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -857,6 +863,18 @@ function ENGINE() {
       mw: { all: foldMW, 3: fr.flopMW != null ? fr.flopMW : fr.flop, 4: fr.turnMW != null ? fr.turnMW : fr.turn, 5: fr.riverMW != null ? fr.riverMW : fr.river },
       multiway: mwCtx,
     };
+    // How they answer a bet on this street depends on whether they already checked on it
+    // (ctx.line 'checked' on street ctx.street) or have not acted yet ('unacted'); only that
+    // street's rates move.
+    stats.line = Object.assign({ checkedFold: 1, checkedRaise: 1, unactedRaise: 1 }, prior.line || {});
+    if (ctx && ctx.line && stats.byStreet[ctx.street]) {
+      const bs = stats.byStreet[ctx.street];
+      const share = bs.raiseFreq / Math.max(0.02, 1 - bs.foldToBet);
+      const L = stats.line;
+      if (ctx.line === 'checked') bs.foldToBet = oddsScale(bs.foldToBet, L.checkedFold);
+      const mul = ctx.line === 'checked' ? L.checkedRaise : ctx.line === 'unacted' ? L.unactedRaise : 1;
+      bs.raiseFreq = (1 - bs.foldToBet) * clamp(share * mul, 0.005, 0.9);
+    }
     // A player who re-raised preflop this hand (ctx.reraised) folds less after the flop.
     stats.reraisedFold = prior.reraisedFold != null ? prior.reraisedFold : 1;
     if (ctx && ctx.reraised && stats.reraisedFold !== 1) {
@@ -937,12 +955,18 @@ function ENGINE() {
     let fold = d.frac != null ? foldAtSize(s2, d.frac, d.n) : s2.byStreet[d.n].foldToBet;
     if (d.aggLine && stats.foldAfterAgg != null) fold *= clamp(stats.foldAfterAgg / Math.max(0.05, s2.foldToBet), 0.15, 1);
     if (d.reraised && stats.reraisedFold != null) fold = oddsScale(fold, stats.reraisedFold);
+    // d.checked: true when their first action on this street was a check, false when they have
+    // not acted on it yet (see stats.line).
+    const L = stats.line || {};
+    let raiseMul = 1;
+    if (d.checked === true) { fold = oddsScale(fold, L.checkedFold || 1); raiseMul = L.checkedRaise || 1; }
+    else if (d.checked === false) raiseMul = L.unactedRaise || 1;
     const cont = 1 - fold;
     // Their raise share of continues: raiseFreq is (1 - the street's fold rate) x that share, so
     // divide by the same fold rate (dividing by the multiway one overstated multiway raises by up
     // to a third: 14% predicted on multiway flops, 12% real).
     const ftbN = bs.foldToBet != null ? bs.foldToBet : s2.byStreet[d.n].foldToBet;
-    const raiseShare = clamp(bs.raiseFreq / Math.max(0.02, 1 - ftbN), 0.005, 0.9);
+    const raiseShare = clamp((bs.raiseFreq / Math.max(0.02, 1 - ftbN)) * raiseMul, 0.005, 0.9);
     return { fold, call: cont * (1 - raiseShare), raise: cont * raiseShare };
   }
 
@@ -4945,9 +4969,12 @@ function ENGINE() {
     const dead = hero.concat(board);
 
     const opps = input.opponents.map((o) => {
+      const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
         multiway: input.opponents.length >= 2,
         reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
+        // Checked on this street already (hero bets into a check), or not acted on it yet.
+        street, line: now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
       };
       const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
@@ -6592,7 +6619,9 @@ ENGINE();
       const r = isHero ? null : this.record(p.auth, p.name);
       if (r && street > 0) {
         const d = facing > 0
-          ? (kind === 'fold' || kind === 'call' || kind === 'raise') && { kind: 'face', n: street, out: kind, frac: facing / Math.max(1, potBefore - facing), aggLine: p.agg.length > 0, mw: multiway, reraised: /^\dbet$/.test(PatioTracker.preAction(p)) }
+          ? (kind === 'fold' || kind === 'call' || kind === 'raise') && { kind: 'face', n: street, out: kind, frac: facing / Math.max(1, potBefore - facing), aggLine: p.agg.length > 0, mw: multiway, reraised: /^\dbet$/.test(PatioTracker.preAction(p)),
+            // First action on this street a check (true), or none before this one (false).
+            checked: p.seq[key].length >= 2 ? (p.seq[key][0] === 'check' ? true : null) : false }
           : (kind === 'check' || kind === 'bet') && { kind: 'open', n: street, out: kind, cbet: street === 3 && h.pfRaiser === p.id && !p.cbetSeen && !h.flopBet, mw: multiway };
         if (d) this.scorePrediction(r.tally, Object.assign(d, { pos: this.posGroup(p.id) }));
       }
