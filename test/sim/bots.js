@@ -8,6 +8,8 @@
 'use strict';
 const E = require('../../src/engine.js');
 const { keyed } = require('./game.js');
+// Big preflop raises (to more than 30bb) get the logs' cliff (see the facing-a-raise rule below); BOTCLIFF=0 turns it off.
+const BOT_CLIFF = process.env.BOTCLIFF !== '0';
 
 const RANKS = '23456789TJQKA';
 const ORDER = {}; E.PREFLOP_ORDER.forEach((nm, i) => { ORDER[nm] = i; });
@@ -159,6 +161,7 @@ const HOME_DEFAULT = {
   raiseProb: 0.55,            // raises this often above the threshold
   bluffRaise: 0.04,           // raises with a draw or nothing
   callMw: null,               // facing a bet multiway: threshold shift [first to answer, last after folds, after a call] (fitted, pooled)
+  callHu: 0,                  // facing a bet heads-up: threshold shift (fitted, pooled; profiles without it keep 0)
   reRaise: 1,                 // after betting or raising on the street and being raised: re-raise share x this (fitted, pooled)
   lineBet: null,              // checked to on the turn / river: log-odds shift of betting by their own line on the street before,
                               // [called turn, bet turn, called river, bet river] (fitted, pooled; friends who called rarely lead)
@@ -208,9 +211,12 @@ function homeBot(params) {
         }
         // Facing a raise (or several).
         const raiseBB = v.cur / bb;
-        // Facing 8bb or more to call (big raises, shoves): their own, fairly size-blind rate.
+        // Facing 8bb or more to call (big raises, shoves): their own, fairly size-blind rate up to a raise to 30bb, then
+        // a cliff (logs, first time facing a raise to 8bb+: 67-72% continue up to 35bb, 9% at 35-60bb, 4% above; the
+        // bots called a raise to 100bb about half as often as one to 8bb).
         const big = toCall >= 8 * bb;
-        let cont = big ? P.callBig * Math.pow(8 * bb / toCall, 0.25) : P.cont * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
+        const cliff = BOT_CLIFF && v.cur > 30 * bb ? Math.pow(30 * bb / v.cur, 2.5) : 1;
+        let cont = big ? P.callBig * Math.pow(8 * bb / toCall, 0.25) * cliff : P.cont * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
         if (v.raises >= 2 && !big) cont *= 0.8;
         // Already in the pot: an opener facing a re-raise and a limper facing a raise have their own fitted rates
         // (real limpers fold about half the time, openers about a fifth); a caller sticks with most of its range.
@@ -269,8 +275,9 @@ function homeBot(params) {
       const f = toCall / Math.max(1, pot - toCall);
       // Multiway: the old bots raise the threshold by mw per extra opponent. Fitted bots (callMw set) answer by the
       // spot instead, like the friends: first to answer with others behind, last after everyone else folded, or
-      // after someone has already called (overcall); heads-up has no shift.
-      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : 0;
+      // after someone has already called (overcall); heads-up from the start of the street has its own shift (callHu:
+      // friends fold 52% to a first heads-up bet of 25-110% pot, n 61, where bots fitted without it folded 63%).
+      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : (P.callHu || 0);
       const tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + mwShift + (v.raises >= 2 ? 0.06 : 0);
       let pCont = sig((hp - tc) / P.wc);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);

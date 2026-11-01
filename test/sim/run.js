@@ -27,6 +27,7 @@
 //   --aivat MODE       call (default) | refund | best | off: value function for the luck correction
 //   --warm N           hands played per block (baseline in hero's seat) before measuring, so the solver starts
 //                      with reads like Marwin's (default 300; 0 = start every block with no reads)
+//   --a-cold, --b-cold that variant skips the warm-up (no reads at the start of each block, like a reinstall)
 // Speed
 //   --workers N        worker threads (default: all cores)
 //   --block N          deals per block (default 100); results do not depend on the number of workers
@@ -37,6 +38,9 @@
 // Output
 //   --tag NAME         output file test/out/sim-<tag>.json (per-deal results), summary printed as JSON
 //   --quiet            no progress lines
+//   --flopinfo         per-hand state when the flop comes (pot, hero's chips in, value before, luck so far), for
+//                      checking the preflop solver's flop leaves
+//   Env BOTCLIFF=0 drops the friend bots' big-raise cliff, BOTPROFILES=<file> reads another profiles file.
 'use strict';
 const path = require('path');
 const fs = require('fs');
@@ -72,7 +76,7 @@ function parseArgs(argv) {
 }
 
 function loadProfiles(over) {
-  const f = path.join(__dirname, 'profiles.json');
+  const f = process.env.BOTPROFILES ? path.resolve(process.env.BOTPROFILES) : path.join(__dirname, 'profiles.json');
   const profiles = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
   if (over) for (const [id, pr] of Object.entries(profiles)) if (id !== 'hero' && pr && pr.params) pr.params = Object.assign({}, pr.params, over);
   return profiles;
@@ -113,10 +117,10 @@ function buildConfig(args) {
     const p = Object.keys(patch).length ? patch : null;
     return { name, agent, src: patchedSrc(srcForRef(args[x + '-ref']), p, path.join(ROOT, 'test', 'out', 'tune')),
       ref: (args[x + '-ref'] || 'working tree') + (p ? ' + ' + JSON.stringify(p) : ''), commit: commitOf(args[x + '-ref']) + (p ? ' ' + JSON.stringify(p) : ''),
-      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp') };
+      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp'), cold: !!args[x + '-cold'] };
   };
   const variants = [variant('A', 'a', String(args.agent || 'solver'))];
-  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch']) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
+  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch'] || args['b-cold']) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
   // Solver opponents: src/ for each solver@ref named in --bots.
   const solverBots = {};
   for (const t of botsSpec.split(',')) {
@@ -134,7 +138,7 @@ function buildConfig(args) {
     iters: args.budget ? (args.iters ? +args.iters : null) : +(args.iters || 3000),
     riverIters: args.budget ? (args['river-iters'] ? +args['river-iters'] : null) : +(args['river-iters'] || 120),
     tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(args['bot-params'] ? JSON.parse(args['bot-params']) : null),
-    diag: !!args.diag, parts: !!args.parts,
+    diag: !!args.diag, parts: !!args.parts, flopinfo: !!args.flopinfo,
   };
 }
 
@@ -193,7 +197,8 @@ function playBlock(cfg, block) {
   const v0 = cfg.variants[0];
   const warmHero = allWatchers.length && v0.agent === 'solver'
     ? solverAgent({ src: v0.src, solver: v0.solver, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: v0.bp }) : bots.baseline();
-  const listeners = heroes.filter((h) => h.onEvent).concat(warmHero.onEvent ? [warmHero] : []);
+  // --b-cold / --a-cold: that variant does not watch the warm-up, so every block starts with no reads (a reinstall).
+  const listeners = heroes.filter((h, vi) => h.onEvent && !cfg.variants[vi].cold).concat(warmHero.onEvent ? [warmHero] : []);
   if (cfg.warm > 0 && (listeners.length || allWatchers.length)) {
     for (let w = 0; w < cfg.warm; w++) {
       const dl = deal(block * 100000 + w, 0, 31337);
@@ -217,13 +222,14 @@ function playBlock(cfg, block) {
         const diag = cfg.diag ? [] : null;
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
-          aivat: cfg.aivat, parts: cfg.parts, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
+          aivat: cfg.aivat, parts: cfg.parts, flopinfo: cfg.flopinfo, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;
         r.chance += res.chance / rots / cfg.bb; r.action += res.action / rots / cfg.bb;
         // Per rotation: hero's hand (preflop-order rank), position (0 = button, 1 = next seat, ...), corrected result.
         const rot3 = [classRank(dl.hands[0]), (n - dl.btn) % n, Math.round(res.adj / cfg.bb * 1000) / 1000, Math.round(res.net / cfg.bb * 1000) / 1000];
         if (diag) rot3.push(diag);
         if (cfg.parts) rot3.push(res.parts);
+        if (cfg.flopinfo) rot3.push({ flop: res.flop || null });
         r.rots.push(rot3);
       }
       for (const k of ['net', 'adj', 'chance', 'action']) r[k] = Math.round(r[k] * 1000) / 1000;
@@ -279,10 +285,11 @@ function summarize(cfg, results, sec) {
 const SIM_VERSION = 2;
 function blockKey(cfg) {
   const crypto = require('crypto');
-  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp]);
+  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp].concat(x.cold ? ['cold'] : []));
   const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
   if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });
+  if (process.env.BOTCLIFF === '0') k.push('noBotCliff');
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {

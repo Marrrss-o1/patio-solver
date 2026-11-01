@@ -188,6 +188,7 @@ function playHand(cfg) {
   const vf = cfg.aivat ? new ValueFn(g, hero, cfg.aivat) : null;
   const corr = { chance: 0, action: 0 };
   const log = cfg.log ? [] : null;
+  let flopInfo = null;
 
   ev('game:stage_began', { stageType: 'set_blinds' });
   ev('game:dealer_updated', { dealerSeatPos: 's' + (g.btn + 1) });
@@ -258,6 +259,13 @@ function playHand(cfg) {
       const prevNb = g.board.length;
       const heroLive = vf && !g.folded[hero] && live().length > 1;
       const vBefore = heroLive ? vf.value(prevNb, stateNow()) : 0;
+      // Measurement (cfg.flopinfo): the state when the flop comes, for calibrating the preflop solver's flop leaves.
+      if (cfg.flopinfo && nb === 3 && heroLive) {
+        const lvp = live(), order = seatOrderFrom(g.btn, n).filter((j) => !g.folded[j]);
+        let eff = 0; for (const i of lvp) if (i !== hero) eff = Math.max(eff, Math.min(g.stack[i], g.stack[hero]));
+        flopInfo = { k: lvp.length, h: g.hands[hero].slice(), o: lvp.filter((i) => i !== hero).map((i) => g.hands[i].slice()),
+          ip: order[order.length - 1] === hero ? 1 : 0, pot: g.put.reduce((a, b) => a + b, 0), put: g.put[hero], eff, vPre: vBefore, cb: corr.chance + corr.action };
+      }
       ev('game:stage_began', { stageType: name });
       const add = g.boardAll.slice(g.board.length, nb);
       g.board = g.boardAll.slice(0, nb);
@@ -365,6 +373,7 @@ function playHand(cfg) {
   }
   ev('game:game_ended', {});
   const res = { net: nets[hero], nets, chance: corr.chance, action: corr.action, adj: nets[hero] - corr.chance - corr.action, showdown: lv.length >= 2, parts: corr.parts || [] };
+  if (flopInfo) res.flop = Object.assign(flopInfo, { ca: corr.chance + corr.action, net: nets[hero] });
   if (log) {
     res.entry = {
       board: g.board.map(E.cardToString), bigBlind: bb, hero: g.hands[hero].map(E.cardToString), log,

@@ -1803,5 +1803,29 @@ test('safety net: a missed fold is taken from the table, a missed board card sto
   assert.strictEqual(replay(stage).turns[1].error, 'Waiting for the board.');
 });
 
+// Hero opened to 3bb and faces a 3-bet to 12bb heads-up: hero's 4-bets to 26.5bb, 36.5bb and 51bb.
+const fourBetSpot = (extra) => E.analyzeSync(Object.assign({
+  hero: [48, 49], board: [], pot: 31, toCall: 18, stack: 294, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+  heroActions: { pre: 'raise' }, heroSizes: {}, heroPfAggressor: false, heroPosition: 'late', heroCommitted: 6, heroBet: 6,
+  opponents: [{ name: 'V', tally: {}, actions: { pre: '3bet' }, sizes: {}, pfAggressor: true, position: 'blinds', committed: 24, stack: 276, bet: 24, heroIP: true }],
+  iterations: 2000, mix: false, seed: 1,
+}, extra)).scenarios.filter((s) => s.kind === 'raise').sort((a, b) => a.amount - b.amount).map((s) => s.opp[0]);
+
+test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old size-blind floor without it', () => {
+  const on = fourBetSpot({ pfRaisedRead: false }), off = fourBetSpot({ bigCliff: false, pfRaisedRead: false });
+  assert.ok(on.length >= 3, 'three 4-bet sizes');
+  near(on[0].cont, off[0].cont); // to 26.5bb: no change
+  assert.ok(off[2].cont > 0.7 && Math.abs(off[2].cont - off[0].cont) < 1e-9, 'without the cliff a 51bb 4-bet is called like a 26.5bb one');
+  assert.ok(on[1].cont < off[1].cont - 0.1 && on[2].cont < on[1].cont, `${on.map((o) => o.cont.toFixed(2))}`);
+  assert.ok(on[2].cont >= 0.25 * off[2].cont - 1e-9, 'the fade stops at a quarter of the floor');
+});
+
+test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead true; off: old rule)', () => {
+  const on = fourBetSpot({ pfRaisedRead: true }), off = fourBetSpot({});
+  assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
+  assert.ok(off[0].reraise < 0.2);
+  near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
