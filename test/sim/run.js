@@ -71,7 +71,7 @@ function parseArgs(argv) {
 }
 
 function loadProfiles() {
-  const f = path.join(__dirname, 'profiles.json');
+  const f = process.env.BOTPROFILES ? path.resolve(process.env.BOTPROFILES) : path.join(__dirname, 'profiles.json');
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
 }
 
@@ -282,6 +282,7 @@ function blockKey(cfg) {
   const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
   if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });
+  if (process.env.BOTCLIFF === '1') k.push('botCliff');
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {
