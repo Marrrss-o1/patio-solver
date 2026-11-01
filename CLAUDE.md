@@ -245,7 +245,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   postflop raises of pot or more were top pair or better, and a 6.7x-pot flop check-raise shove (Aura Qd7d on Qs 7h 8s)
   was read as 31% no-pair hands. On that spot it only moves hero's equity 0.69 -> 0.67 (still a call). Not judged on
   the simulator: the bots pick postflop raise sizes independently of their hand (`raiseShove`), so they would score it
-  against an assumption the logs contradict. Revisit with more shown big raises.
+  against an assumption the logs contradict. On the reads benchmark (187 hands) it made shown hands after raises of
+  pot or more fit worse (x1.25 -> x1.13, 6 shows; all shows x1.63 -> x1.62), so it stays off. Revisit with more
+  shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
@@ -311,7 +313,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (`handLog.addHands`, newest 1,000 kept) and rebuilds the reads by replaying every stored hand with raw events
   (`PatioTracker.rebuildReads`, about 15 ms a hand). Older logs have names only: a name maps to the account id its
   chat lines carried that day, else to the id the current reads use for that name, else "name:<name>". A current
-  read with clearly more hands than the rebuilt one (history beyond the stored log) is kept.
+  read with clearly more hands than the rebuilt one (history beyond the stored log) is kept. The tracker takes its
+  time from `now()` (`tracker.clock` if set); the rebuild replays each hand on its recorded times, so think times
+  (`tt`, shows' `ms`) come out as played (they were about 0 in v1.8.1's rebuild).
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
@@ -353,6 +357,20 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   against 0.75: 4-handed +22.6 ± 20.6 (1,000 deals), heads-up +11.7 ± 18.6 (1,500 deals). This is the cause behind
   the audit thread's flop-raise gate (pooled about +15 ± 9 on 3+ handed tables, -17 ± 13 heads-up), which is not merged:
   on top of 0.55 a multiway-only gate lost -18.6 ± 14.4.
+- Friends' big bets are not stronger (`READ_PRIORS.home.bigBetMedium` {size 0.9, floor 1}; `input.bigBetMedium:
+  false` turns it off): on bets of 0.9 pot or more every hand of medium strength or better (hs >= 0.35) bets at
+  least at the player's bet rate (the `MEDIUM_BET` floor elsewhere is 0.3 of it), so a pot-size bet is no longer read
+  as the top of the range plus bluffs. Logs (31 Oct + 1 Nov, 87 shown first bets after the flop): mean made-hand
+  percentile 0.84 under 0.45 pot, 0.78 at 0.45-0.85, 0.70 at 0.85-1.2, 0.61 above, and 10 of 23 shown bets of
+  0.85 pot or more were medium pairs. Shown hands after a pot-size or bigger bet x1.08 -> x1.26 of a random guess
+  (22), all shows x1.58 -> x1.63 (both sessions up), action log-loss unchanged. Hero's own range (solid) keeps the
+  old polarized rule. Less noise, a lower value share or a wider bet rate on big bets did not fit (the shown big
+  bets were mostly medium pairs, not the draws and air the bluff slot picks). It changes 2 of 416 logged hero
+  decisions (a pot-size flop bet called with bottom pair, a bigger preflop raise). The simulator's bots bet big
+  with weaker hands only with `--bot-params '{"sizeTell":-0.6}'` (test/sim/README.md); at the default they are flat.
+  Simulator, on vs off, 1,000 deals each: with sizeTell -0.6, 4-handed live +14.5 ± 13.0 (cloud) and -1.0 ± 13.4
+  (Mac), phone -7.0 ± 15.6, heads-up live +20.1 ± 23.6 (Mac); default bots 4-handed live +12.6 ± 11.1. Pooled about
+  +7 ± 6: neutral to slightly positive, as expected from a change that moves few decisions (v1.8.2).
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).

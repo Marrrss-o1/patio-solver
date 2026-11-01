@@ -690,16 +690,25 @@ test('fold rates rise with bet size up to about pot, then barely (overbets buy n
   assert.ok(f(2) - f(0.5) < 0.2);
 });
 
-test('bet size: a big bet reads more polarized (fewer medium hands) than a small one', () => {
+test('bet size: a solid player\'s big bet reads polarized, a friend\'s pot-size bet keeps the medium hands', () => {
   const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(C('Kd 8h 2s')) };
-  const st = E.computeStats({}, 'typical');
-  const avg = (size) => {
-    const W = E.buildRange(st, { pre: 'call', flop: 'bet' }, strengths, C('Kd 8h 2s'), { flop: size });
+  const avg = (style, size) => {
+    const W = E.buildRange(E.computeStats({}, style), { pre: 'call', flop: 'bet' }, strengths, C('Kd 8h 2s'), { flop: size });
     let a = 0, t = 0;
     for (let k = 0; k < W.length; k++) { t += W[k]; if (strengths[3].hs[k] > 0.45 && strengths[3].hs[k] < 0.75) a += W[k]; }
     return a / t;
   };
-  assert.ok(avg(1.2) < avg(0.3) - 0.05, `${avg(1.2)} vs ${avg(0.3)}`);
+  // Hero's own range (solid): fewer medium hands the bigger the bet.
+  assert.ok(avg('solid', 1.2) < avg('solid', 0.3) - 0.05, `${avg('solid', 1.2)} vs ${avg('solid', 0.3)}`);
+  // The home game (READ_PRIORS.home.bigBetMedium): the friends' pot-size bets showed medium pairs about as often
+  // as their small bets, so a pot-size bet holds more medium hands than a 60% one.
+  assert.ok(avg('home', 1.2) > avg('home', 0.6) + 0.02, `${avg('home', 1.2)} vs ${avg('home', 0.6)}`);
+  const off = E.computeStats({}, 'home');
+  off.bigBetMedium = null;
+  const W = E.buildRange(off, { pre: 'call', flop: 'bet' }, strengths, C('Kd 8h 2s'), { flop: 1.2 });
+  let a = 0, t = 0;
+  for (let k = 0; k < W.length; k++) { t += W[k]; if (strengths[3].hs[k] > 0.45 && strengths[3].hs[k] < 0.75) a += W[k]; }
+  assert.ok(a / t < avg('home', 1.2) - 0.02, `off ${a / t} vs on ${avg('home', 1.2)}`);
 });
 
 test('confidence: thin reads lean toward balanced folding, big samples follow the read', () => {
