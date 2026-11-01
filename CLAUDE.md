@@ -219,6 +219,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
+- Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
+  (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
+  showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on
+  simulated bot hands x1.75 -> x1.80, real logs x1.69 -> x1.70 (players seen most x1.65 -> x1.70). Simulator
+  +26.7 ± 14.5 (2,000 deals 4-handed). Ignoring showdowns in the reads altogether was +16.6 ± 16.5; per-bot action
+  reads vs the table average came out about even over three seeds (+24 ± 20, +9 ± 21, -4 ± 21 for dropping them).
 - Read accuracy: showdowns (`scoreShow`, `FIT_VERSION` 2, stale fits rescored a few per hand by `rescoreStale`) and
   every action (`tracker.predictor` = `makePredictor`, tally `pred` {n, read, pop}: log-loss of the read vs an
   average player). Trust = showdown hit rate x action score; exploitWeight = clamp((0.5 + 0.4 n/120) x trust, 0.3,
