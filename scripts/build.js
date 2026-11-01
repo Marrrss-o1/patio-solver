@@ -50,7 +50,7 @@ try {
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
   // The trained blueprints (35 MB) stay out of the zip: it is rebuilt and committed with every change, and
   // they only feed the panel's "Blueprint (self-play)" line. Load unpacked from extension/ to get them.
-  const files = ['manifest.json', 'hook.js', 'tracker.js', 'overlay.js', 'background.js', 'engine.js', 'slim.js', 'offscreen.html', 'offscreen.js', 'solver-worker.js', 'blueprint.js',
+  const files = ['manifest.json', 'hook.js', 'tracker.js', 'handlog.js', 'overlay.js', 'background.js', 'engine.js', 'slim.js', 'offscreen.html', 'offscreen.js', 'solver-worker.js', 'blueprint.js',
     'icon128.png'].filter((f) => fs.existsSync(path.join(root, 'extension', f)));
   execSync(`zip -q -r "${zipPath}" ${files.join(' ')}`, { cwd: path.join(root, 'extension'), stdio: 'ignore' });
 } catch (e) {
