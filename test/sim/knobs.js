@@ -51,7 +51,13 @@ function patchedSrc(srcDir, patch, outRoot) {
   if (!patch || !Object.keys(patch).length) return srcDir;
   const code = fs.readFileSync(path.join(srcDir, 'engine.js'), 'utf8');
   const out = applyKnobs(code, patch);
-  const h = crypto.createHash('sha1').update(code).update(JSON.stringify(patch)).digest('hex').slice(0, 12);
+  // The copy is keyed by every file it copies, so a changed tracker.js or blueprint.js makes a new one.
+  const hash = crypto.createHash('sha1');
+  for (const f of fs.readdirSync(srcDir).sort()) {
+    const p = path.join(srcDir, f);
+    if (fs.statSync(p).isFile()) hash.update(f + '\0').update(fs.readFileSync(p));
+  }
+  const h = hash.update(JSON.stringify(patch)).digest('hex').slice(0, 12);
   const dir = path.join(outRoot, h, 'src');
   if (!fs.existsSync(path.join(dir, 'engine.js'))) {
     fs.mkdirSync(dir, { recursive: true });
