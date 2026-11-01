@@ -348,8 +348,11 @@ function ENGINE() {
       // friends' shown hands sit a little lower than the model puts them after checking and
       // calling. After betting they fit +0.15, but showdowns over-sample value there (bluffs that
       // win uncontested are never shown), so it stays 0. k is the penalty that keeps a player near
-      // it; kUp is for reading a betting line stronger than this.
-      tilt: { agg: 0, pas: -0.15, k: 6, kUp: 20 },
+      // it; kUp is for reading a betting line stronger than this. A player's own tilt moves slowly
+      // (k 30, was 6; kUp 100, was 20): a few dozen shows are mostly noise (with the value-share
+      // change, SHOW_VALUE_K: shown hands on the bots' simulated hands x1.75 -> x1.80, real logs
+      // x1.69 -> x1.70, players seen most x1.65 -> x1.70).
+      tilt: { agg: 0, pas: -0.15, k: 30, kUp: 100 },
       // Range noise (see applyAction): the share of each line's hands that take it whatever
       // their strength. The friends' showdowns fit about half.
       noise: { mu: 0.45, k: 6 },
@@ -414,6 +417,8 @@ function ENGINE() {
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
   // Pseudo-counts behind the table's and each player's fold rate in a size bucket (computeStats).
   const TABLE_SIZE_K = 20, SIZE_K = 64;
+  // Pseudo-shows behind each player's value share of their bets (computeStats).
+  const SHOW_VALUE_K = 30;
   const BIG_BET = 0.75;
 
   // Balanced-play references for a bet of f x pot.
@@ -766,11 +771,13 @@ function ENGINE() {
     const bs = t.betSize || { n: 0, sum: 0 };
     stats.betSize = clamp((bs.sum + 3 * prior.betSize) / (bs.n + 3), 0.2, 2);
 
-    // Value share of their bets: the aggression-based guess, corrected by hands they showed.
+    // Value share of their bets: the aggression-based guess, corrected by hands they showed
+    // (SHOW_VALUE_K pseudo-shows; it was 5, which let a handful of shown bluffs or value bets
+    // swing the read: shown-hand likelihood got worse the more a player was seen).
     const vr0 = clamp(0.9 - 0.08 * (stats.af - 1), 0.55, 0.9);
     const sd = classifyShows(t.shows);
     const V = sd.value + sd.mid / 2, B = sd.bluff + sd.mid / 2;
-    const vr = clamp((V + 5 * vr0) / (V + B + 5), 0.3, 0.95);
+    const vr = clamp((V + SHOW_VALUE_K * vr0) / (V + B + SHOW_VALUE_K), 0.3, 0.95);
     const Vb = sd.bigValue + sd.bigMid / 2, Bb = sd.bigBluff + sd.bigMid / 2;
     const Vs = V - Vb, Bs = B - Bb;
     stats.valueShare = vr;
