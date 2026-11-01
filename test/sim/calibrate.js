@@ -117,8 +117,15 @@ const SIZING = [
   ['mwFirstFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 0],
   ['mwLastFoldedFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 1],
   ['mwLastStayedFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 2],
+  // Checked to on the turn / river after calling the street before, or after betting it (log-odds shifts; a checked
+  // street has none, and each friend's own value threshold keeps their overall betting rate): friends who called
+  // lead the turn 10% (n 68) and the river 26% (57); the bots before this was fitted, 25% and 49%.
+  ['openCalledTurn', 'lineBet', 0.15, 8, 1, -6, 2, 'logit', 0],
+  ['openAggrTurn', 'lineBet', 0.45, 8, 1, -6, 2, 'logit', 1],
+  ['openCalledRiver', 'lineBet', 0.3, 8, 1, -6, 2, 'logit', 2],
+  ['openAggrRiver', 'lineBet', 0.5, 8, 1, -6, 2, 'logit', 3],
 ];
-const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN', mwFirstFold: 'mwFirstN', mwLastFoldedFold: 'mwLastFoldedN', mwLastStayedFold: 'mwLastStayedN' };
+const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN', mwFirstFold: 'mwFirstN', mwLastFoldedFold: 'mwLastFoldedN', mwLastStayedFold: 'mwLastStayedN', openCalledTurn: 'openCalledTurnN', openAggrTurn: 'openAggrTurnN', openCalledRiver: 'openCalledRiverN', openAggrRiver: 'openAggrRiverN' };
 const SIZING_T = {};
 for (const [k, , prior, K] of SIZING) SIZING_T[k] = shrink(pool[k], pool[sizingN[k]], prior, K);
 // River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
@@ -132,7 +139,7 @@ for (const id of ids) {
   const p = clone(bots.HOME_DEFAULT);
   p.vpip = t.vpip; p.pfr = t.pfr; p.cont = 1 - t.vsOpenFold; p.threeBet = t.vsOpen3b; p.callBig = t.callBig;
   p.openBB = t.openSize; p.betSize = t.betPct; p.openShove = t.openShove;
-  if (id !== 'hero') p.callMw = [0, 0, 0];
+  if (id !== 'hero') { p.callMw = [0, 0, 0]; p.lineBet = [0, 0, 0, 0]; }
   params[id] = p;
 }
 // [stat, param, index or null, direction, step, lo, hi, mode]
@@ -229,7 +236,8 @@ for (let round = 1; round <= ROUNDS; round++) {
     const x = simPoolS[k], T = SIZING_T[k];
     if (x == null || T == null) continue;
     const cur = idx == null ? params[ids[0]][key] : params[ids[0]][key][idx];
-    let nx = mode === 'ratio' ? cur * Math.pow(T / Math.max(1e-3, x), step * damp) : cur + step * damp * (T - x);
+    const lg = (q) => { q = Math.min(0.99, Math.max(0.01, q)); return Math.log(q / (1 - q)); };
+    let nx = mode === 'ratio' ? cur * Math.pow(T / Math.max(1e-3, x), step * damp) : mode === 'logit' ? cur + step * damp * (lg(T) - lg(x)) : cur + step * damp * (T - x);
     nx = Math.max(lo, Math.min(hi, nx));
     for (const id of ids) if (id !== 'hero') { if (idx == null) params[id][key] = nx; else params[id][key][idx] = nx; }
   }
