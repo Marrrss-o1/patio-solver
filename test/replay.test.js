@@ -356,6 +356,49 @@ test('reads: predictAction gives a distribution, and the tracker scores reads on
   assert.ok(T.predSummary(t.db.players.V.tally).n >= 4);
 });
 
+test('reads: after checking a street they fold more and check-raise less; facing a lead they raise more', () => {
+  const base = E.computeStats(tallyWith({}), 'typical');
+  const checked = E.computeStats(tallyWith({}), 'typical', null, { street: 4, line: 'checked' });
+  const unacted = E.computeStats(tallyWith({}), 'typical', null, { street: 4, line: 'unacted' });
+  assert.ok(checked.byStreet[4].foldToBet > base.byStreet[4].foldToBet + 0.02);
+  assert.ok(checked.byStreet[4].raiseFreq < 0.7 * base.byStreet[4].raiseFreq);
+  assert.ok(unacted.byStreet[4].raiseFreq > 1.2 * base.byStreet[4].raiseFreq);
+  assert.ok(Math.abs(unacted.byStreet[4].foldToBet - base.byStreet[4].foldToBet) < 1e-9);
+  // Only that street moves.
+  for (const n of [3, 5]) assert.ok(Math.abs(checked.byStreet[n].foldToBet - base.byStreet[n].foldToBet) < 1e-9 && Math.abs(checked.byStreet[n].raiseFreq - base.byStreet[n].raiseFreq) < 1e-9);
+  assert.ok(E.foldAtSize(checked, 0.5, 4) > E.foldAtSize(base, 0.5, 4));
+  // predictAction reads the same thing from d.checked.
+  const st = E.computeStats({}, 'typical');
+  const d = { kind: 'face', n: 4, frac: 0.5 };
+  const p0 = E.predictAction(st, d), pc = E.predictAction(st, Object.assign({ checked: true }, d)), pu = E.predictAction(st, Object.assign({ checked: false }, d));
+  assert.ok(pc.fold > p0.fold && pc.raise < p0.raise && pu.raise > p0.raise && Math.abs(pu.fold - p0.fold) < 1e-12);
+  // The tracker tells the predictor which of the two it was.
+  const mk = () => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' }] });
+  const t = new T({ players: {} });
+  const seen = [];
+  t.predictor = (tally, dd) => { if (dd.kind === 'face') seen.push([dd.n, dd.checked]); return [{ fold: 0.5, call: 0.4, raise: 0.1 }, { fold: 0.5, call: 0.4, raise: 0.1 }]; };
+  const snap = mk();
+  // Heads-up the dealer (s1, Hero) posts the small blind and acts last after the flop.
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'call', makeBetValue: 1 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['game:stage_began', { stageType: 'flop' }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 2 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 2 }],
+    ['game:stage_began', { stageType: 'turn' }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'check', makeBetValue: 0 }],
+    ['game:stage_began', { stageType: 'river' }],
+  ]) t.handle(ev, data, snap);
+  assert.deepStrictEqual(seen, [[3, true]], JSON.stringify(seen));
+});
+
 test('reads: vsOpen counts the response to a single open by its size', () => {
   const mk = () => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
     { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },

@@ -102,6 +102,7 @@ function decisions(h) {
   if (h.log) {
     const flopBet = {};
     const firstOnStreet = {};
+    const firstAct = {};
     const live = new Set(h.players.map((p) => p.name));
     for (const e of h.log) {
       const mw = live.size >= 3;
@@ -117,11 +118,12 @@ function decisions(h) {
       const pos = (h.players.find((x) => x.name === e.who) || {}).position;
       if (e.facing > 0 && (e.act === 'fold' || e.act === 'call' || e.act === 'raise')) {
         const frac = e.pot - e.facing > 0 ? e.facing / (e.pot - e.facing) : null;
-        out.push({ name: e.who, kind: 'face', n, out: e.act, frac, aggLine: false, pos, mw, reraised: reraisedBy[e.who] });
+        out.push({ name: e.who, kind: 'face', n, out: e.act, frac, aggLine: false, pos, mw, reraised: reraisedBy[e.who], checked: first ? false : firstAct[key] === 'check' ? true : null });
       } else if (!(e.facing > 0) && (e.act === 'check' || e.act === 'bet')) {
         out.push({ name: e.who, kind: 'open', n, out: e.act, cbet: n === 3 && first && !flopBet[e.st] && pfAgg === e.who, pos, mw });
       }
       if (e.act === 'bet' || e.act === 'raise') flopBet[e.st] = true;
+      if (first) firstAct[key] = e.act;
     }
   } else {
     // Without the action order, a street is multiway when three or more players started it.
@@ -132,7 +134,7 @@ function decisions(h) {
         const mw = liveAt(j + 1) >= 3;
         (p.actions[st] || []).forEach((a, i) => {
           if (i === 0 && (a === 'check' || a === 'bet')) out.push({ name: p.name, kind: 'open', n, out: a, cbet: n === 3 && pfAgg === p.name, pos: p.position, mw });
-          else if (a === 'call' || a === 'fold' || a === 'raise') out.push({ name: p.name, kind: 'face', n, out: a, frac: null, pos: p.position, mw, reraised: reraisedBy[p.name] });
+          else if (a === 'call' || a === 'fold' || a === 'raise') out.push({ name: p.name, kind: 'face', n, out: a, frac: null, pos: p.position, mw, reraised: reraisedBy[p.name], checked: i === 0 ? false : (p.actions[st] || [])[0] === 'check' ? true : null });
         });
       });
     }
