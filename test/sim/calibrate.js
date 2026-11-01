@@ -1,7 +1,7 @@
 // Fits home-bot parameters so simulated friends play like the real ones in the hand logs.
 //
 //   node test/sim/calibrate.js <export.json> [more.json ...] [--rounds 14] [--hands 8000] [--players 4]
-//        [--min-hands 15] [--out test/sim/profiles.json] [--names names.json]
+//        [--min-hands 15] [--out test/sim/profiles.json] [--names names.json] [--fixed '{"sizeTell":-0.6}']
 //
 // Each friend with enough hands becomes a profile f1, f2, ... (most hands first) plus `pool` (everyone together).
 // Targets are the friend's numbers from profile.js, shrunk toward the pool by sample size. The bots then play
@@ -21,6 +21,8 @@ const files = args.filter((a, i) => !a.startsWith('--') && !(args[i - 1] || '').
 const ROUNDS = +opt('rounds', 14), HANDS = +opt('hands', 8000), NP = +opt('players', 4), MIN_HANDS = +opt('min-hands', 15);
 const OUT = opt('out', path.join(__dirname, 'profiles.json'));
 const NAMES_OUT = opt('names', null);
+// --fixed '{"sizeTell":-0.6}': friend parameters held at these values (not fitted), e.g. sizeTell from the shown bets.
+const FIXED = JSON.parse(opt('fixed', '{}'));
 const BB = 2, STACK = 300;
 
 // ---------- targets ----------
@@ -141,7 +143,7 @@ for (const id of ids) {
   const p = clone(bots.HOME_DEFAULT);
   p.vpip = t.vpip; p.pfr = t.pfr; p.cont = 1 - t.vsOpenFold; p.threeBet = t.vsOpen3b; p.callBig = t.callBig;
   p.openBB = t.openSize; p.betSize = t.betPct; p.openShove = t.openShove;
-  if (id !== 'hero') { p.callMw = [0, 0, 0]; p.lineBet = [0, 0, 0, 0]; p.callHu = 0; }
+  if (id !== 'hero') { p.callMw = [0, 0, 0]; p.lineBet = [0, 0, 0, 0]; p.callHu = 0; Object.assign(p, FIXED); }
   params[id] = p;
 }
 // [stat, param, index or null, direction, step, lo, hi, mode]
