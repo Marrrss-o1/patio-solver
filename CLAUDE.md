@@ -22,6 +22,7 @@ src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker
 extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
+  handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
                          share with `partial: true` (and, heads-up on the turn, its own turn solve for `turnMs`:
@@ -62,6 +63,9 @@ npm run test:mobile      # runs the userscript on an iPhone-sized fake table, re
 node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals, AIVAT luck correction, paired A/B
                          # (--a-opts/--b-opts JSON or --a-ref/--b-ref), bots fitted to Marwin's friends. Read
                          # test/sim/README.md. Read aivatBB100 ± aivatSE100 (diff.* for A/B).
+                         # --budget live (the computer's full solve: phone budget + turn solver at 100 iterations)
+                         # and --budget phone: judge every solver change at live, and run both for any change
+                         # touching flops or turns. The default (3,000 Monte Carlo, 120 river) is for quick checks.
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/reads-bench.js <logs>  # how well reads predict actions and shown hands (see Known gaps)
 node test/fit-priors.js <logs>   # refits the home-game read prior (READ_PRIORS.home) from hand-log exports
@@ -146,7 +150,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   cloud sandbox under load (more on simple spots); each offscreen worker solves for `turnMs` and the results are
   averaged. `turnMs` was about 7 s until v1.7.5, but Marwin acts in a median 2.4 s on the turn (p90 about 4.5 s, raw
   logs), so he almost always played the quick read; the solve picks the same action as 1,600 iterations 97% of the
-  time by 100 (0.003 bb per decision; speed thread), so 1-1.5 s now gets him the full read in about 2 s.
+  time by 100 (0.003 bb per decision; speed thread), so 1-1.5 s now gets him the full read in about 2 s. On the 43
+  turn-solver spots of the 128-hand log against a 1,600-iteration solve: 40 iterations pick the same 38 (0.066 bb per
+  decision lost), 75 the same 41 (0.020), 150 the same 42 (0.008); averaging 8 workers' solves of 40 or 75 picks
+  exactly like one solve, so the workers add river-card samples, not convergence. 1.5 s is about 75 iterations on a
+  hard spot here (uncontended, one core), 1 s about 40.
 - Flop solver (`flopSolve`, computer only: `input.flopSolver === true`; the offscreen pool's `FLOP_SOLVER` turns it
   on, currently off): flop and turn betting in one Discounted CFR with the river checked down (leaves average the
   showdown over sampled rivers; `flopRiverBet` = beta replaces that with a crude river: the hand that is ahead bets
@@ -159,8 +167,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
   loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 2,000 deals, flop solver
   with a 24,000-iteration Monte Carlo -39.4 ± 16.7 against the same Monte Carlo alone, and about -40 with the sim's
-  3,000 (speed thread). The sim's 3,000 Monte Carlo iterations against 24,000: +1.4 ± 14.6 (the 64 ± 38 gap at 400
-  deals was noise).
+  3,000 (speed thread); heads-up (v1.7.7, 1,000 deals) +1.0 ± 28.8, so neutral there. The sim's 3,000 Monte Carlo
+  iterations against 24,000: +1.4 ± 14.6 (the 64 ± 38 gap at 400 deals was noise).
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%), on both the
   multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
@@ -215,6 +223,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
+- Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
+  (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
+  showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on
+  simulated bot hands x1.75 -> x1.80, real logs x1.69 -> x1.70 (players seen most x1.65 -> x1.70). Simulator
+  +26.7 ± 14.5 (2,000 deals 4-handed). Ignoring showdowns in the reads altogether was +16.6 ± 16.5; per-bot action
+  reads vs the table average came out about even over three seeds (+24 ± 20, +9 ± 21, -4 ± 21 for dropping them).
 - Read accuracy: showdowns (`scoreShow`, `FIT_VERSION` 2, stale fits rescored a few per hand by `rescoreStale`) and
   every action (`tracker.predictor` = `makePredictor`, tally `pred` {n, read, pop}: log-loss of the read vs an
   average player). Trust = showdown hit rate x action score; exploitWeight = clamp((0.5 + 0.4 n/120) x trust, 0.3,
@@ -224,11 +238,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   rebuild on three logs: actions 0.831 -> 0.787, seen 0-9 0.958 -> 0.879, open responses 1.31 -> 1.00, shown hands
   x0.73 -> x1.72 (on the 100 hands the priors never saw: 0.809 -> 0.776, x0.92 -> x1.45). Simulator: about +8 ± 12.
 - `foldAfterAgg` (tally `aggVsN`/`aggVsFold`): folding to a bet after having bet or raised earlier in the hand.
-  When an opponent has an aggressive line (`aggroLine`), plans and the river solver scale fold rates by
-  foldAfterAgg / foldToBet. Without it the solver floated turn bets with air planning river bluffs.
+  When an opponent has an aggressive line (`aggroFold` in analyzeSync), plans and the river, turn and flop solvers
+  scale fold rates by foldAfterAgg / foldToBet (about x0.7). Without it the solver floated turn bets with air
+  planning river bluffs. The tally mixes a bettor facing a raise (folds about 25%; continueRule's raiseAggFold
+  covers that) with players who bet an earlier street, and those fold MORE than the plain read once they check
+  on the current street: friend bots 63% vs 49% (n 96; river 79% vs 53%), logs 67% vs 44% (n 9), where the scale
+  said about 35%. Before they act on the street the plain read fits (bots 40% vs 43%, n 174; logs 50% vs 54%, n 10).
+  So now (`input.aggroFold`, default 'unacted') the scale is skipped once they checked on this street;
+  'all' is the old rule, 'none' drops it. Live budget, 4-handed, 1,000 deals: 'unacted' vs 'all' +9.9 ± 17.7,
+  'none' vs 'all' -0.1 ± 23.4. Sticky exploiter (600 deals): +19.5 ± 15.0 and +12.0 ± 31.9; 'none' also dropped
+  the scale in the plans' later streets and brought the floats back (51 river bets after a turn call with under 30%
+  equity, against 14; 'unacted' 19). Not done: in the turn solver's river subgames after an in-tree turn bet
+  (`aggScaleIfAgg`) the scale still applies when they check the river.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
-- `db.history` keeps the last 150 hands for the "Hand log" export. Each entry has `log` (every action in order with
+- `db.history` keeps the last 150 hands in the page; the extension stores each hand under its own key
+  (extension/handlog.js, unlimitedStorage), keeps the newest 1,000 with raw events, and the "Hand log" export has all
+  of them (#59). Each entry has `log` (every action in order with
   `amt` added, `to`, `pot` before it, `facing`, `stack` before it, `potPct` for bets/raises, blinds as `sb`/`bb`),
   each player's starting `stack`, `advice` (pot, price, equity, hand, top 5 options with EVs, reads, hero's actual
   action in `did` and `followed`), and `net`/`heroNet`/`heroNetBB`, filled in from the next hand's starting stacks.
@@ -355,7 +381,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   overlap, and the single runs that got merged are biased upward by being picked). Exploiter bots on v1.7.4 (600
   deals 4-handed, seed 7): base friend 262.5 ± 36, adapt 253.1 ± 36, sticky 236.9 ± 36; hero folds 34-38% to river
   bets and 2% to 3-bets, and the base bots answer hero's flop raises fold 37% / call 49% / raise 14% (logs: 32 / 47 /
-  16). Bots are simple; this is a regression check, not proof
+  16). v1.3.0 (b83d5f1) vs 4ed4335 (v1.7.7 + #59/#60) at `--budget live`: 4-handed +38.3 ± 24.7 and +35.6 ± 26.2
+  (seeds 31 and 41, 2,000 deals each; pooled +37 ± 18), heads-up +30.6 ± 29.8 (2,000 deals); the 4-handed gain is
+  mostly the 10-25% hands (+32 to +41 of it). Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Tuning sweep (sim thread, fresh-deal confirmations vs current constants, 4-handed refit bots): robustWeight
   0.35->0.7 -13.8 ± 11.5 (2,400 deals; +21.9 in the sweep), exploitWeight x0.75 +2.8 ± 12.7, credibility off
@@ -366,6 +394,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Monte Carlo budgets (speed thread): against a 384,000-iteration reference on 104 logged postflop spots, 24,000
   (phone) picks the same 97% of the time (0.001 bb per decision), 48,000 97%, 96,000 100%. No build needs a bigger
   budget. The sim's --iters 3000 picks differ more often, but over 2,000 deals it plays as well (+1.4 ± 14.6).
+  The sim's whole default budget (3,000 Monte Carlo and 120 river iterations, no turn solver) is another matter
+  (audit thread, #55): it matched the full solve on only 53-79% of flops and 36-42% of turns, and at the real budget
+  the solver scored +46 ± 21 bb/100 over the default (4-handed, 1,000 deals); the turn solver at the real budget
+  scored -6 ± 21. Results before #55 were measured at the default and may not hold at `--budget live`.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets

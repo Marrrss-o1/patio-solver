@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Patio Solver Overlay",
-  "version": "1.7.7",
+  "version": "1.7.8",
   "description": "Reads your Poker Patio private lobby as you play and shows solver advice when it's your turn.",
   "permissions": [
     "storage",
