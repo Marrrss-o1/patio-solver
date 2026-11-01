@@ -4982,7 +4982,11 @@ function ENGINE() {
       }
       if (aw > 0 && un > 0) credibility = a / aw - u / un;
       const shift = clamp(0.4 * credibility, -0.08, 0.08);
-      for (const o of opps) o.stats = Object.assign({}, o.stats, { foldShift: shift });
+      for (const o of opps) {
+        o.stats = Object.assign({}, o.stats, { foldShift: shift });
+        // The heads-up read answers multiway bets until someone stays (sc.oppHU): same story.
+        if (o.statsHU) o.statsHU = Object.assign({}, o.statsHU, { foldShift: shift });
+      }
     }
 
     const scenarios = [];
