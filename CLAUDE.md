@@ -263,8 +263,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `input.reraiseAgg`; logs: 3 of 11 flop bettors and 4 of 22 overall re-raised, against about 8% facing a first bet).
   Found by the audit thread: blocking flop raises with under 50% showdown share when called was +29 ± 12 on an older
   main, about +13 ± 10 pooled on d8e866e. This fix instead: 4-handed +40.5 ± 22.9 and +14.9 ± 22.2 on two seeds of
-  1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). `input.reraiseModel: false` turns
-  it off.
+  1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). Re-raise rate 1x instead of 2x:
+  -20.8 ± 21.2 (4-handed, 1,000 deals). `input.reraiseModel: false` turns it off.
+- Raised bettors fold less (v1.7.4): continueRule scales a raised bettor's fold-to-bet by 0.55 (was 0.75;
+  `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
+  about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
+  against 0.75: 4-handed +22.6 ± 20.6 (1,000 deals), heads-up +11.7 ± 18.6 (1,500 deals). This is the cause behind
+  the audit thread's flop-raise gate (pooled about +15 ± 9 on 3+ handed tables, -17 ± 13 heads-up), which is not merged.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
@@ -279,6 +284,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of the smallest within noise (+19 ± 14 alone, but 1.5x-pot overbets went from 4% to 9% of postflop bets, some
   with weak hands: the winner's curse of an argmax over noisy sizes); exploit-weight scaling (already at its 0.95
   cap for regulars).
+- Size reads: table first, then the player (#37). Each size bucket's fold rate is the size curve
+  (`modelFold(stats.foldToBet, anchor)`), moved in log-odds by how the rest of the table answers that size compared
+  with the curve (`prior.poolRest` from `pooledPrior`: pool counts minus the player, `TABLE_SIZE_K` 20 pseudo-counts),
+  then by the player's own folds (`SIZE_K` 64 pseudo-counts, was 4). On three logs a friend's answer to one size
+  compared with the others was noise: facing-bet log-loss 0.894 -> 0.883 (table average alone 0.886). k 64 without the
+  table step lost -34 ± 16 on the #36 bots (they call small bets more than the curve says). predictAction's raise
+  share divides by the fold rate raiseFreq was built from (multiway raises predicted 12%, real 9%, now 10%). Sim
+  +48.3 ± 14.6 vs v1.7.2 (2,000 deals 4-handed). Tried and dropped: linking families (bet effect -> raise prior,
+  VPIP -> fold), more shrinkage on vsOpen / 3-bet / foldAfterAgg (all under 0.003 log-loss); EV - 1 SE size
+  tie-break -6.2 ± 12.7.
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
@@ -287,6 +302,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   product of heads-up reads (`fieldStats(list, base, foldList)`). Against the old bots, which over-folded multiway
   the same way as the model (two fold together 38%), this lost -27 ± 20; against the refit bots (#36: 53% / 53% /
   63%, two together 31%) it gained +32.8 ± 21.2 (1,000 deals 4-handed; weak hands +30 ± 10, SB +33 ± 13).
+  Open lead: after someone has called, the logs fold 54% where the multiway read says 47% (37 spots; no caller yet:
+  52% vs 57%, 93 spots, before #39's heads-up first answers).
 - Simulator results (`test/sim/run.js`: duplicate deals, luck-corrected bb/100 ± SE; the old `sim.js`/`sim-multi.js`
   figures were much noisier and are dropped). 4-handed vs friend bots, 150bb: solver 225 ± 32 vs the simple baseline
   bot 97 ± 26 (+128 ± 35, 1,000 deals, v1.4.0). Multiway preflop solver on vs off: +39 ± 18 (2,000 deals; the
@@ -300,7 +317,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22; turn solver river
   sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds. Bots are simple; this is a regression check, not proof
   of an edge against real players.
-- Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
+- Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
+  positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
+  rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
+  everyone folded 17 times, predicted 14.9 without the story and 16.1-16.5 with it (log-likelihood -31.4 / -30.8), so
+  recentring is not supported (thin data; the sim bots ignore hero's line). Real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
   devices is not wanted: the owner keeps phone and computer separate.)
 

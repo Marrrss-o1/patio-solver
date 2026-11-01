@@ -1644,7 +1644,10 @@
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
     let fold = foldAtSize(s, f, ctx.street);
-    if (kind.raiseOverAggressor) fold *= 0.75;
+    // A bettor who gets raised folds less than their fold-to-bet curve: in the logs 6 of 19 (32%), where
+    // x0.75 said about 45-50% at the usual raise sizes (0.55: simulator +22.6 +- 20.6 4-handed, +11.7 +- 18.6
+    // heads-up against 0.75).
+    if (kind.raiseOverAggressor) fold *= ctx.raiseAggFold != null ? ctx.raiseAggFold : 0.55;
     let cont = 1 - fold;
     if (kind.raiseOverAggressor) cont = Math.min(cont, valueShare(s) + (ctx.street < 5 ? 0.1 : 0));
     // A player who bet and got raised re-raises more often than one facing a first bet (logs:
@@ -5005,7 +5008,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
