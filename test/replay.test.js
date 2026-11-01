@@ -1583,5 +1583,129 @@ test('blinds: a big blind posted short (all-in for less) does not change the big
   assert.strictEqual(t2.hand.bigBlind, 10);
 });
 
+// ---------------------------------------------------------------------------
+// Reading the table at the edges: all-ins, players who leave, missed events
+// ---------------------------------------------------------------------------
+// 3-handed: Ann (s3) button, Bob (s7) small blind with `bob` chips, Hero (s1) big blind.
+// Ann opens to 30, Bob calls all-in (or is all-in from the blind), Hero calls; on the flop the
+// server gives Bob a turn on each betting round and checks for him (wasServerAutoAction), as it
+// did for an all-in player in Marwin's log, even when there is a bet to call.
+function allinHand(bob, opts) {
+  opts = opts || {};
+  const msgs = [];
+  const add = (ev, data, snap) => msgs.push({ ev, data, snap });
+  const hero0 = opts.heroStack || 1000;
+  let h = hero0, a = 1000, b = bob;
+  const S = () => snap3(h, a, b);
+  add('game:stage_began', { stageType: 'set_blinds' }, S());
+  add('game:dealer_updated', { dealerSeatPos: 's3', smallBlindSeatPos: 's7', bigBlindSeatPos: 's1', underTheGunSeatPos: 's3' }, S());
+  const sb = Math.min(5, b);
+  add('game:small_blind_paid', { amount: sb, playerId: 7 }, S()); b -= sb;
+  add('game:big_blind_paid', { amount: 10, playerId: 1 }, S()); h -= 10;
+  add('game:cards_dealt_to_player', [{ playerPos: 's1', cardData: { uniqueID: 11 } }, { playerPos: 's1', cardData: { uniqueID: 12 } }], S());
+  add('game:update_card_data', { cardData: { uniqueID: 11, suite: 'spades', value: 'A' } }, S());
+  add('game:update_card_data', { cardData: { uniqueID: 12, suite: 'hearts', value: 'K' } }, S());
+  add('game:stage_began', { stageType: 'pre_flop' }, S());
+  add('game:player_turn_started', { playerID: 3 }, S());
+  add('player:game:action_taken', { playerID: 3, actionType: 'raise', makeBetValue: 30, wasServerAutoAction: false }, S()); a -= 30;
+  add('game:player_turn_started', { playerID: 7 }, S());
+  if (b > 0) { const x = b; add('player:game:action_taken', { playerID: 7, actionType: 'call', makeBetValue: x, wasServerAutoAction: false }, S()); b = 0; }
+  else add('player:game:action_taken', { playerID: 7, actionType: 'check', makeBetValue: 0, wasServerAutoAction: true }, S());
+  add('game:player_turn_started', { playerID: 1 }, S());
+  const heroCall = Math.min(h, 20);
+  add('player:game:action_taken', { playerID: 1, actionType: 'call', makeBetValue: heroCall, wasServerAutoAction: false }, S()); h -= heroCall;
+  add('game:stage_began', { stageType: 'flop' }, S());
+  add('game:cards_deal_to_stack', [
+    { emitData: { stackID: 'community_stack', cardData: { suite: 'diamonds', value: 'K' } } },
+    { emitData: { stackID: 'community_stack', cardData: { suite: 'clubs', value: '7' } } },
+    { emitData: { stackID: 'community_stack', cardData: { suite: 'hearts', value: '2' } } },
+  ], S());
+  add('game:player_turn_started', { playerID: 7 }, S());
+  add('player:game:action_taken', { playerID: 7, actionType: 'check', makeBetValue: 0, wasServerAutoAction: true }, S());
+  add('game:player_turn_started', { playerID: 1 }, S());
+  add('player:game:action_taken', { playerID: 1, actionType: 'check', makeBetValue: 0, wasServerAutoAction: !!opts.heroAllin }, S());
+  add('game:player_turn_started', { playerID: 3 }, S());
+  add('player:game:action_taken', { playerID: 3, actionType: 'raise', makeBetValue: 50, wasServerAutoAction: false }, S()); a -= 50;
+  add('game:player_turn_started', { playerID: 7 }, S());
+  add('player:game:action_taken', { playerID: 7, actionType: 'check', makeBetValue: 0, wasServerAutoAction: true }, S());
+  add('game:player_turn_started', { playerID: 1 }, S()); // hero faces Ann's 50
+  return msgs;
+}
+
+test('all-in player: the server\'s automatic checks are no decisions (range, reads and hand log)', () => {
+  const { t, turns } = replay(allinHand(40));
+  assert.strictEqual(turns.length, 3);
+  const x = turns[2].input;
+  assert.ok(!turns[2].error, turns[2].error);
+  assert.strictEqual(x.toCall, 50);
+  assert.strictEqual(x.pot, 30 + 40 + 30 + 50);
+  const bob = x.opponents.find((o) => o.name === 'Bob');
+  assert.strictEqual(bob.stack, 0);
+  assert.strictEqual(bob.actions.flop, '', 'an automatic check narrowed the all-in player\'s range');
+  const tally = t.db.players.B.tally;
+  assert.strictEqual(tally.check, 0);
+  assert.strictEqual(tally.st.flop.check, 0);
+  assert.strictEqual(t.hand.log.filter((e) => e.who === 'Bob' && e.st === 'flop').length, 0);
+  assert.ok(t.hand.log.every((e) => !(e.act === 'check' && e.facing > 0)), 'the hand log has a check facing a bet');
+  // Ann's real actions still count.
+  assert.strictEqual(t.db.players.A.tally.st.flop.bet, 1);
+});
+
+test('all-in player: a blind that takes the whole stack is all-in from the start', () => {
+  const { t, turns } = replay(allinHand(5));
+  assert.ok(t.hand.players[7].allin);
+  // No preflop choice: any two cards ('pending'), not a calling range.
+  assert.strictEqual(turns[2].input.opponents.find((o) => o.name === 'Bob').actions.pre, 'pending');
+  assert.strictEqual(t.db.players.B.tally.st.flop.check, 0);
+  assert.strictEqual(t.db.players.B.tally.check, 0);
+});
+
+test('all-in hero: no advice for the server\'s automatic turns', () => {
+  // Hero has 40 chips: posts 10, calls 20 preflop... and 10 more is all-in. Use 30 so the call is all-in.
+  const msgs = allinHand(1000, { heroStack: 30, heroAllin: true });
+  const { t, turns } = replay(msgs);
+  assert.ok(t.hand.players[1].allin);
+  // Only the preflop decision asks for advice; the flop turns are the server's.
+  assert.strictEqual(turns.length, 1);
+  assert.match(t.solverInput('typical').error, /all-in/);
+});
+
+test('a player who leaves mid-hand is out of the hand (no fold is sent for them)', () => {
+  const msgs = three.slice(0, -1);
+  // The game is paused on the flop and Ann leaves the table, as a live player did in Marwin's log.
+  msgs.push({ ev: 'admin:game:game_paused', data: {}, snap: snap3(970, 970, 970) });
+  msgs.push({ ev: 'player:game:player_play_state_changed', data: { newPlayState: 'exiting', userId: 'A', wasKickedByUsername: false }, snap: snap3(970, 970, 970, { a: 'playing' }) });
+  msgs.push({ ev: 'admin:game:game_unpaused', data: { turnTimeLeft: 20000 }, snap: snap3(970, 970, 970, { a: 'exiting' }) });
+  msgs.push({ ev: 'game:player_turn_started', data: { playerID: 1 }, snap: snap3(970, 970, 970, { a: 'exiting' }) });
+  const { t, turns } = replay(msgs);
+  const x = turns[1];
+  assert.ok(!x.error, x.error);
+  assert.deepStrictEqual(x.input.opponents.map((o) => o.name), ['Bob']);
+  assert.strictEqual(x.input.pot, 90, 'Ann\'s chips stay in the pot');
+  assert.strictEqual(x.input.inPosition, true);
+  t.handle('game:game_ended', {}, snap3(1060, 970, 970, { a: 'exiting' }));
+  assert.strictEqual(t.db.history[0].players.find((p) => p.name === 'Ann').left, true);
+  // A play state change for a player who already folded, or after the hand, changes nothing.
+  const r2 = replay(three);
+  r2.t.handle('player:game:player_play_state_changed', { newPlayState: 'away', userId: 'A' }, null);
+  assert.ok(!r2.t.hand.players[3].folded);
+});
+
+test('safety net: when the chips stop matching the table, advice stops for the hand', () => {
+  // Bob's flop check is lost (as after a reconnect) and so is a bet: the table shows Ann 40 lower.
+  const msgs = three.slice(0, -2);
+  msgs.push({ ev: 'game:player_turn_started', data: { playerID: 1 }, snap: snap3(970, 930, 970) });
+  const { t, turns } = replay(msgs);
+  assert.match(turns[1].error, /Lost track of the chips this hand \(Ann: 970 counted, 930 at the table\)/);
+  assert.deepStrictEqual(t.hand.desync, { who: 'Ann', tracked: 970, table: 930, street: 3 });
+  // The hand log keeps it, and the next hand starts clean.
+  t.handle('game:game_ended', {}, snap3(970, 1050, 970));
+  assert.strictEqual(t.db.history[0].desync.who, 'Ann');
+  const next = replay(three, t.db);
+  assert.ok(next.turns.every((y) => !y.error));
+  // The recorded hands all match the table at every turn.
+  for (const fx of [real, three, sd]) assert.ok(!replay(fx).t.hand.desync);
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
