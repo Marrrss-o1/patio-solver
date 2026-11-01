@@ -1875,6 +1875,17 @@
       const aggScale = ctx.aggro ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1;
       for (let g = 0; g <= 60; g++) grid[g] = q(aggScale * foldAtSize(o.stats, g * 0.05, s));
       const callCut = (f) => grid[Math.min(60, Math.round(f * 20))];
+      // Multiway rounds of the lookahead, once someone has called the bet: the multiway read with
+      // fold odds x OVERCALL_FOLD, as on the current street (sc.oppAfter). Built on first use.
+      let gridAfter = null;
+      const callCutAfter = (f) => {
+        if (!gridAfter) {
+          const ms = o.statsMw || o.stats, k = ctx.overcall != null ? ctx.overcall : OVERCALL_FOLD;
+          gridAfter = new Float64Array(61);
+          for (let g = 0; g <= 60; g++) gridAfter[g] = q(oddsScale(aggScale * foldAtSize(ms, g * 0.05, s), k));
+        }
+        return gridAfter[Math.min(60, Math.round(f * 20))];
+      };
       const c0 = lowerBound(x, callCut(HERO_BET));
       // Raises: value raises from the top of their range, plus a few bluff-raises.
       const rf = clamp(ss.raiseFreq + (o.stats.raiseShift || 0), 0.02, 0.35);
@@ -1890,7 +1901,7 @@
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
         foldHero: aggScale * foldAtSize(o.stats, HERO_BET, s),
-        callCut,
+        callCut, callCutAfter,
         // Hero value-bets when it beats 55% of the hands that would call.
         valueCut: c0 < n ? x[c0 + Math.floor(0.55 * (n - 1 - c0))] : 2,
         eqVsCall: (h) => (c0 < n ? Math.max(0, lb(h) - c0) / (n - c0) : 1),
@@ -5260,8 +5271,11 @@
       if (!plans[key]) {
         const st = Object.assign({}, opps[i].statsHU || opps[i].stats, VARIANTS[v]);
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
-        plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
+        // The multiway read, for answers after someone has called in playOutMulti (callCutAfter).
+        const mw = opps[i].statsHU ? Object.assign({}, opps[i].stats, VARIANTS[v], { foldShift: st.foldShift }) : null;
+        plans[key] = makePlan({ stats: st, statsMw: mw, sampler: opps[i].sampler },
           { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine,
+            overcall: input.overcallFold != null ? +input.overcallFold : OVERCALL_FOLD,
             draws: planDraws[i] || (planDraws[i] = {}) });
       }
       return plans[key];
@@ -5377,6 +5391,7 @@
       }
       return eq;
     }
+    const laOvercall = input.lookaheadOvercall !== false;
     function playOutMulti(list, P, heroIn, heroScore, rng, v, startCur) {
       let left = stack - heroIn, extra = 0, listMask = 0;
       multiAlive.fill(0);
@@ -5435,9 +5450,12 @@
         let heroPut = 0;
         const heroAdd = (x) => { P += x; extra += x; left -= x; heroPut += x; };
         if (bettor === HERO) heroAdd(B); else { multiState[bettor] = 1; multiPut[bettor] = B; P += B; }
-        let raiser = -2, R = 0;
+        let raiser = -2, R = 0, stayed = false;
         // Everyone after the bettor, wrapping round, responds to the bet (or to a raise made
-        // in the meantime). Then anyone who acted before the raiser answers the raise.
+        // in the meantime). Then anyone who acted before the raiser answers the raise. Until
+        // someone calls, each answers with their heads-up read (the plans are built from it);
+        // after a call, with the multiway read and overcall folds (callCutAfter), as on the
+        // current street (sc.oppHU, sc.oppAfter).
         for (let pass = 0; pass < 2; pass++) {
           const from = pass === 0 ? at : order.indexOf(raiser);
           if (pass === 1 && raiser === -2) break;
@@ -5455,13 +5473,15 @@
               const need = Math.min(left, target - heroPut);
               if (eq < need / (P + need)) return -heroIn - extra;
               heroAdd(need);
+              stayed = true;
             } else if (multiAlive[a] && a !== raiser && multiPut[a] < target) {
               const t = planAt(a, v, s), so = strengthAt(s, oppCombo[a]);
               if (raiser === -2 && so >= t.rCut && left > B) {
                 R = Math.min(left + heroPut, roundChips(B + (P + B), bigBlind));
                 raiser = a; multiState[a] = 3; P += R - multiPut[a]; multiPut[a] = R;
-              } else if (raiser === -2 ? so >= t.callCut(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
+              } else if (raiser === -2 ? so >= (stayed && laOvercall ? t.callCutAfter : t.callCut)(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
                 P += target - multiPut[a]; multiPut[a] = target; if (multiState[a] !== 1) multiState[a] = 2;
+                stayed = true;
               } else multiAlive[a] = 0;
             }
           }
