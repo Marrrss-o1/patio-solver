@@ -153,7 +153,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
   loops), with about 50-230 MB of kernel memory per solve.
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
-  stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%). The river solver
+  stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%), on both the
+  multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
+  there after #39 had dropped it; sim -13.3 ± 21.8, as expected with bots that ignore hero's line). The river solver
   models hero's range directly, so it does not take the shift.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
@@ -269,7 +271,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
   about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
   against 0.75: 4-handed +22.6 ± 20.6 (1,000 deals), heads-up +11.7 ± 18.6 (1,500 deals). This is the cause behind
-  the audit thread's flop-raise gate (pooled about +15 ± 9 on 3+ handed tables, -17 ± 13 heads-up), which is not merged.
+  the audit thread's flop-raise gate (pooled about +15 ± 9 on 3+ handed tables, -17 ± 13 heads-up), which is not merged:
+  on top of 0.55 a multiway-only gate lost -18.6 ± 14.4.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
@@ -315,7 +318,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   friends) +31 ± 18; v1.4.0 vs v1.5.0 main +13 ± 21 4-handed, +12 ± 22 heads-up; side-pot gate (#21) +28 ± 16; reads rebuild about +8 ± 12 over 4 runs; audit fixes (#12) -6.7 ± 12, -3.9 ± 10, +12.7 ± 10
   against three successive mains; flop solver on vs off -3 ± 25 (1,000 deals); lookahead lines (v1.7.0, LINE_SOFT 0.5) +27 ± 15
   4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22; turn solver river
-  sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds. Bots are simple; this is a regression check, not proof
+  sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds; everything from
+  #37, #39, #40 and #42 together (d8e866e vs 90693fb, fresh seed) +30.2 ± 22.2, well under the parts added up (they
+  overlap, and the single runs that got merged are biased upward by being picked). Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
