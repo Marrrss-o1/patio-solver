@@ -238,6 +238,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   clamp(2.2 x PFR/VPIP, 0.1, 1) x the narrow range's mass (`WAR_MIX` 2.2), so it differs per player.
 - Turn and river raises keep only a quarter of the range noise, with no extra for small raises (8 of 10 shown river
   raises were strong).
+  `input.flopBigRaise` (off) does the same for flop raises of pot or more: in the 31 Oct + 1 Nov logs 5 of 6 shown
+  postflop raises of pot or more were top pair or better, and a 6.7x-pot flop check-raise shove (Aura Qd7d on Qs 7h 8s)
+  was read as 31% no-pair hands. On that spot it only moves hero's equity 0.69 -> 0.67 (still a call). Not judged on
+  the simulator: the bots pick postflop raise sizes independently of their hand (`raiseShove`), so they would score it
+  against an assumption the logs contradict. Revisit with more shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
