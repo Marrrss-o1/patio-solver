@@ -2738,6 +2738,8 @@
       return s;
     }
 
+    // Hero's bet sizes (cfg.heroBets) and raises per river (cfg.raises); the defaults are the tree since v1.4.
+    const heroBets = cfg.heroBets || [0.33, 0.66, 1], raises = cfg.raises || 1;
     function node(player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise) {
       const potNow = P0 + hIn + oIn;
       const myIn = player === 0 ? hIn : oIn;
@@ -2762,10 +2764,15 @@
           const r = Math.min(left, round(facing + (potNow + facing)));
           const [h3, o3] = after(r);
           add({ kind: r >= left ? 'allin' : 'raise', amount: r, frac: (r - facing) / (potNow + facing) }, () => node(1 - player, h3, o3, r - facing, raisesLeft - 1, true, true));
+          // cfg.allinRaise: hero can also shove over the bet.
+          if (cfg.allinRaise && player === 0 && r < left) {
+            const [h4, o4] = after(left);
+            add({ kind: 'allin', amount: left, frac: (left - facing) / (potNow + facing) }, () => node(1, h4, o4, left - facing, raisesLeft - 1, true, true));
+          }
         }
       } else {
         add({ kind: 'check', amount: 0 }, lastToAct ? { term: 'show', hIn, oIn } : () => node(1 - player, hIn, oIn, 0, raisesLeft, true));
-        const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];
+        const fracs = player === 0 ? heroBets : [oppBetFrac];
         for (const f of fracs) {
           const b = Math.min(left, Math.max(bigBlind, round(f * potNow))); // a bet is at least the big blind
           if (b <= 0) continue;
@@ -2788,7 +2795,7 @@
       n.sIter = 0;
       return n;
     }
-    const root = toCall > 0 ? node(0, 0, 0, toCall, 1, true) : node(0, 0, 0, 0, 1, !heroFirst);
+    const root = toCall > 0 ? node(0, 0, 0, toCall, raises, true) : node(0, 0, 0, 0, raises, !heroFirst);
     // Terminal nodes get their own value buffer too.
     (function addBuffers(n) {
       for (const k of n.kids) { if (k.term) k.v = new Float64Array(N); else addBuffers(k); }
@@ -3256,6 +3263,8 @@
     // simulator, 4-handed, two seeds of 1,000 deals, for about 13% fewer iterations per second).
     const turnBets = (cfg.turnBets || [0.33, 0.66, 1]).slice(0, 3), riverBets = (cfg.riverBets || [0.33, 0.66, 1]).slice(0, 3);
     const raiseFracs = (cfg.raiseFracs || [1]).slice(0, 2);
+    // Raises per street (cfg.raiseDepth, default 1).
+    const depth = cfg.raiseDepth || 1;
     let nodes = 0;
     function makeNode(n5, card, player, hIn, oIn, facing, raisesLeft, lastToAct, vsRaise, fr, oppAgg, q, nb = 0) {
       nodes++;
@@ -3316,12 +3325,12 @@
     }
     function riverRoot(ch, c) {
       const q = riverQuantiles(ch.fr, c);
-      return makeNode(5, c, heroIP ? 1 : 0, ch.hIn, ch.oIn, 0, 1, false, false, ch.fr, ch.oppAgg, q, ch.nb);
+      return makeNode(5, c, heroIP ? 1 : 0, ch.hIn, ch.oIn, 0, depth, false, false, ch.fr, ch.oppAgg, q, ch.nb);
     }
     const fr0 = Float64Array.from(O.w);
     const root = toCall > 0
-      ? makeNode(4, -1, 0, 0, 0, toCall, 1, true, false, fr0, false, qTurn, 1)
-      : makeNode(4, -1, 0, 0, 0, 0, 1, !heroFirst, false, fr0, false, qTurn);
+      ? makeNode(4, -1, 0, 0, 0, toCall, depth, true, false, fr0, false, qTurn, 1)
+      : makeNode(4, -1, 0, 0, 0, 0, depth, !heroFirst, false, fr0, false, qTurn);
 
     // ----- Discounted CFR with chance-sampled river cards -----
     const pools = [];
@@ -5726,6 +5735,7 @@
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
+        heroBets: input.riverBets, raises: input.riverRaises, allinRaise: input.riverAllinRaise,
       });
       // The Monte Carlo then only feeds the equity readout, so it can be shorter.
       if (solved) target = Math.min(target, 6000);
@@ -5745,7 +5755,7 @@
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending, heroIP: inPosition,
         iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
-        turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises,
+        turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises, raiseDepth: input.turnRaiseDepth,
       });
       if (ts) { solved = Object.assign(ts, { kind: 'turn' }); target = Math.min(target, 6000); }
     }
@@ -5771,7 +5781,7 @@
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
-          turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises,
+          turnBets: input.turnBets, riverBets: input.turnRiverBets, raiseFracs: input.turnRaises, raiseDepth: input.turnRaiseDepth,
           multi: { kappa: field.kappa, K: opps.length, rho: input.turnFieldRho != null ? input.turnFieldRho : 0.4 },
         });
         if (ts) { solved = Object.assign(ts, { kind: 'turn', field: opps.length, multiway: opps.length }); target = Math.min(target, 6000); }
@@ -5832,7 +5842,8 @@
       const used = new Uint8Array(52);
       const hsR = strengths[5].hs;
       let got = 0;
-      for (let it = 0; it < 6000; it++) {
+      const fieldN = input.riverFieldSamples || 6000;
+      for (let it = 0; it < fieldN; it++) {
         used.fill(0);
         for (const c of dead) used[c] = 1;
         let best = -1, bestS = -1, ok = true;
@@ -5870,6 +5881,7 @@
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,
+          heroBets: input.riverBets, raises: input.riverRaises, allinRaise: input.riverAllinRaise,
         });
         if (solved) { solved.multiway = opps.length; target = Math.min(target, 6000); }
       }
