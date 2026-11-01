@@ -28,7 +28,7 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
                          10% of the time left on the game's clock, 1-1.5 s, 1.5 s if unknown; the clock is 23 s), with
                          its own river-card samples; one final analysis with `merge` adds the tallies, averages the
                          turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
-                         phone's (24x MC, 8x plan samples, 16x river and preflop iterations). One more worker answers
+                         phone's (24x MC, 8x plan samples, 16x river and 4x preflop iterations). One more worker answers
                          `quick` requests with the phone's budget: the overlay shows that within ~1 s ("Quick read")
                          and replaces it with the full solve; if hero acts first, the quick one is logged
                          (`advice.quick`). The tracker's `turn` event carries `timeLeftMs` for this. With
@@ -122,7 +122,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   raises and all-ins, up to 4 raises. Leaves: fold, all-in (table equity), flop (pot split by realized shares,
   `shares`: equity x 0.92 + strength, suited/connected/pair bonus, +-0.06 position, faded toward raw equity below SPR
   4). The opponent's fixed strategy uses the Monte Carlo's `sc.opp` cont rates at the first response and
-  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations, computer 4800 / 2.5 s.
+  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations, computer 1,200 / 0.8 s (4,800 / 2.5 s
+  until v1.7.6: on all 103 logged preflop spots 600-2,400 iterations pick the same action as 4,800 and 300 differs on
+  one near-tie, while 4,800 takes about 1.2 s against 0.33 s, so the full read now arrives before he acts).
   `vsOpenRead` reads `stats.vsOpen` ({small <=2.5bb, medium <=3.5bb, large} x {cont, threeBet}) when the tracker
   provides it, so learned defence by open size feeds both the Monte Carlo (`continueRule` via `kind.openTo`) and the
   preflop solver's first response. Without it the old size-blind rule (VPIP-based) is used.
