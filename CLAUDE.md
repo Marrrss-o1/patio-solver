@@ -307,6 +307,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   63%, two together 31%) it gained +32.8 ± 21.2 (1,000 deals 4-handed; weak hands +30 ± 10, SB +33 ± 13).
   Open lead: after someone has called, the logs fold 54% where the multiway read says 47% (37 spots; no caller yet:
   52% vs 57%, 93 spots, before #39's heads-up first answers).
+  Joint folds by size, exactly 2 opponents, first bets (both fold / product of heads-up rates): under 40% pot 9% / 5%
+  (n 22), 40-75% 16% / 31% (n 19), 75-100% 38% / 48% (n 8), over 100% 60% / 49% (n 5); 3+ opponents at 75%+ 28% / 34%
+  (n 18). So the product of heads-up rates holds overall (20% vs about 25% pooled); only mid sizes fall short, on
+  thin data. Small multiway stabs that the log replay still flags on d7c8a9f (#35, #101, #112, #125 flops/turns,
+  0.06-0.8 chips over check) are not from the fold curve: their immediate all-fold (7-27%) is close to the logs, and
+  with `lookahead: false` each is -1.2 to -2.2 chips and checking wins. Their edge is the lookahead's river bluff after
+  someone calls; the logs don't contradict it (river bets after a called turn bet took the pot 5 of 6 times
+  multiway, 5 of 8 heads-up; hero's own barrels 4 of 5), but every sample is tiny. Scripts:
+  /mnt/project-files/patio-solver/scripts/ (mw-stab-calibration.js, barrel-folds.js, mw-joint-folds.js).
 - Simulator results (`test/sim/run.js`: duplicate deals, luck-corrected bb/100 ± SE; the old `sim.js`/`sim-multi.js`
   figures were much noisier and are dropped). 4-handed vs friend bots, 150bb: solver 225 ± 32 vs the simple baseline
   bot 97 ± 26 (+128 ± 35, 1,000 deals, v1.4.0). Multiway preflop solver on vs off: +39 ± 18 (2,000 deals; the
