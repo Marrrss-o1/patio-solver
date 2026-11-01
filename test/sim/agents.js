@@ -16,8 +16,8 @@ const bots = require('./bots.js');
 //          solve gets on a fast computer; the full solve averages 8 of them). On the 292 logged decisions this picks
 //          the full solve's action on 44 of 44 turns (the simulator's default: 36-42%), 87-95% of flops (default
 //          53-79%; the full solve's 24x Monte Carlo is the rest), and preflop and river as the full solve does
-//          (98-100%: the full solve's bigger preflop and river budgets change no decisions). About 1.5 s per turn
-//          decision, so a run takes about 3x as long as with the default.
+//          (98-100%: the full solve's bigger preflop and river budgets change no decisions). About 6x the
+//          default's time per decision, mostly the turn solves (phone about 2.6x).
 const BUDGETS = {
   phone: {},
   live: { turnSolver: true, turnIterations: 100 },
