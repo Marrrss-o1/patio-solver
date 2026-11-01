@@ -329,7 +329,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   +27.0 ± 14.7 (button +12.7 ± 6.2, early +17.1 ± 9.1, weak -6.7 ± 4.1); the v1.8.3 bots without the cliff
   (BOTCLIFF=0, seed 514): +8.0 ± 15.0 (premium and strong flat). Pooled: with the cliff about +39 ± 8 (three seeds),
   without it about +2 ± 12 (two), so it costs nothing where big re-raises get called and gains where they get
-  folded, as the friends do.
+  folded, as the friends do. Heads-up (seed 515, Mac): +16.1 ± 14.2.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the
