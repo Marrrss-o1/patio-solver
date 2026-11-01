@@ -55,6 +55,7 @@
   let tracker = null;
   let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true };
   let status = 'Connecting to the table…';
+  let importNote = '', importing = false;
   let advice = null; // { result, ctx, forHandStreet, stale }
   let thinking = false;
   let blocked = false;
@@ -144,7 +145,9 @@
       <select data-a="style"><option value="tight">Tight</option><option value="typical">Typical</option><option value="loose">Loose</option></select>
       <span class="sp" style="flex:1"></span>
       <button class="btn" data-a="log">Hand log</button>
+      <button class="btn" data-a="import" title="Load hand-log exports (from an older install) and rebuild the reads from every stored hand">Import</button>
       <button class="btn" data-a="reset">Reset reads</button>
+      <input type="file" accept=".json,application/json" multiple style="display:none">
     </div>
   </div>`;
   const panel = root.querySelector('.panel');
@@ -152,6 +155,7 @@
   const dot = root.querySelector('.dot');
   const foot = root.querySelector('.ft');
   const styleSel = root.querySelector('select');
+  const fileIn = root.querySelector('input[type=file]');
 
   function place() {
     const x = ui.x == null ? window.innerWidth - 316 : Math.min(Math.max(0, ui.x), window.innerWidth - 120);
@@ -193,6 +197,10 @@
         root.appendChild(link); link.click(); link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
       });
+    } else if (what === 'import') {
+      if (!tracker || importing) return;
+      fileIn.value = '';
+      fileIn.click();
     } else if (what === 'reset') {
       if (!tracker) return;
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
@@ -205,6 +213,59 @@
       ui.showOptions = !ui.showOptions; store.set(UI_KEY, ui); render();
     }
   });
+  fileIn.addEventListener('change', () => { if (fileIn.files && fileIn.files.length) importLogs([...fileIn.files]); });
+
+  // "Import": hand-log exports (this install's or an older one's) go into the stored log, and the
+  // reads are rebuilt by replaying every stored hand that has raw events, as at the table. Removing
+  // the extension in Chrome deletes its storage; this brings the reads back from a backup export.
+  async function importLogs(files) {
+    importing = true;
+    importNote = 'Importing…'; render();
+    try {
+      const got = [];
+      for (const f of files) {
+        const data = JSON.parse(await f.text());
+        const list = Array.isArray(data) ? data : data && Array.isArray(data.history) ? data.history : null;
+        if (!list) throw new Error(f.name + ' is not a hand-log export');
+        got.push(...list);
+      }
+      const key = (e) => e.t + ':' + (e.hero || []).join('');
+      const stored = await handLog.exportAll(tracker.db);
+      const have = new Set(stored.map(key));
+      const fresh = [];
+      for (const e of got) if (e && e.t != null && !have.has(key(e))) { have.add(key(e)); fresh.push(e); }
+      const add = await handLog.addHands(fresh);
+      if (!add.ok) throw new Error(add.error || 'storage write failed');
+      // Names in logs without account ids map to the ids the reads here already use.
+      const known = {};
+      for (const [id, r] of Object.entries(tracker.db.players)) if (r && r.name && id.slice(0, 5) !== 'name:') known[r.name] = id;
+      const res = await PatioTracker.rebuildReads(stored.concat(fresh), {
+        known, heroAuth: tracker.snap && tracker.snap.heroAuthId, yieldEvery: 10,
+        setup: (t) => {
+          t.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, t.poolTally());
+          t.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => t.poolTally());
+          t.fitVersion = PokerEngine.FIT_VERSION;
+        },
+        onProgress: (i, n) => { importNote = `Rebuilding reads: ${i} of ${n} hands…`; render(); },
+      });
+      // A read built from more hands than the log still holds (the log keeps the newest 1,000) stays.
+      const handsOf = (r) => { const t = (r && r.tally) || {}; return (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0); };
+      let kept = 0;
+      for (const [id, r] of Object.entries(res.db.players)) {
+        const cur = tracker.db.players[id];
+        if (cur && handsOf(cur) > handsOf(r) * 1.1 + 2) { kept++; continue; }
+        tracker.db.players[id] = r;
+      }
+      await saveDb();
+      importNote = `Imported ${add.added} new hand${add.added === 1 ? '' : 's'} (${got.length - fresh.length} already here). Reads rebuilt from ${res.replayed} hands` +
+        (res.skipped ? `; ${res.skipped} without raw events only went into the log` : '') + (kept ? `; ${kept} reads with more history kept as they were` : '') + '.';
+    } catch (e) {
+      importNote = 'Import failed: ' + ((e && e.message) || e);
+    }
+    importing = false;
+    render();
+  }
+
   styleSel.addEventListener('change', () => {
     ui.tableStyle = styleSel.value; store.set(UI_KEY, ui);
     if (advice && !advice.stale) requestAdvice();
@@ -306,6 +367,7 @@
     const n = tracker ? Object.keys(tracker.db.players).length : 0;
     html += `<div class="muted">Tracking ${n} player${n === 1 ? '' : 's'}. Reads sharpen as hands pile up.</div>`;
     if (saveError) html += `<div class="status neg">Couldn't save reads and the hand log: ${esc(saveError)}</div>`;
+    if (importNote) html += `<div class="status${/failed/.test(importNote) ? ' neg' : ''}">${esc(importNote)}</div>`;
     body.innerHTML = html;
   }
 

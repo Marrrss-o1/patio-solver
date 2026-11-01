@@ -116,7 +116,32 @@
       return [...byKey.values()].sort((a, b) => (a.t || 0) - (b.t || 0));
     }
 
-    return { load, save, exportAll, count: () => stored.length };
+    // Hands from an imported hand log, written under their own keys like any other. Hands already
+    // stored (same start time) are left alone. Storage still keeps only the newest `keep`, so an
+    // import of older hands into a full log keeps the newest of both.
+    async function addHands(entries) {
+      if (unreadable) return { ok: false, error: UNREADABLE, added: 0 };
+      const items = {};
+      const keys = [];
+      for (const e of entries || []) {
+        if (!e || e.t == null) continue;
+        const k = baseKey(e);
+        if (used.has(k) || items[k]) continue;
+        items[k] = e;
+        keys.push(k);
+      }
+      if (!keys.length) return { ok: true, added: 0 };
+      const r = await area.set(items);
+      if (!r || !r.ok) return Object.assign({ added: 0 }, r || { ok: false, error: 'no answer from storage' });
+      for (const k of keys) { used.add(k); stored.push(k); storedSet.add(k); }
+      stored.sort(byTime);
+      const drop = stored.length > keep ? stored.splice(0, stored.length - keep) : [];
+      for (const k of drop) storedSet.delete(k);
+      const r2 = drop.length ? firstError([await area.remove(drop)]) : { ok: true };
+      return Object.assign({ added: keys.length - drop.filter((k) => items[k]).length }, r2);
+    }
+
+    return { load, save, exportAll, addHands, count: () => stored.length };
   }
 
   const api = { create, PREFIX, KEEP, REWRITE };

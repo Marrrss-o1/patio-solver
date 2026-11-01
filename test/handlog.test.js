@@ -213,6 +213,75 @@ test('reset reads keeps the hand log', async () => {
   assert.strictEqual(area.hands().length, 20);
 });
 
+test('import: hands from an export are stored once, older ones too, and the newest 1,000 kept', async () => {
+  const area = fakeArea();
+  const hl = HL.create(area, DB, { keep: 30 });
+  let { db } = await hl.load(MEM, RAW);
+  for (let i = 0; i < 20; i++) logHand(db);
+  await hl.save(db);
+  const mine = await hl.exportAll(db);
+  // An export from an older install: 15 older hands, and 5 that are already here.
+  const old = [];
+  for (let i = 0; i < 15; i++) old.push({ t: 1780000000000 + i * 30000, board: [], raw: [{ t: 0, ev: 'x' }], players: [] });
+  const r = await hl.addHands(old.concat(mine.slice(0, 5).map((e) => JSON.parse(JSON.stringify(e)))));
+  assert.ok(r.ok, JSON.stringify(r));
+  // 20 + 15 = 35 > 30: the 5 oldest imported hands are dropped again.
+  assert.strictEqual(area.hands().length, 30);
+  assert.strictEqual(r.added, 10);
+  assert.strictEqual(hl.count(), 30);
+  const all = await hl.exportAll(db);
+  assert.strictEqual(all.length, 30);
+  assert.ok(all.every((e, i) => i === 0 || e.t >= all[i - 1].t), 'oldest first');
+  // Importing the same file again adds nothing, and later saves keep working.
+  assert.strictEqual((await hl.addHands(old)).added, 0);
+  logHand(db);
+  assert.ok((await hl.save(db)).ok);
+  assert.strictEqual(area.hands().length, 30);
+});
+
+test('import: a failed write adds nothing', async () => {
+  const area = fakeArea();
+  const hl = HL.create(area, DB);
+  const { db } = await hl.load(MEM, RAW);
+  area.failWith('QUOTA_BYTES quota exceeded');
+  const r = await hl.addHands([{ t: 1780000000000, raw: [], players: [] }]);
+  assert.ok(!r.ok && r.added === 0 && /quota/.test(r.error));
+  assert.strictEqual(hl.count(), 0);
+  void db;
+});
+
+const E = require('../src/engine.js');
+const T = PatioTracker;
+const sd = require('./fixtures/synth-showdown.json');
+test('import: reads rebuilt from the hand log match the reads built at the table', async () => {
+  const live = new T({ players: {} });
+  const setup = (t) => { t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical'); };
+  setup(live);
+  const feed = (t, list) => { for (const m of list) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); } };
+  feed(live, sd);
+  feed(live, sd.filter((m) => m.ev !== 'hook:attached')); // the hand again: decay and a second hand
+  live.finishHand();
+  const hands = JSON.parse(JSON.stringify(live.db.history));
+  assert.ok(hands.length === 2 && hands.every((e) => e.raw && e.raw.length && e.raw.find((r) => r.s).s[0].length === 6), 'raw snapshots carry the account id');
+  const same = (a, b) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)));
+  const r = await T.rebuildReads(hands, { setup });
+  assert.strictEqual(r.replayed, 2);
+  same(Object.keys(r.db.players), Object.keys(live.db.players));
+  for (const id of Object.keys(live.db.players)) same(r.db.players[id].tally, live.db.players[id].tally);
+  // Logs from before v1.8.1 have names only: the reads the page has map names to account ids.
+  const old = JSON.parse(JSON.stringify(hands));
+  for (const e of old) for (const x of e.raw) if (x.s) x.s = x.s.map((s) => s.slice(0, 5));
+  const r2 = await T.rebuildReads(old, { setup, known: { Vic: 'V' }, heroAuth: 'H' });
+  same(r2.db.players.V.tally, live.db.players.V.tally);
+  // Without that, a name from the chat lines of the same day, else "name:<name>".
+  const chat = JSON.parse(JSON.stringify(old));
+  chat[0].raw.push({ t: 1, ev: 'chat_message', d: { username: 'Vic', userId: 'V2' } });
+  const r3 = await T.rebuildReads(chat.concat([{ t: 1, players: [] }]), { setup });
+  assert.ok(r3.db.players.V2 && !r3.db.players.V && r3.skipped === 1, Object.keys(r3.db.players).join(','));
+  const r4 = await T.rebuildReads(old, { setup });
+  assert.ok(r4.db.players['name:Vic']);
+});
+
 (async () => {
   let failures = 0;
   for (const [name, fn] of tests) {
