@@ -1699,13 +1699,15 @@
         return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
       const raised = PRE_RAISED.test(opp.actions.pre || '');
-      // Raisers facing hero's re-raise (input.pfRaisedRead): their own read. In the logs, the first time a raiser faces a
-      // re-raise in a hand (45 spots), they fold 3% below 35bb (n 39) and call or re-raise about half each (min-raise
-      // wars), and fold all 6 times above 35bb. The reads' foldTo3bet / fourBet (home prior 13% / 50%) carry that, faded
-      // above 30bb like the callBig floor. The rule below had them folding 30-45% and re-raising about 12%.
-      if (raised && ctx.raisedRead && s.foldTo3bet != null) {
-        const cont = clamp((1 - s.foldTo3bet) * fade, 0.03, 0.97);
-        return { cont, nut: 0.965, reraise: Math.min(cont, (s.fourBet != null ? s.fourBet : 0.45) * fade * fade) };
+      // Raisers facing hero's re-raise to 30bb or less (input.pfRaisedRead): their own read. In the logs, the first time a
+      // raiser faces a re-raise in a hand (45 spots), they fold 3% below 35bb (n 39) and call or re-raise about half each
+      // (min-raise wars). The reads' foldTo3bet / fourBet (home prior 13% / 50%) carry that; the rule below had them
+      // folding 30-45% and re-raising about 12%. Bigger re-raises keep the rule below: letting the read fade with the size
+      // (friends folded all 6 re-raises above 35bb) had the preflop solver open 95% of hands and 4-bet bluff to 35bb+
+      // against bots that never adapt.
+      if (raised && ctx.raisedRead && s.foldTo3bet != null && kind.amount + (ctx.heroBet || 0) <= 30 * ctx.bigBlind + 1e-9) {
+        const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97);
+        return { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
       }
       // Callers (mostly limpers) continue at their learned rate against a raise.
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
