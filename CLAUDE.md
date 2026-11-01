@@ -396,10 +396,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   VPIP -> fold), more shrinkage on vsOpen / 3-bet / foldAfterAgg (all under 0.003 log-loss); EV - 1 SE size
   tie-break -6.2 ± 12.7. Dropping the table step predicts unseen hands better (facing-bet log-loss on the 1 Nov
   session 0.861 -> 0.848; the 31 Oct and 1 Nov sessions read after the older logs 0.858 -> 0.851; bots' hands
-  0.829 -> 0.831), but lost -28.5 ± 15.9 at the live budget (1,000 deals 4-handed, mostly button, strong hands), so
-  it stays: the bots answer each size the same way all night and answer hero like each other, the friends don't
-  (heads-up they fold less to each other's bets than the read at every size, about 0.05-0.10). A level-neutral
-  table step (shape only) scored no better (0.863).
+  0.829 -> 0.831), but it loses at the live budget (1,000 deals 4-handed each): -28.5 ± 15.9 on the #36 bots (mostly
+  button, strong hands), +10.2 ± 18.8 and -31.8 ± 17.4 on the refit bots (profiles-v3, seeds 502 and 503; small blind
+  and weak hands, as hero stabs more weak flops without it), pooled about -17 ± 10. It changes no preflop decision
+  (preflop never reads the size buckets), and folds against hero's bets stay on target either way (all logs, heads-up:
+  predicted 0.47 with it, 0.48 without, actual 0.46, n 65). So it stays: the bots answer each size the same way all
+  night and answer hero like each other, the friends don't (heads-up they fold less to each other's bets than the
+  read at every size, about 0.05-0.10). A level-neutral table step (shape only) scored no better (0.863).
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
