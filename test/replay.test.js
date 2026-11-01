@@ -843,6 +843,15 @@ test('river solver: calls a known bluffer more often than an honest bettor', () 
   assert.ok(bluffer > honest + 0.2, `${bluffer} vs ${honest}`);
 });
 
+test('reads: a few shown bluffs move a player\'s value share a little, many move it a lot', () => {
+  const vs = (n) => E.computeStats(Object.assign(T.blankTally(), { pfFold: 60, pfCall: 45, pfRaise: 25, check: 60, bet: 36, call: 30, raise: 6, fold: 36,
+    shows: Array(n).fill(0).map(() => ({ ...bluffShow })) }), 'typical').valueShare;
+  const v0 = vs(0), v3 = vs(3), v30 = vs(30);
+  // Each show here has two bets (turn and river); with 5 pseudo-shows three of them took it down by 0.47.
+  assert.ok(v0 - v3 > 0.05 && v0 - v3 < 0.2, `${v0} ${v3}`);
+  assert.ok(v0 - v30 > 0.4, `${v0} ${v30}`);
+});
+
 test('river solver: tracker passes hero\'s own line', () => {
   const x = replay(sd).turns[3];
   assert.deepStrictEqual(x.input.heroActions, { pre: 'raise', flop: 'bet', turn: 'call', river: '' });
