@@ -7,13 +7,13 @@ const CORES = Math.max(2, Math.min(10, (navigator.hardwareConcurrency || 4) - 2)
 // Budget multipliers over the phone's settings, and the turn solver's time per worker.
 // River 4,000 iterations: with the kernels about 0.2-0.7 s. Preflop 1,200 (about 0.3 s): on all 103
 // logged preflop spots 600, 1,200 and 2,400 pick the same action as 4,800 (300 differs once, on a
-// near-tie), and 4,800 took over a second, so he often acted on the quick read before it arrived.
+// near-tie), and 4,800 took over a second, so he often acted before it arrived.
 const POWER = { mc: 24, plan: 8, river: 16, preflop: 4 };
 // The turn solve runs for 10% of the time left on the game's clock, 1-1.5 s (1.5 s if unknown),
 // so the full read arrives in about 2 s: Marwin acts in a median 2.4 s on the turn (raw logs), and
-// with the old 30% (about 7 s) he almost always played the quick read. The solve is converged by
-// about 100 iterations (97% the same pick as 1,600). The quick read on the spare worker shows
-// something within about a second meanwhile.
+// with the old 30% (about 7 s) he almost always acted on the quick read (a phone-budget answer on
+// one more worker, shown first until 1 Nov; Marwin wants the full solve only). The solve is
+// converged by about 100 iterations (97% the same pick as 1,600).
 const turnMs = (input) => (input.timeLeftMs > 0 ? Math.max(1000, Math.min(1500, 0.1 * input.timeLeftMs)) : 1500);
 const PREFLOP_MS = 800;
 // Flops: the flop solver (flop and turn solved together, river checked down) on every worker
@@ -42,7 +42,7 @@ function startWorker(slot) {
     if (e && e.preventDefault) e.preventDefault();
     if (slot.w === w) restart(slot, { ok: false, error: 'A solver worker crashed. It has been restarted.' });
   };
-  // The final and quick workers load the blueprints now rather than on the first decision.
+  // The final worker loads the blueprints now rather than on the first decision.
   if (slot.warm) w.postMessage({ id: 0, mode: 'warm' });
 }
 function makeSlot(warm) {
@@ -74,7 +74,6 @@ for (let i = 0; i < CORES; i++) pool.push(makeSlot(false));
 // The final pass has its own worker: it holds the blueprints, and it is free the moment the
 // Monte Carlo shares are in.
 const finalSlot = makeSlot(true);
-const quickSlot = makeSlot(true);
 
 // The full analysis still running for each table (browser tab).
 const running = new Map();
@@ -135,16 +134,8 @@ async function analyze(input, tab) {
   }
 }
 
-// The phone's budget on one spare core.
-async function quick(input) {
-  const t0 = Date.now();
-  const r = await run(quickSlot, { mode: 'final', input });
-  if (r.ok) { r.ms = Date.now() - t0; r.workers = 1; }
-  return r;
-}
-
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (!msg || msg.target !== 'offscreen' || msg.type !== 'analyze') return false;
-  (msg.quick ? quick(msg.input) : analyze(msg.input, msg.tab == null ? null : msg.tab)).then(reply, (e) => reply({ ok: false, error: String((e && e.message) || e) }));
+  analyze(msg.input, msg.tab == null ? null : msg.tab).then(reply, (e) => reply({ ok: false, error: String((e && e.message) || e) }));
   return true;
 });

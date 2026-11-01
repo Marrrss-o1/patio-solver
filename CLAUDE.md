@@ -29,10 +29,11 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
                          10% of the time left on the game's clock, 1-1.5 s, 1.5 s if unknown; the clock is 23 s), with
                          its own river-card samples; one final analysis with `merge` adds the tallies, averages the
                          turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
-                         phone's (24x MC, 8x plan samples, 16x river and 4x preflop iterations). One more worker answers
-                         `quick` requests with the phone's budget: the overlay shows that within ~1 s ("Quick read")
-                         and replaces it with the full solve; if hero acts first, the quick one is logged
-                         (`advice.quick`). The tracker's `turn` event carries `timeLeftMs` for this. With
+                         phone's (24x MC, 8x plan samples, 16x river and 4x preflop iterations). The overlay shows
+                         only the full solve: the quick read (phone budget on one more worker, shown first) was
+                         dropped in v1.8.0 at Marwin's request; if hero acts before the full solve, nothing is shown
+                         or logged for that decision (older logs may carry `advice.quick`). The tracker's `turn`
+                         event carries `timeLeftMs` for `turnMs`. With
                          `FLOP_SOLVER` on, flops get the same treatment as turns (`flopSolver`, `flopTimeMs`).
   slim.js                Shrinks a result for the overlay (used by background and workers).
   engine.js, tracker.js  COPIES of src/ written by the build (blueprint.js too). Edit src/, then run the build.

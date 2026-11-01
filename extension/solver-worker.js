@@ -1,7 +1,7 @@
 // One solver worker in the offscreen pool.
 importScripts('engine.js', 'slim.js', 'blueprint.js');
-// Blueprint strategies (one per table size, gzipped) are only needed for the final pass and the
-// quick read, so only those workers load them (offscreen.js asks them to as they start). A
+// Blueprint strategies (one per table size, gzipped) are only needed for the final pass, so only
+// that worker loads them (offscreen.js asks it to as it starts). A
 // missing file just means no blueprint for that size.
 const BLUEPRINT_FILES = ['blueprint-3max.bin.gz', 'blueprint-4max.bin.gz', 'blueprint-5max.bin.gz'];
 let blueprints = null;
