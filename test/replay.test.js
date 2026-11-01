@@ -1388,6 +1388,40 @@ test('re-raises after the flop: strong hands call them, air folds, and preflop h
   assert.ok(pre.ranked.every((x) => !x.rrN), 'preflop re-raises were played out');
 });
 
+// The computer's worker pool (offscreen.js): each worker returns its Monte Carlo tallies
+// (partial), and one final analysis adds them up (merge). A tally the merge leaves out (the
+// re-raise play-out's rrN/rrCall were new in #40) would change the advice on the computer only.
+test('worker pool: merging one worker\'s tallies gives that worker\'s own result', () => {
+  const stabs = require('./fixtures/real-multiway-stabs.json');
+  const spots = {
+    'flop bet into a re-raiser': flopSpot('Ah Kd', { iterations: 2000, opponents: [{ name: 'V', tally: RAISER, actions: { pre: 'call', flop: 'check' } }] }),
+    'flop facing a bet': flopSpot('Qh Qd', { iterations: 2000, toCall: 60, opponents: [{ name: 'V', tally: RAISER, actions: { pre: 'raise', flop: 'bet' }, sizes: { flop: 0.6 } }] }),
+    'flop without lookahead': flopSpot('9h 8h', { iterations: 2000, lookahead: false }),
+    'river solver': riverSpot('As Kc'),
+    'preflop solver': { hero: C('Ah Qs'), board: [], pot: 1.5, toCall: 0.5, stack: 99.5, bigBlind: 1, inPosition: true, iterations: 2000, preflopIterations: 200,
+      opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }], heroActions: { pre: 'pending' } },
+    'multiway flop from the logs': Object.assign({}, stabs.flopKingHighBoard, { iterations: 2000 }),
+  };
+  for (const [name, x] of Object.entries(spots)) {
+    const input = Object.assign({}, x, { mix: false, seed: 7 });
+    const own = E.analyzeSync(input);
+    const part = E.analyzeSync(Object.assign({}, input, { partial: true }));
+    const merged = E.analyzeSync(Object.assign({}, input, { merge: [part.partial], solvedMerge: [part.solved] }));
+    assert.strictEqual(merged.ranked.length, own.ranked.length, name);
+    for (const sc of own.ranked) {
+      const m = merged.ranked.find((y) => y.kind === sc.kind && Math.abs(y.amount - sc.amount) < 1e-9);
+      assert.ok(m, `${name}: ${sc.kind} ${sc.amount} is missing after the merge`);
+      for (const f of ['ev', 'evRead', 'evWorst', 'se', 'n', 'foldPct', 'equityWhenCalled', 'reraisedPct', 'rrN', 'callsReraise']) {
+        assert.ok(sc[f] === m[f] || Math.abs(sc[f] - m[f]) < 1e-9, `${name}: ${sc.kind} ${sc.amount} ${f} is ${sc[f]} alone, ${m[f]} merged`);
+      }
+    }
+    assert.deepStrictEqual([merged.best.kind, merged.best.amount], [own.best.kind, own.best.amount], name);
+  }
+  // The spots above really exercise the re-raise play-out and both solvers.
+  assert.ok(E.analyzeSync(Object.assign({}, spots['flop facing a bet'], { mix: false, seed: 7 })).ranked.some((s) => s.rrN > 0));
+  assert.strictEqual(E.analyzeSync(Object.assign({}, spots['river solver'], { mix: false, seed: 7 })).solver.kind, 'river');
+});
+
 test('fuzz: random hands through the tracker match the table (chips, price, stacks, seats) and get legal advice', () => {
   const r = F.rng32(5);
   const db = { players: {} };
