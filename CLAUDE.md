@@ -319,8 +319,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of an edge against real players.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
-  rates already describe answers to typical lines; recentring it on a typical line's credibility is untested (the
-  sim bots ignore hero's line, so only the logs can judge it). Real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
+  rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
+  everyone folded 17 times, predicted 14.9 without the story and 16.1-16.5 with it (log-likelihood -31.4 / -30.8), so
+  recentring is not supported (thin data; the sim bots ignore hero's line). Real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
   devices is not wanted: the owner keeps phone and computer separate.)
 
