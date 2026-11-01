@@ -151,7 +151,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (`flopBets`, `flopTurnBets`), the opponent their size, one pot-size raise per street. Heads-up, or against the
   field (2-4 opponents, no side pots; `turnField` works on the flop too) with kappa^(0.4^bets) as on the turn.
   WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
-  loops), with about 50-230 MB of kernel memory per solve.
+  loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 400 deals, flop solver
+  with a 24,000-iteration Monte Carlo -79 ± 39 against the same Monte Carlo alone (speed thread; longer run pending).
+  The same sweep found the sim's default 3,000 Monte Carlo iterations cost about 64 ± 38 bb/100 against 24,000 (the
+  phone's budget), so sim A/Bs at 3,000 understate both builds and may misjudge changes that interact with noise.
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%), on both the
   multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
@@ -329,7 +332,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22; turn solver river
   sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds; everything from
   #37, #39, #40 and #42 together (d8e866e vs 90693fb, fresh seed) +30.2 ± 22.2, well under the parts added up (they
-  overlap, and the single runs that got merged are biased upward by being picked). Bots are simple; this is a regression check, not proof
+  overlap, and the single runs that got merged are biased upward by being picked). Exploiter bots on v1.7.4 (600
+  deals 4-handed, seed 7): base friend 262.5 ± 36, adapt 253.1 ± 36, sticky 236.9 ± 36; hero folds 34-38% to river
+  bets and 2% to 3-bets, and the base bots answer hero's flop raises fold 37% / call 49% / raise 14% (logs: 32 / 47 /
+  16). Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
