@@ -238,8 +238,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   rebuild on three logs: actions 0.831 -> 0.787, seen 0-9 0.958 -> 0.879, open responses 1.31 -> 1.00, shown hands
   x0.73 -> x1.72 (on the 100 hands the priors never saw: 0.809 -> 0.776, x0.92 -> x1.45). Simulator: about +8 ± 12.
 - `foldAfterAgg` (tally `aggVsN`/`aggVsFold`): folding to a bet after having bet or raised earlier in the hand.
-  When an opponent has an aggressive line (`aggroLine`), plans and the river solver scale fold rates by
-  foldAfterAgg / foldToBet. Without it the solver floated turn bets with air planning river bluffs.
+  When an opponent has an aggressive line (`aggroFold` in analyzeSync), plans and the river, turn and flop solvers
+  scale fold rates by foldAfterAgg / foldToBet (about x0.7). Without it the solver floated turn bets with air
+  planning river bluffs. The tally mixes a bettor facing a raise (folds about 25%; continueRule's raiseAggFold
+  covers that) with players who bet an earlier street, and those fold MORE than the plain read once they check
+  on the current street: friend bots 63% vs 49% (n 96; river 79% vs 53%), logs 67% vs 44% (n 9), where the scale
+  said about 35%. Before they act on the street the plain read fits (bots 40% vs 43%, n 174; logs 50% vs 54%, n 10).
+  So now (`input.aggroFold`, default 'unacted') the scale is skipped once they checked on this street;
+  'all' is the old rule, 'none' drops it. Live budget, 4-handed, 1,000 deals: 'unacted' vs 'all' +9.9 ± 17.7,
+  'none' vs 'all' -0.1 ± 23.4. Sticky exploiter (600 deals): +19.5 ± 15.0 and +12.0 ± 31.9; 'none' also dropped
+  the scale in the plans' later streets and brought the floats back (51 river bets after a turn call with under 30%
+  equity, against 14; 'unacted' 19). Not done: in the turn solver's river subgames after an in-tree turn bet
+  (`aggScaleIfAgg`) the scale still applies when they check the river.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
 - `db.history` keeps the last 150 hands in the page; the extension stores each hand under its own key

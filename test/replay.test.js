@@ -843,6 +843,24 @@ test('river solver: calls a known bluffer more often than an honest bettor', () 
   assert.ok(bluffer > honest + 0.2, `${bluffer} vs ${honest}`);
 });
 
+test('river solver: a player who bet earlier and then checks folds like anyone else (aggroFold)', () => {
+  // They bet the flop, then checked the turn and the river; hero has air. Players who bet an earlier
+  // street and then check fold more than their read, not less, so the old fold-after-aggression scale
+  // ('all') no longer applies once they checked on this street.
+  const betEV = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet').map((s) => s.ev));
+  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3,
+    opponents: [Object.assign({ name: 'V', tally: {}, pfAggressor: true }, opp)], heroActions }, extra));
+  const gaveUp = (extra) => spot({ actions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, sizes: { flop: 0.5 } },
+    { pre: 'call', flop: 'call', turn: 'check' }, Object.assign({ inPosition: true }, extra));
+  const now = betEV(E.analyzeSync(gaveUp())), old = betEV(E.analyzeSync(gaveUp({ aggroFold: 'all' })));
+  assert.ok(now > old + 0.01 * 200, `${now} vs ${old}`);
+  // Before they act on the street (hero leads into the turn bettor) the scale still applies.
+  const lead = (extra) => spot({ actions: { pre: 'raise', flop: 'check', turn: 'bet', river: '' }, sizes: { turn: 0.5 } },
+    { pre: 'call', flop: 'check', turn: 'call' }, Object.assign({ inPosition: false }, extra));
+  assert.strictEqual(betEV(E.analyzeSync(lead())), betEV(E.analyzeSync(lead({ aggroFold: 'all' }))));
+  assert.ok(betEV(E.analyzeSync(lead({ aggroFold: 'none' }))) > betEV(E.analyzeSync(lead())));
+});
+
 test('reads: a few shown bluffs move a player\'s value share a little, many move it a lot', () => {
   const vs = (n) => E.computeStats(Object.assign(T.blankTally(), { pfFold: 60, pfCall: 45, pfRaise: 25, check: 60, bet: 36, call: 30, raise: 6, fold: 36,
     shows: Array(n).fill(0).map(() => ({ ...bluffShow })) }), 'typical').valueShare;

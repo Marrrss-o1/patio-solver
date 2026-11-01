@@ -4961,6 +4961,18 @@
     const current = strengths[street];
     const dead = hero.concat(board);
 
+    // Plans and solvers fold an opponent with an aggressive line (bet or raised after the flop) less:
+    // fold x foldAfterAgg / foldToBet, about x0.7. input.aggroFold: 'unacted' (default) skips that once they
+    // checked on this street, 'all' always applies it (until v1.7.7), 'none' never. foldAfterAgg's tally mixes a
+    // bettor facing a raise (folds about 25%; continueRule's raiseAggFold covers it) with players who bet an
+    // earlier street. Those fold MORE than the plain read once they check: friend bots 63% vs 49% (n 96; river
+    // 79% vs 53%), logs 67% vs 44% (n 9); the scale had them at about 35%. Before they act on the street the
+    // plain read fits (bots 40% vs 43%, n 174; logs 50% vs 54%, n 10), but dropping the scale there too (and so
+    // in the plans' later streets) brought back turn floats with air (sticky exploiter: 51 river bets after a
+    // weak turn call against 14) for no gain: 'none' vs 'all' -0.1 +- 23.4, 'unacted' vs 'all' +9.9 +- 17.7
+    // (live budget, 4-handed, 1,000 deals); sticky exploiter +12.0 +- 31.9 and +19.5 +- 15.0 (600 deals).
+    const AGGRO_FOLD = input.aggroFold || 'unacted';
+    const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -4985,6 +4997,8 @@
         name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
         // They bet or raised on some street after the flop: from here on their range is strong.
         aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
+        // Whether the plans and solvers fold them at foldAfterAgg (see AGGRO_FOLD).
+        aggroFold: AGGRO_FOLD === 'none' ? false : street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')) && !(AGGRO_FOLD === 'unacted' && now === 'check'),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
       };
     });
@@ -5268,7 +5282,7 @@
         const st = Object.assign({}, opps[i].statsHU || opps[i].stats, VARIANTS[v]);
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
-          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroLine,
+          { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroFold,
             draws: planDraws[i] || (planDraws[i] = {}) });
       }
       return plans[key];
@@ -5722,7 +5736,7 @@
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroLine ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
+        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
@@ -5735,13 +5749,13 @@
       const o = opps[0], oi = input.opponents[0];
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
-      const aggS = clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1);
+      const aggS = aggScaleOf(o.stats);
       const ts = turnSolve({
         board, heroCombo, strengths4: strengths[4], bigBlind,
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroLine ? aggS : 1, aggScaleIfAgg: aggS,
+        aggScale: o.aggroFold ? aggS : 1, aggScaleIfAgg: aggS,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending, heroIP: inPosition,
         iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
@@ -5763,11 +5777,11 @@
         let pick = agg;
         if (pick < 0) { pick = 0; for (let i = 1; i < opps.length; i++) if (opps[i].stats.foldToBet < opps[pick].stats.foldToBet) pick = i; }
         const o = opps[pick];
-        const aggS = clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1);
+        const aggS = aggScaleOf(o.stats);
         const ts = turnSolve({
           board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
           oppStats: fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats)), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroLine) ? aggS : 1, aggScaleIfAgg: aggS,
+          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
@@ -5806,10 +5820,10 @@
         }
       }
       if (ok) {
-        const aggS = clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1);
+        const aggS = aggScaleOf(o.stats);
         const fs = flopSolve({
           board, heroCombo, strengths3: strengths[3], bigBlind, heroW, oppW, oppStats, p,
-          aggScale: opps.some((x) => x.aggroLine) ? aggS : 1, aggScaleIfAgg: aggS,
+          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
           pot: potWin, toCall, stack: opps.length > 1 ? mwStackF : isFinite(stack) ? stack : 100 * bigBlind + pot,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.flopIterations, timeMs: input.flopTimeMs, turnSamples: input.flopTurnSamples,
@@ -5866,7 +5880,7 @@
             return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
           },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroLine) ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1,
+          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,
