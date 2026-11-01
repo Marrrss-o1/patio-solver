@@ -130,7 +130,7 @@ function buildConfig(args) {
     iters: args.budget ? (args.iters ? +args.iters : null) : +(args.iters || 3000),
     riverIters: args.budget ? (args['river-iters'] ? +args['river-iters'] : null) : +(args['river-iters'] || 120),
     tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(),
-    diag: !!args.diag, parts: !!args.parts,
+    diag: !!args.diag, parts: !!args.parts, flopinfo: !!args.flopinfo,
   };
 }
 
@@ -213,13 +213,14 @@ function playBlock(cfg, block) {
         const diag = cfg.diag ? [] : null;
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
-          aivat: cfg.aivat, parts: cfg.parts, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
+          aivat: cfg.aivat, parts: cfg.parts, flopinfo: cfg.flopinfo, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;
         r.chance += res.chance / rots / cfg.bb; r.action += res.action / rots / cfg.bb;
         // Per rotation: hero's hand (preflop-order rank), position (0 = button, 1 = next seat, ...), corrected result.
         const rot3 = [classRank(dl.hands[0]), (n - dl.btn) % n, Math.round(res.adj / cfg.bb * 1000) / 1000, Math.round(res.net / cfg.bb * 1000) / 1000];
         if (diag) rot3.push(diag);
         if (cfg.parts) rot3.push(res.parts);
+        if (cfg.flopinfo) rot3.push({ flop: res.flop || null });
         r.rots.push(rot3);
       }
       for (const k of ['net', 'adj', 'chance', 'action']) r[k] = Math.round(r[k] * 1000) / 1000;
