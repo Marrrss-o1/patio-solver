@@ -10,6 +10,8 @@
 //                      profile from profiles.json), solver (the solver itself, with its own tracker and reads;
 //                      solver@REF runs src/ of a git ref), or a comma list, one spec per bot seat
 //   --stack BB         starting stacks in big blinds (default 150 with friends/home bots, 100 otherwise)
+//   --bot-params JSON  overrides for every friend profile's bot parameters (friends, home:<id>), e.g.
+//                      '{"sizeTell":-0.6}' (bigger bets with weaker hands, as in the logs; see bots.js)
 //   --bb CHIPS         big blind in chips (default 2, like the real lobby; small blind is half)
 // What is measured
 //   --agent X          solver (default) | baseline | bot:<spec>
@@ -69,9 +71,11 @@ function parseArgs(argv) {
   return a;
 }
 
-function loadProfiles() {
+function loadProfiles(over) {
   const f = path.join(__dirname, 'profiles.json');
-  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+  const profiles = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+  if (over) for (const [id, pr] of Object.entries(profiles)) if (id !== 'hero' && pr && pr.params) pr.params = Object.assign({}, pr.params, over);
+  return profiles;
 }
 
 // Copies src/ of a git ref into test/out/refs/<ref>/src so a worker can require it.
@@ -129,7 +133,7 @@ function buildConfig(args) {
     budget: args.budget ? String(args.budget) : null,
     iters: args.budget ? (args.iters ? +args.iters : null) : +(args.iters || 3000),
     riverIters: args.budget ? (args['river-iters'] ? +args['river-iters'] : null) : +(args['river-iters'] || 120),
-    tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(),
+    tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(args['bot-params'] ? JSON.parse(args['bot-params']) : null),
     diag: !!args.diag, parts: !!args.parts,
   };
 }
