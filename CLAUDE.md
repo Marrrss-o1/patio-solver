@@ -25,10 +25,10 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
                          share with `partial: true` (and, heads-up on the turn, its own turn solve for `turnMs`:
-                         30% of the time left on the game's clock, 2.5-8 s, 6 s if unknown; the clock is 23 s), with
+                         10% of the time left on the game's clock, 1-1.5 s, 1.5 s if unknown; the clock is 23 s), with
                          its own river-card samples; one final analysis with `merge` adds the tallies, averages the
                          turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
-                         phone's (24x MC, 8x plan samples, 16x river and preflop iterations). One more worker answers
+                         phone's (24x MC, 8x plan samples, 16x river and 4x preflop iterations). One more worker answers
                          `quick` requests with the phone's budget: the overlay shows that within ~1 s ("Quick read")
                          and replaces it with the full solve; if hero acts first, the quick one is logged
                          (`advice.quick`). The tracker's `turn` event carries `timeLeftMs` for this. With
@@ -122,7 +122,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   raises and all-ins, up to 4 raises. Leaves: fold, all-in (table equity), flop (pot split by realized shares,
   `shares`: equity x 0.92 + strength, suited/connected/pair bonus, +-0.06 position, faded toward raw equity below SPR
   4). The opponent's fixed strategy uses the Monte Carlo's `sc.opp` cont rates at the first response and
-  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations, computer 4800 / 2.5 s.
+  `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations, computer 1,200 / 0.8 s (4,800 / 2.5 s
+  until v1.7.6: on all 103 logged preflop spots 600-2,400 iterations pick the same action as 4,800 and 300 differs on
+  one near-tie, while 4,800 takes about 1.2 s against 0.33 s, so the full read now arrives before he acts).
   `vsOpenRead` reads `stats.vsOpen` ({small <=2.5bb, medium <=3.5bb, large} x {cont, threeBet}) when the tracker
   provides it, so learned defence by open size feeds both the Monte Carlo (`continueRule` via `kind.openTo`) and the
   preflop solver's first response. Without it the old size-blind rule (VPIP-based) is used.
@@ -140,8 +142,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
   line. Sizes are `turnBets`/`turnRiverBets`/`turnRaises` in the input (at most 3 bets or 2 raises, so a node has
   at most 4 actions). A half-pot raise for hero next to the pot-size one (`turnRaises` [0.5, 1]) lost -24.2 ± 15.1
-  (1,000 deals 4-handed, turn solver on in both, v1.7.4). ~25-45 ms per iteration in the cloud sandbox; each
-  offscreen worker solves for `turnMs` and the results are averaged.
+  (1,000 deals 4-handed, turn solver on in both, v1.7.4). With the kernels about 50-100 iterations in 1.5 s in the
+  cloud sandbox under load (more on simple spots); each offscreen worker solves for `turnMs` and the results are
+  averaged. `turnMs` was about 7 s until v1.7.5, but Marwin acts in a median 2.4 s on the turn (p90 about 4.5 s, raw
+  logs), so he almost always played the quick read; the solve picks the same action as 1,600 iterations 97% of the
+  time by 100 (0.003 bb per decision; speed thread), so 1-1.5 s now gets him the full read in about 2 s.
 - Flop solver (`flopSolve`, computer only: `input.flopSolver === true`; the offscreen pool's `FLOP_SOLVER` turns it
   on, currently off): flop and turn betting in one Discounted CFR with the river checked down (leaves average the
   showdown over sampled rivers; `flopRiverBet` = beta replaces that with a crude river: the hand that is ahead bets
@@ -152,10 +157,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (`flopBets`, `flopTurnBets`), the opponent their size, one pot-size raise per street. Heads-up, or against the
   field (2-4 opponents, no side pots; `turnField` works on the flop too) with kappa^(0.4^bets) as on the turn.
   WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
-  loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 400 deals, flop solver
-  with a 24,000-iteration Monte Carlo -79 ± 39 against the same Monte Carlo alone (speed thread; longer run pending).
-  The same sweep found the sim's default 3,000 Monte Carlo iterations cost about 64 ± 38 bb/100 against 24,000 (the
-  phone's budget), so sim A/Bs at 3,000 understate both builds and may misjudge changes that interact with noise.
+  loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 1,000 deals, flop solver
+  with a 24,000-iteration Monte Carlo -37.2 ± 24.6 against the same Monte Carlo alone, and about -33 with the sim's
+  3,000 (speed thread). The sim's 3,000 Monte Carlo iterations against 24,000: -4.8 ± 21 (the 64 ± 38 gap at 400 deals
+  was noise).
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%), on both the
   multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
@@ -352,7 +357,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   No constants changed. Knobs: test/sim/knobs.js, tune.js.
 - Monte Carlo budgets (speed thread): against a 384,000-iteration reference on 104 logged postflop spots, 24,000
   (phone) picks the same 97% of the time (0.001 bb per decision), 48,000 97%, 96,000 100%. No build needs a bigger
-  budget; only the sim's --iters 3000 is under-converged, so confirm sim winners at 24,000.
+  budget. The sim's --iters 3000 picks differ more often, but over 1,000 deals it plays about as well (-4.8 ± 21).
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
