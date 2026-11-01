@@ -32,13 +32,24 @@ function runHere(input) {
   return { ok: true, result: slim(r), ms: Date.now() - t0, workers: 1 };
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (!msg || msg.type !== 'analyze' || msg.target === 'offscreen') return false;
   (async () => {
     try {
       if (await ensureOffscreen()) {
-        const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input, quick: !!msg.quick });
+        let r = null;
+        try {
+          // The tab lets the offscreen page drop a decision the same table has moved past.
+          const tab = sender && sender.tab ? sender.tab.id : null;
+          r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input, quick: !!msg.quick, tab });
+        } catch (e) {
+          // The offscreen page is gone (it crashed or was closed): make a new one next time
+          // instead of solving here, on one core, for the rest of the session.
+          offscreenReady = null;
+        }
         if (r && r.ok) { reply(r); return; }
+        // Replaced by a newer decision at the same table: that answer is not wanted any more.
+        if (r && r.superseded) { reply(r); return; }
       }
       reply(runHere(msg.input));
     } catch (e) {
