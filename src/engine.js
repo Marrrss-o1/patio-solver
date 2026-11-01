@@ -409,7 +409,25 @@
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
   // Pseudo-counts behind the table's and each player's fold rate in a size bucket (computeStats).
-  const TABLE_SIZE_K = 20, SIZE_K = 64;
+  const TABLE_SIZE_K = 20, SIZE_K = 64, SIZE_NU = 3;
+  // A player's fold rate in one size bucket: the base rate moved in log-odds by d, the MAP shift under a Student-t
+  // prior (SIZE_NU degrees of freedom) whose curvature at 0 matches SIZE_K pseudo-counts. Small shifts shrink as
+  // with the pseudo-counts; a large, steady one (a player who calls small bets and folds to big ones far more than
+  // the table) is learned once the data is clear.
+  function sizeShift(fold, n, base) {
+    if (!(n > 0)) return base;
+    const a = logit(base), w = SIZE_NU + 1, v = w / (SIZE_K * base * (1 - base));
+    let d = 0;
+    for (let it = 0; it < 40; it++) {
+      const q = sigmoid(a + d), I = n * q * (1 - q);
+      const g = n * q - fold + (w * d) / (v + d * d);
+      const h = I + (w * (v - d * d)) / ((v + d * d) * (v + d * d));
+      const step = clamp(g / Math.max(h, 0.25 * I + 1e-3), -0.5, 0.5);
+      d -= step;
+      if (Math.abs(step) < 1e-7) break;
+    }
+    return sigmoid(a + d);
+  }
   // Pseudo-shows behind each player's value share of their bets (computeStats).
   const SHOW_VALUE_K = 30;
   const BIG_BET = 0.75;
@@ -755,7 +773,7 @@
         const ry = (Math.max(0, y.fold || 0) + TABLE_SIZE_K * ey) / (ny + TABLE_SIZE_K);
         base = clamp(sigmoid(logit(base) + logit(clamp(ry, 0.02, 0.98)) - logit(ey)), 0.02, 0.98);
       }
-      stats.foldBySize[key] = (x.fold + SIZE_K * base) / (nf + SIZE_K);
+      stats.foldBySize[key] = sizeShift(x.fold, nf, base);
       stats.raw.foldBySize[key] = nf ? x.fold / nf : null;
       stats.raw.foldBySize[key + 'N'] = nf;
     }
