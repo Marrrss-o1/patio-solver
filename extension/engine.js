@@ -1654,6 +1654,19 @@
     return s.idx[lo];
   }
 
+  // Big preflop raises: in the logs friends keep calling up to about 30bb and then fold nearly everything (the first
+  // time a player faces a raise to 8bb or more in a hand: 72% continue at 8-12bb, 69% at 12-20, 67% at 20-35, 9% at
+  // 35-60, 4% above; facing 8bb+ to call: 53% / 50% / 50% / 8% / 4%; 96 and 74 spots). The callBig floor was
+  // size-blind above 8bb, so a raise to 100bb looked as often called as one to 20bb and big hands raised far too big.
+  // Above 30bb it now fades as (30bb / size)^2.5, to no less than a quarter (so junk shoves don't start to look good on
+  // a few dozen logged folds; input.bigCliffFloor sets it). input.bigCliff === false keeps the old floor.
+  let BIG_CLIFF = true, BIG_FLOOR = 0.25;
+  function bigFade(chips, bigBlind) {
+    if (!BIG_CLIFF) return 1;
+    const L = chips / Math.max(1e-9, bigBlind);
+    return L <= 30 ? 1 : Math.max(BIG_FLOOR, Math.pow(30 / L, 2.5));
+  }
+
   // A player's learned response to an open raise to `toBB` big blinds (stats.vsOpen, when the
   // reads have it: { small, medium, large } by raise-to size, each { cont, threeBet }), with
   // big raises still called at least at callBig. Null when there is no such read.
@@ -1663,29 +1676,43 @@
     const b = toBB <= 2.5 ? vo.small : toBB <= 3.5 ? vo.medium : vo.large;
     if (!b || b.cont == null) return null;
     const big = clamp((toBB - 4) / 4, 0, 1), callBig = stats.callBig != null ? stats.callBig : 0.25;
-    const cont = clamp(Math.max(b.cont, big * callBig), 0.02, 0.98);
+    // Opens above 30bb (shoves): the learned 'large' rate fades with the size too.
+    const fade = bigFade(toBB, 1);
+    const cont = clamp(Math.max(b.cont * fade, big * callBig * fade), 0.02, 0.98);
     return { cont, threeBet: clamp(b.threeBet != null ? b.threeBet : 0.05, 0.005, cont) };
   }
 
   function continueRule(opp, ctx, mdf, kind) {
     const s = opp.stats;
     if (ctx.street === 0) {
-      // Big raises and shoves (8+ big blinds) get called at least at the player's callBig rate.
+      // Big raises and shoves (8+ big blinds) get called at least at the player's callBig rate, faded for raises to
+      // more than 30bb (bigFade; the raise-to level is hero's add plus hero's bet already in).
       const big = clamp((kind.amount / Math.max(1e-9, ctx.bigBlind) - 4) / 4, 0, 1);
+      const fade = bigFade(kind.amount + (ctx.heroBet || 0), ctx.bigBlind);
       const callBig = s.callBig != null ? s.callBig : 0.25;
       if (opp.pending) {
         const learned = kind.openTo ? vsOpenRead(s, kind.openTo / Math.max(1e-9, ctx.bigBlind)) : null;
         if (learned) return { cont: learned.cont, nut: 0.965, reraise: learned.threeBet };
         const sizeFactor = Math.min(1, (6 * ctx.bigBlind) / Math.max(ctx.bigBlind, kind.amount));
         let cont = s.vpip * 0.7 * (mdf / 0.375) * Math.sqrt(sizeFactor);
-        cont = Math.max(Math.min(s.vpip, cont), big * callBig);
+        cont = Math.max(Math.min(s.vpip, cont), big * callBig * fade);
         return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
       const raised = PRE_RAISED.test(opp.actions.pre || '');
+      // Raisers facing hero's re-raise to 30bb or less (input.pfRaisedRead): their own read. In the logs, the first time a
+      // raiser faces a re-raise in a hand (45 spots), they fold 3% below 35bb (n 39) and call or re-raise about half each
+      // (min-raise wars). The reads' foldTo3bet / fourBet (home prior 13% / 50%) carry that; the rule below had them
+      // folding 30-45% and re-raising about 12%. Bigger re-raises keep the rule below: letting the read fade with the size
+      // (friends folded all 6 re-raises above 35bb) had the preflop solver open 95% of hands and 4-bet bluff to 35bb+
+      // against bots that never adapt.
+      if (raised && ctx.raisedRead && s.foldTo3bet != null && kind.amount + (ctx.heroBet || 0) <= 30 * ctx.bigBlind + 1e-9) {
+        const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97);
+        return { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
+      }
       // Callers (mostly limpers) continue at their learned rate against a raise.
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
-      const floor = big * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
+      const floor = big * fade * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
       return { cont: clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
@@ -4623,7 +4650,7 @@
           cont = r.cont; raise = r.raise;
         } else {
           const mdf = (potNow - facing) / potNow;
-          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind }, mdf, { amount: hIn });
+          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead }, mdf, { amount: hIn });
           cont = rule.cont; raise = Math.min(rule.reraise, rule.cont);
         }
       }
@@ -4632,7 +4659,8 @@
         if (isRoot) {
           for (const a of rootActs) if (a.amount > facing + 1e-9) raiseAmts.push(Math.min(a.amount, maxAdd));
         } else {
-          const r = round(facing + (potNow + facing));
+          // Experiment (cfg.oppMinRaise): the friends re-raise with min-raises (about 4 in 5).
+          const r = round(player === 1 && cfg.oppMinRaise ? facing + Math.max(facing, bigBlind) : facing + (potNow + facing));
           if (r < 0.45 * maxAdd) raiseAmts.push(r);
           raiseAmts.push(maxAdd);
         }
@@ -4977,6 +5005,8 @@
    * }
    */
   function createAnalysis(input) {
+    BIG_CLIFF = input.bigCliff !== false;
+    BIG_FLOOR = input.bigCliffFloor != null ? clamp(+input.bigCliffFloor, 0, 1) : 0.25;
     const hero = input.hero.slice();
     const board = input.board.slice();
     const street = board.length;
@@ -5109,7 +5139,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -5141,7 +5171,7 @@
           rule = { cont: learned.cont, nut: 0.965, reraise: learned.threeBet, add: sc.amount - bigBlind };
         } else if (i === bigBlindSeat) {
           const big = clamp((sc.amount / bigBlind - 4) / 4, 0, 1);
-          const cont = clamp(Math.max(o.stats.vpip * 1.6 * Math.sqrt((2.5 * bigBlind) / sc.amount), big * (o.stats.callBig != null ? o.stats.callBig : 0.25)), 0.05, 0.9);
+          const cont = clamp(Math.max(o.stats.vpip * 1.6 * Math.sqrt((2.5 * bigBlind) / sc.amount), big * (o.stats.callBig != null ? o.stats.callBig : 0.25) * bigFade(sc.amount + (+input.heroBet || 0), bigBlind)), 0.05, 0.9);
           rule = { cont, nut: 0.965, reraise: clamp(o.stats.pfr * 0.4, 0.02, 0.12) / Math.max(cont, 0.05), add: sc.amount - bigBlind };
         } else {
           const mdf = o.pending ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
@@ -5991,7 +6021,7 @@
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi,
+        raises, noLimp: fieldOpen, multi, oppMinRaise: input.pfOppRaise === 'min', heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });
@@ -6139,7 +6169,8 @@
       if (aggressive(best)) {
         const tol = Math.max(0.02 * (pot + toCall), 1.5 * best.se, 0.1 * bigBlind);
         const near = ranked.filter((sc) => aggressive(sc) && best.ev - sc.ev <= tol);
-        best = near.sort((a, b) => a.amount - b.amount)[0];
+        // Experiment (input.sizePick 'maxPot'): keep the best-EV size unless it is an overbet.
+        if (!(input.sizePick === 'maxPot' && best.amount - toCall <= pot + toCall + 1e-9)) best = near.sort((a, b) => a.amount - b.amount)[0];
       }
       let runnerUp = ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
