@@ -440,6 +440,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   600 deals) can't be learned from size reads: it is elastic only against hero, and the reads pool every bettor's
   bets (one block: it folded 17% to hero's small bets, 35% to the others', read 0.31), so SIZE_K 8 was -19.5 ± 19.3.
   Real friends would give far too few answers to hero's bets per bucket in a session for a hero-only read.
+  exploit.js `--xp elasticall` gives the same size answers to every bettor, which a read can learn.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
