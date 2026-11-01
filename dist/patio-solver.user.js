@@ -7299,29 +7299,47 @@ function slim(r) {
   }
 
   // ---------- solver in a background worker ----------
-  var worker = null, pending = {}, nextId = 1;
+  // A worker that fails (it can't start, e.g. a page that blocks workers, or it dies) never
+  // answers again, so from then on the solver runs on the page. A crash usually comes while the
+  // newest decision is still open, so that one is solved on the page; older ones only get an
+  // error. A job unanswered for 30 s counts as a hung worker (its decision is long over).
+  var worker = null, pending = {}, nextId = 1, JOB_LIMIT_MS = 30000;
+  function onPage(input, res) {
+    setTimeout(function () {
+      try { res({ ok: true, result: slim(PokerEngine.analyzeSync(input)) }); }
+      catch (err) { res({ ok: false, error: String(err && err.message || err) }); }
+    }, 30);
+  }
+  function workerFailed(hung) {
+    if (worker) { try { worker.terminate(); } catch (e) { /* gone */ } }
+    worker = null;
+    var owed = pending; pending = {};
+    var ids = Object.keys(owed).map(Number).sort(function (a, b) { return a - b; });
+    ids.forEach(function (id, i) {
+      clearTimeout(owed[id].timer);
+      if (!hung && i === ids.length - 1) onPage(owed[id].input, owed[id].res);
+      else owed[id].res({ ok: false, error: 'The solver stopped answering. It runs on the page from now on.' });
+    });
+  }
   try {
     var src = '(' + ENGINE.toString() + ')();\n' + slim.toString() +
       '\nself.onmessage=function(e){try{var t0=Date.now();var r=PokerEngine.analyzeSync(e.data.input);' +
       'self.postMessage({id:e.data.id,ok:true,result:slim(r),ms:Date.now()-t0})}catch(err){' +
       'self.postMessage({id:e.data.id,ok:false,error:String(err&&err.message||err)})}};';
     worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-    worker.onmessage = function (e) { var cb = pending[e.data.id]; delete pending[e.data.id]; if (cb) cb(e.data); };
-    worker.onerror = function () { worker = null; };
+    worker.onmessage = function (e) { var job = pending[e.data.id]; delete pending[e.data.id]; if (job) { clearTimeout(job.timer); job.res(e.data); } };
+    worker.onerror = function (e) { if (e && e.preventDefault) e.preventDefault(); workerFailed(false); };
   } catch (e) { worker = null; }
 
   function analyze(input) {
     return new Promise(function (res) {
       if (worker) {
         var id = nextId++;
-        pending[id] = res;
+        pending[id] = { res: res, input: input, timer: setTimeout(function () { if (pending[id]) workerFailed(true); }, JOB_LIMIT_MS) };
         worker.postMessage({ id: id, input: input });
         return;
       }
-      setTimeout(function () { // fallback: run on the page
-        try { res({ ok: true, result: slim(PokerEngine.analyzeSync(input)) }); }
-        catch (err) { res({ ok: false, error: String(err && err.message || err) }); }
-      }, 30);
+      onPage(input, res);
     });
   }
 

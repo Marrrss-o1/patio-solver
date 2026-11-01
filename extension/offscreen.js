@@ -1,6 +1,6 @@
 // Offscreen page: a pool of solver workers. Each decision is split across the workers (Monte
 // Carlo with different seeds). Turn spots (and flops, with FLOP_SOLVER) also get their solver on
-// every worker at once (each samples different cards) and the solves are averaged. Then one
+// every worker at once (each samples different cards) and the solves are averaged. Then the final
 // worker merges the tallies and runs the preflop and river solvers with a big budget. This is
 // the computer's "full power" mode.
 const CORES = Math.max(2, Math.min(10, (navigator.hardwareConcurrency || 4) - 2));
@@ -17,67 +17,132 @@ const PREFLOP_MS = 2500;
 // Flops: the flop solver (flop and turn solved together, river checked down) on every worker
 // for the same time as a turn solve, averaged like the turn. Off: the Monte Carlo decides.
 const FLOP_SOLVER = false;
-const workers = [];
+// A job still unanswered after this long is taken as hung (no solve takes more than about 10 s):
+// its worker is replaced and the request gets an error, so the next decision still gets advice.
+const JOB_LIMIT_MS = 30000;
+
+// Each slot is one worker plus the jobs it hasn't answered yet. A worker that dies (an error
+// outside a job, or the browser killing it) never answers again, so its jobs fail at once and a
+// new worker takes its place.
 let nextId = 1;
-const waiting = new Map();
-const spawn = () => {
+function startWorker(slot) {
   const w = new Worker('solver-worker.js');
-  w.onmessage = (e) => { const cb = waiting.get(e.data.id); if (cb) { waiting.delete(e.data.id); cb(e.data); } };
-  w.onerror = () => {};
-  return w;
-};
-for (let i = 0; i < CORES; i++) workers.push(spawn());
-const quickWorker = spawn();
-function run(w, payload) {
+  slot.w = w;
+  w.onmessage = (e) => {
+    if (slot.w !== w) return;
+    const job = slot.jobs.get(e.data.id);
+    if (!job) return;
+    slot.jobs.delete(e.data.id);
+    clearTimeout(job.timer);
+    job.resolve(e.data);
+  };
+  w.onerror = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (slot.w === w) restart(slot, { ok: false, error: 'A solver worker crashed. It has been restarted.' });
+  };
+  // The final and quick workers load the blueprints now rather than on the first decision.
+  if (slot.warm) w.postMessage({ id: 0, mode: 'warm' });
+}
+function makeSlot(warm) {
+  const slot = { w: null, jobs: new Map(), warm: !!warm };
+  startWorker(slot);
+  return slot;
+}
+// Replace a slot's worker. Its unanswered jobs get `answer`.
+function restart(slot, answer) {
+  try { slot.w.terminate(); } catch (e) { /* already gone */ }
+  const jobs = [...slot.jobs.values()];
+  slot.jobs.clear();
+  startWorker(slot);
+  for (const job of jobs) { clearTimeout(job.timer); job.resolve(Object.assign({}, answer)); }
+}
+function run(slot, payload, owner) {
   return new Promise((resolve) => {
     const id = nextId++;
-    waiting.set(id, resolve);
-    w.postMessage(Object.assign({ id }, payload));
+    const timer = setTimeout(() => {
+      if (slot.jobs.has(id)) restart(slot, { ok: false, error: 'The solver took too long and was restarted.' });
+    }, JOB_LIMIT_MS);
+    slot.jobs.set(id, { resolve, timer, owner });
+    slot.w.postMessage(Object.assign({ id }, payload));
   });
 }
 
-async function analyze(input) {
+const pool = [];
+for (let i = 0; i < CORES; i++) pool.push(makeSlot(false));
+// The final pass has its own worker: it holds the blueprints, and it is free the moment the
+// Monte Carlo shares are in.
+const finalSlot = makeSlot(true);
+const quickSlot = makeSlot(true);
+
+// The full analysis still running for each table (browser tab).
+const running = new Map();
+const SUPERSEDED = { ok: false, superseded: true, error: 'A newer decision replaced this one.' };
+// A new decision at a table replaces the one still being solved there: hero has acted, or the
+// spot changed, so that answer would be thrown away. A solve can't be interrupted, so the pool
+// workers still busy with it are replaced, and the new decision starts at once instead of
+// waiting behind it (a turn solve holds every worker for up to 8 s, and in the logs hero acts in
+// about 2.5 s and is often to act again within 5 s). A final pass in progress is left to finish:
+// it is short, and its worker keeps the blueprints loaded.
+function supersede(req) {
+  req.cancelled = true;
+  for (const slot of pool) {
+    const jobs = [...slot.jobs.values()];
+    if (jobs.length && jobs.every((j) => j.owner === req)) restart(slot, SUPERSEDED);
+  }
+}
+
+async function analyze(input, tab) {
   const t0 = Date.now();
-  const total = (input.iterations || 24000) * POWER.mc;
-  // When a solver decides, the Monte Carlo only feeds the equity readout, so a small share does.
-  const solver = typeof PokerEngine !== 'undefined' ? PokerEngine.solvableSpot(Object.assign({ flopSolver: FLOP_SOLVER }, input)) : null;
-  const per = solver ? 3000 : Math.ceil(total / CORES);
-  const planSamples = 500 * POWER.plan;
-  const turn = solver === 'turn';
-  const parts = await Promise.all(workers.map((w, i) => run(w, {
-    mode: 'partial',
-    input: Object.assign({}, input, {
-      iterations: per, planSamples, riverSolver: false, preflopSolver: false,
-      turnSolver: turn, turnTimeMs: turnMs(input), turnIterations: 20000,
-      flopSolver: solver === 'flop', flopTimeMs: turnMs(input), flopIterations: 20000,
-      seed: ((input.seed >>> 0) + i * 2654435761) >>> 0,
-    }),
-  })));
-  const bad = parts.find((p) => !p.ok);
-  if (bad) return bad;
-  const solvedMerge = parts.map((p) => p.solved).filter(Boolean);
-  const fin = await run(workers[0], {
-    mode: 'final',
-    input: Object.assign({}, input, {
-      merge: parts.map((p) => p.partial), planSamples, solvedMerge: solvedMerge.length ? solvedMerge : undefined,
-      riverIterations: (input.riverIterations || 250) * POWER.river,
-      preflopIterations: 300 * POWER.preflop, preflopTimeMs: PREFLOP_MS, power: true,
-    }),
-  });
-  if (fin.ok) { fin.ms = Date.now() - t0; fin.workers = CORES; fin.iterationsTotal = per * CORES; fin.kernels = !!fin.kernels && parts.every((p) => p.kernels); }
-  return fin;
+  const prev = running.get(tab);
+  if (prev) supersede(prev);
+  const req = { cancelled: false };
+  running.set(tab, req);
+  try {
+    const total = (input.iterations || 24000) * POWER.mc;
+    // When a solver decides, the Monte Carlo only feeds the equity readout, so a small share does.
+    const solver = typeof PokerEngine !== 'undefined' ? PokerEngine.solvableSpot(Object.assign({ flopSolver: FLOP_SOLVER }, input)) : null;
+    const per = solver ? 3000 : Math.ceil(total / CORES);
+    const planSamples = 500 * POWER.plan;
+    const turn = solver === 'turn';
+    const parts = await Promise.all(pool.map((slot, i) => run(slot, {
+      mode: 'partial',
+      input: Object.assign({}, input, {
+        iterations: per, planSamples, riverSolver: false, preflopSolver: false,
+        turnSolver: turn, turnTimeMs: turnMs(input), turnIterations: 20000,
+        flopSolver: solver === 'flop', flopTimeMs: turnMs(input), flopIterations: 20000,
+        seed: ((input.seed >>> 0) + i * 2654435761) >>> 0,
+      }),
+    }, req)));
+    if (req.cancelled) return Object.assign({}, SUPERSEDED);
+    const bad = parts.find((p) => !p.ok);
+    if (bad) return bad;
+    const solvedMerge = parts.map((p) => p.solved).filter(Boolean);
+    const fin = await run(finalSlot, {
+      mode: 'final',
+      input: Object.assign({}, input, {
+        merge: parts.map((p) => p.partial), planSamples, solvedMerge: solvedMerge.length ? solvedMerge : undefined,
+        riverIterations: (input.riverIterations || 250) * POWER.river,
+        preflopIterations: 300 * POWER.preflop, preflopTimeMs: PREFLOP_MS, power: true,
+      }),
+    }, req);
+    if (req.cancelled) return Object.assign({}, SUPERSEDED);
+    if (fin.ok) { fin.ms = Date.now() - t0; fin.workers = CORES; fin.iterationsTotal = per * CORES; fin.kernels = !!fin.kernels && parts.every((p) => p.kernels); }
+    return fin;
+  } finally {
+    if (running.get(tab) === req) running.delete(tab);
+  }
 }
 
 // The phone's budget on one spare core.
 async function quick(input) {
   const t0 = Date.now();
-  const r = await run(quickWorker, { mode: 'final', input });
+  const r = await run(quickSlot, { mode: 'final', input });
   if (r.ok) { r.ms = Date.now() - t0; r.workers = 1; }
   return r;
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (!msg || msg.target !== 'offscreen' || msg.type !== 'analyze') return false;
-  (msg.quick ? quick(msg.input) : analyze(msg.input)).then(reply, (e) => reply({ ok: false, error: String((e && e.message) || e) }));
+  (msg.quick ? quick(msg.input) : analyze(msg.input, msg.tab == null ? null : msg.tab)).then(reply, (e) => reply({ ok: false, error: String((e && e.message) || e) }));
   return true;
 });
