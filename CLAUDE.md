@@ -242,7 +242,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   postflop raises of pot or more were top pair or better, and a 6.7x-pot flop check-raise shove (Aura Qd7d on Qs 7h 8s)
   was read as 31% no-pair hands. On that spot it only moves hero's equity 0.69 -> 0.67 (still a call). Not judged on
   the simulator: the bots pick postflop raise sizes independently of their hand (`raiseShove`), so they would score it
-  against an assumption the logs contradict. Revisit with more shown big raises.
+  against an assumption the logs contradict. On the reads benchmark (187 hands) it made shown hands after raises of
+  pot or more fit worse (x1.25 -> x1.13, 6 shows; all shows x1.63 -> x1.62), so it stays off. Revisit with more
+  shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
