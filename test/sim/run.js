@@ -25,6 +25,7 @@
 //   --aivat MODE       call (default) | refund | best | off: value function for the luck correction
 //   --warm N           hands played per block (baseline in hero's seat) before measuring, so the solver starts
 //                      with reads like Marwin's (default 300; 0 = start every block with no reads)
+//   --a-cold, --b-cold that variant skips the warm-up (no reads at the start of each block, like a reinstall)
 // Speed
 //   --workers N        worker threads (default: all cores)
 //   --block N          deals per block (default 100); results do not depend on the number of workers
@@ -109,10 +110,10 @@ function buildConfig(args) {
     const p = Object.keys(patch).length ? patch : null;
     return { name, agent, src: patchedSrc(srcForRef(args[x + '-ref']), p, path.join(ROOT, 'test', 'out', 'tune')),
       ref: (args[x + '-ref'] || 'working tree') + (p ? ' + ' + JSON.stringify(p) : ''), commit: commitOf(args[x + '-ref']) + (p ? ' ' + JSON.stringify(p) : ''),
-      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp') };
+      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp'), cold: !!args[x + '-cold'] };
   };
   const variants = [variant('A', 'a', String(args.agent || 'solver'))];
-  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch']) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
+  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch'] || args['b-cold']) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
   // Solver opponents: src/ for each solver@ref named in --bots.
   const solverBots = {};
   for (const t of botsSpec.split(',')) {
@@ -189,7 +190,8 @@ function playBlock(cfg, block) {
   const v0 = cfg.variants[0];
   const warmHero = allWatchers.length && v0.agent === 'solver'
     ? solverAgent({ src: v0.src, solver: v0.solver, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: v0.bp }) : bots.baseline();
-  const listeners = heroes.filter((h) => h.onEvent).concat(warmHero.onEvent ? [warmHero] : []);
+  // --b-cold / --a-cold: that variant does not watch the warm-up, so every block starts with no reads (a reinstall).
+  const listeners = heroes.filter((h, vi) => h.onEvent && !cfg.variants[vi].cold).concat(warmHero.onEvent ? [warmHero] : []);
   if (cfg.warm > 0 && (listeners.length || allWatchers.length)) {
     for (let w = 0; w < cfg.warm; w++) {
       const dl = deal(block * 100000 + w, 0, 31337);
@@ -276,7 +278,7 @@ function summarize(cfg, results, sec) {
 const SIM_VERSION = 2;
 function blockKey(cfg) {
   const crypto = require('crypto');
-  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp]);
+  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp].concat(x.cold ? ['cold'] : []));
   const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
   if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });
