@@ -1112,6 +1112,27 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
   assert.ok(ev(qq, 'bet') >= 0.95 * qq.ranked[0].ev, 'top set bet EV ' + ev(qq, 'bet') + ' vs best ' + qq.ranked[0].ev);
 });
 
+test('multiway stabs from the logs: a stab alone loses, and the lookahead adds only a small edge', () => {
+  // Four real spots (names removed; 2026-10-31 log hands 35, 101, 112, 125): air checked to hero in
+  // a pot with two or three friends. Everyone folded to such bets only 14-35% of the time in the logs.
+  // The advice bets small in all four. On its own the bet loses about 1.8 chips: its edge over
+  // checking is a river bluff after a call, which the logs support (players who called a flop or turn
+  // bet in a multiway pot folded to a river bet 70-80% of the time, 25 spots) and which the river
+  // advice makes. Before #35 the lookahead checked all four. If a reads change makes these stabs win
+  // on the spot, or the lookahead's edge grows past a small one, this fails.
+  const spots = require('./fixtures/real-multiway-stabs.json');
+  for (const [name, x] of Object.entries(spots)) {
+    const run = (extra) => E.analyzeSync(Object.assign({}, x, { mix: false, seed: 1, iterations: 6000 }, extra));
+    const gap = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet' || s.kind === 'allin').map((s) => s.ev)) - r.ranked.find((s) => s.kind === 'check').ev;
+    const now = run({ lookahead: false }), later = run({});
+    assert.ok(gap(now) < -1, `${name}: without the lookahead the best stab is ${gap(now).toFixed(2)} chips over checking`);
+    assert.ok(gap(later) < 1.2, `${name}: with the lookahead the best stab is ${gap(later).toFixed(2)} chips over checking`);
+    for (const s of later.ranked.filter((b) => b.kind === 'bet' && b.amount <= 0.5 * x.pot)) {
+      assert.ok(s.foldPct < 0.35, `${name}: everyone folds ${s.foldPct} to ${s.amount} into ${x.pot}`);
+    }
+  }
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
