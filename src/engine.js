@@ -4620,7 +4620,8 @@
         if (isRoot) {
           for (const a of rootActs) if (a.amount > facing + 1e-9) raiseAmts.push(Math.min(a.amount, maxAdd));
         } else {
-          const r = round(facing + (potNow + facing));
+          // Experiment (cfg.oppMinRaise): the friends re-raise with min-raises (about 4 in 5).
+          const r = round(player === 1 && cfg.oppMinRaise ? facing + Math.max(facing, bigBlind) : facing + (potNow + facing));
           if (r < 0.45 * maxAdd) raiseAmts.push(r);
           raiseAmts.push(maxAdd);
         }
@@ -5978,7 +5979,7 @@
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi,
+        raises, noLimp: fieldOpen, multi, oppMinRaise: input.pfOppRaise === 'min',
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });
