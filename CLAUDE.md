@@ -368,6 +368,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   bets were mostly medium pairs, not the draws and air the bluff slot picks). It changes 2 of 416 logged hero
   decisions (a pot-size flop bet called with bottom pair, a bigger preflop raise). The simulator's bots bet big
   with weaker hands only with `--bot-params '{"sizeTell":-0.6}'` (test/sim/README.md); at the default they are flat.
+  Simulator, on vs off, 1,000 deals each: with sizeTell -0.6, 4-handed live +14.5 ± 13.0 (cloud) and -1.0 ± 13.4
+  (Mac), phone -7.0 ± 15.6, heads-up live +20.1 ± 23.6 (Mac); default bots 4-handed live +12.6 ± 11.1. Pooled about
+  +7 ± 6: neutral to slightly positive, as expected from a change that moves few decisions (v1.8.2).
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
