@@ -150,7 +150,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   cloud sandbox under load (more on simple spots); each offscreen worker solves for `turnMs` and the results are
   averaged. `turnMs` was about 7 s until v1.7.5, but Marwin acts in a median 2.4 s on the turn (p90 about 4.5 s, raw
   logs), so he almost always played the quick read; the solve picks the same action as 1,600 iterations 97% of the
-  time by 100 (0.003 bb per decision; speed thread), so 1-1.5 s now gets him the full read in about 2 s.
+  time by 100 (0.003 bb per decision; speed thread), so 1-1.5 s now gets him the full read in about 2 s. On the 43
+  turn-solver spots of the 128-hand log against a 1,600-iteration solve: 40 iterations pick the same 38 (0.066 bb per
+  decision lost), 75 the same 41 (0.020), 150 the same 42 (0.008); averaging 8 workers' solves of 40 or 75 picks
+  exactly like one solve, so the workers add river-card samples, not convergence. 1.5 s is about 75 iterations on a
+  hard spot here (uncontended, one core), 1 s about 40.
 - Flop solver (`flopSolve`, computer only: `input.flopSolver === true`; the offscreen pool's `FLOP_SOLVER` turns it
   on, currently off): flop and turn betting in one Discounted CFR with the river checked down (leaves average the
   showdown over sampled rivers; `flopRiverBet` = beta replaces that with a crude river: the hand that is ahead bets
