@@ -6500,15 +6500,17 @@ ENGINE();
         case 'game:big_blind_paid': {
           if (!h) break;
           const p = h.players[data.playerId];
+          const ps = p && this.snap && this.snap.players.find((x) => x.id === p.id);
           if (p) {
             p.stageBet += data.amount; p.total += data.amount;
+            // A blind that takes the whole stack: all-in from the start, with any two cards.
+            if (ps && ps.stack != null && ps.stack - data.amount <= 0) { p.allin = true; p.blindAllin = true; }
             h.log.push({ st: 'pre', who: p.name, hero: p.id === this.heroId(), act: ev === 'game:big_blind_paid' ? 'bb' : 'sb', amt: data.amount });
           }
           h.currentBet = Math.max(h.currentBet, data.amount);
           if (ev === 'game:big_blind_paid') {
             // A big blind posted short (the player is all-in for less) doesn't change the blinds.
-            const sp = p && this.snap && this.snap.players.find((x) => x.id === p.id);
-            const short = sp && sp.stack - data.amount <= 0;
+            const short = ps && ps.stack - data.amount <= 0;
             h.bigBlind = Math.max(data.amount, this.settingsBB || 0, short ? (this.snap && this.snap.bigBlind) || 0 : 0);
           }
           break;
@@ -6562,10 +6564,24 @@ ENGINE();
         case 'game:player_turn_started':
           if (h) h.turnAt[data.playerID] = Date.now();
           if (h && !h.finished) {
+            if (snap) this.checkChips(snap);
             const left = data.turnTimeDurationMS > 0 ? data.turnTimeDurationMS - (data.turnTimeElapsedMS || 0) : null;
-            this.emit('turn', { playerID: data.playerID, isHero: data.playerID === this.heroId(), timeLeftMs: left });
+            // Players who are all-in still get a turn, and the server checks for them at once:
+            // that is no decision for hero.
+            const p = h.players[data.playerID];
+            this.emit('turn', { playerID: data.playerID, isHero: data.playerID === this.heroId() && !(p && p.allin), timeLeftMs: left });
           }
           break;
+        case 'player:game:player_play_state_changed': {
+          // A player who leaves the table mid-hand (or is kicked) is out of the hand, and the server
+          // sends no fold for them (a live player left during a pause in Marwin's log).
+          const st = data && data.newPlayState;
+          if (h && !h.finished && (st === 'exiting' || st === 'unseated')) {
+            const p = Object.values(h.players).find((x) => x.auth && x.auth === data.userId);
+            if (p && !p.folded) { p.folded = true; p.left = true; }
+          }
+          break;
+        }
         case 'game:player_turn_ended':
           if (h && data.playerID === this.heroId()) this.emit('heroDone', null);
           break;
@@ -6576,6 +6592,33 @@ ENGINE();
           break;
         default:
           break;
+      }
+    }
+
+    // Safety net: at each turn the table's stacks are current (docs/protocol.md), so every player's
+    // stack at the start of the hand minus the chips counted for them must match it. If not, an
+    // event was missed (a reconnect) or the table did something the tracker doesn't know (a
+    // straddle, an ante): the pot and the price would be wrong, so advice stops for this hand.
+    // A player the table shows as folded is out, even if their fold was missed (in the 128 logged
+    // hands the two always agreed).
+    checkChips(snap) {
+      const h = this.hand;
+      if (!h || !snap || !snap.players) return;
+      for (const p of Object.values(h.players)) {
+        const sp = snap.players.find((x) => x.id === p.id);
+        if (sp && !p.folded && sp.playState === 'folded') { p.folded = true; p.missedFold = true; }
+      }
+      if (h.desync) return;
+      for (const p of Object.values(h.players)) {
+        if (p.left) continue;
+        const sp = snap.players.find((x) => x.id === p.id);
+        if (!sp || sp.stack == null || !isFinite(+sp.stack)) continue;
+        const tracked = p.start - p.total;
+        if (Math.abs(tracked - +sp.stack) > 0.01) {
+          const r2 = (x) => Math.round(x * 100) / 100;
+          h.desync = { who: p.name, tracked: r2(tracked), table: r2(+sp.stack), street: h.board.length };
+          return;
+        }
       }
     }
 
@@ -6594,6 +6637,10 @@ ENGINE();
       const street = h.street;
       const key = STREET_KEY[street];
       const added = +d.makeBetValue || 0;
+      // A player who is already all-in gets a turn on every later street and the server checks for
+      // them (wasServerAutoAction), even facing a bet. That is no decision: counted as a check it
+      // narrowed their range as if they had chosen to check, and moved their reads.
+      if (p.allin && !(added > 0)) return;
       let potBefore = 0;
       for (const x of Object.values(h.players)) potBefore += x.total;
       const facing = Math.max(0, h.currentBet - p.stageBet);
@@ -6733,9 +6780,10 @@ ENGINE();
         advice: (h.advice || []).slice(),
         log: h.log.slice(),
         raw: h.raw,
+        desync: h.desync || undefined,
         players: Object.values(h.players).map((p) => ({
           name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded, stack: p.start,
-          put: p.total, actions: p.seq, shown: p.shown, fit: p.fit, accuracy: p.accuracy,
+          put: p.total, actions: p.seq, shown: p.shown, fit: p.fit, accuracy: p.accuracy, left: p.left || undefined,
           pred: p.id === heroId ? undefined : predSummary(this.db.players[p.auth] && this.db.players[p.auth].tally),
         })),
       };
@@ -7031,7 +7079,7 @@ ENGINE();
       if (!r) return;
       const actions = { pre: PatioTracker.preAction(p) };
       for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (h.board.length >= n) actions[k] = PatioTracker.streetAction(p.seq[k], n);
-      if (actions.pre === 'pending') actions.pre = 'call';
+      if (actions.pre === 'pending' && !p.blindAllin) actions.pre = 'call';
       const show = {
         cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
         actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
@@ -7086,9 +7134,16 @@ ENGINE();
       const heroId = this.heroId();
       const hero = h.players[heroId];
       if (!hero) return { error: 'You are not dealt into this hand.' };
+      if (hero.allin) return { error: 'You are all-in. Nothing to decide this hand.' };
+      if (h.desync) {
+        const x = h.desync;
+        return { error: `Lost track of the chips this hand (${x.who}: ${x.tracked} counted, ${x.table} at the table). Advice is back next hand.` };
+      }
       const heroCards = h.heroUids.map((u) => h.heroCards[u]).filter(Boolean);
       if (heroCards.length < 2) return { error: 'Waiting to see your cards.' };
-      if (![0, 3, 4, 5].includes(h.board.length)) return { error: 'Waiting for the board.' };
+      // The board has to match the street the table is on: a missed card or street start would
+      // put the wrong cards (or last street's bets) into the advice.
+      if (![0, 3, 4, 5].includes(h.board.length) || h.board.length !== h.street) return { error: 'Waiting for the board.' };
 
       const snapOf = (id) => (this.snap && this.snap.players.find((x) => x.id === id)) || null;
       const heroSnap = snapOf(heroId);
@@ -7126,7 +7181,7 @@ ENGINE();
       const lineOf = (o) => {
         const a = { pre: PatioTracker.preAction(o) };
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (street >= n) a[k] = PatioTracker.streetAction(o.seq[k], n);
-        if (street > 0 && a.pre === 'pending') a.pre = 'call';
+        if (street > 0 && a.pre === 'pending' && !o.blindAllin) a.pre = 'call';
         return a;
       };
       const opponents = opps.map((o) => {
@@ -7135,7 +7190,8 @@ ENGINE();
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) {
           if (street >= n) actions[k] = PatioTracker.streetAction(o.seq[k], n);
         }
-        if (street > 0 && actions.pre === 'pending') actions.pre = 'call';
+        // A player all-in from posting a blind made no preflop choice: 'pending' reads as any two cards.
+        if (street > 0 && actions.pre === 'pending' && !o.blindAllin) actions.pre = 'call';
         const cbetter = h.pfRaiser === o.id;
         return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
           // For side pots: chips already in the pot this hand, and chips behind.
