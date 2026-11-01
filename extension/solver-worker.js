@@ -1,7 +1,8 @@
 // One solver worker in the offscreen pool.
 importScripts('engine.js', 'slim.js', 'blueprint.js');
-// Blueprint strategies (one per table size, gzipped) are only needed for the final pass
-// (worker 0), so they load on first use. A missing file just means no blueprint for that size.
+// Blueprint strategies (one per table size, gzipped) are only needed for the final pass and the
+// quick read, so only those workers load them (offscreen.js asks them to as they start). A
+// missing file just means no blueprint for that size.
 const BLUEPRINT_FILES = ['blueprint-3max.bin.gz', 'blueprint-4max.bin.gz', 'blueprint-5max.bin.gz'];
 let blueprints = null;
 async function loadOne(name) {
@@ -26,6 +27,8 @@ function loadBlueprints() {
 }
 self.onmessage = async (e) => {
   const { id, mode, input } = e.data;
+  // Load the blueprints ahead of the first decision (no answer).
+  if (mode === 'warm') { loadBlueprints(); return; }
   try {
     if (mode === 'partial') {
       const out = PokerEngine.analyzeSync(Object.assign({}, input, { partial: true }));
