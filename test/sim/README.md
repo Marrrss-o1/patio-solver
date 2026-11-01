@@ -81,8 +81,12 @@ bots, seed and block size), so a third arm can be added later without replaying 
   folds 53%, last after the others folded 53-57%) and a player folds more once someone has called (63%; the bots
   before this was fitted did the opposite: 62%, 65% and 44%, so two bots folded together 40% of the time against
   the friends' 24%; now 31%), so the solver faces the cheap big-pot bets and the big
-  small-pot bets the real table makes. Checked with `validate.js` (below): on all 278 hands every stat, fitted or
-  not, is within the logs' sampling noise (RMS z 0.69 fitted, 0.94 pooled, 1.0 unfitted); fitted on half the
+  small-pot bets the real table makes. Checked to on the turn or river, a friend who called the street before rarely
+  bets (turn 10% of 68, river 26% of 57), one who bet it bets about half the time (41%, 49%) and one whose street
+  was checked through stabs more (25%, 51%); `lineBet` shifts the bots' betting by that line (log-odds, pooled; each
+  friend's own value threshold keeps their overall rate). Before it the bots led after calling 25% / 49% and stabbed
+  checked streets 17% / 32%. Checked with `validate.js` (below): on all 278 hands every stat, fitted or
+  not, is within the logs' sampling noise (RMS z 0.70 fitted, 0.94 pooled, 1.09 unfitted); fitted on half the
   hands, each friend's own bot predicts the other half better than the average friend's (+0.009 to +0.012
   log-likelihood per observation). Known gaps: the bots see a few more flops (66% vs 69%) and lead into the
   preflop raiser more often (24% vs 17%).
