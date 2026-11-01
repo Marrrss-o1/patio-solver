@@ -307,9 +307,16 @@
     // stack at the start of the hand minus the chips counted for them must match it. If not, an
     // event was missed (a reconnect) or the table did something the tracker doesn't know (a
     // straddle, an ante): the pot and the price would be wrong, so advice stops for this hand.
+    // A player the table shows as folded is out, even if their fold was missed (in the 128 logged
+    // hands the two always agreed).
     checkChips(snap) {
       const h = this.hand;
-      if (!h || h.desync || !snap || !snap.players) return;
+      if (!h || !snap || !snap.players) return;
+      for (const p of Object.values(h.players)) {
+        const sp = snap.players.find((x) => x.id === p.id);
+        if (sp && !p.folded && sp.playState === 'folded') { p.folded = true; p.missedFold = true; }
+      }
+      if (h.desync) return;
       for (const p of Object.values(h.players)) {
         if (p.left) continue;
         const sp = snap.players.find((x) => x.id === p.id);
@@ -840,7 +847,9 @@
       }
       const heroCards = h.heroUids.map((u) => h.heroCards[u]).filter(Boolean);
       if (heroCards.length < 2) return { error: 'Waiting to see your cards.' };
-      if (![0, 3, 4, 5].includes(h.board.length)) return { error: 'Waiting for the board.' };
+      // The board has to match the street the table is on: a missed card or street start would
+      // put the wrong cards (or last street's bets) into the advice.
+      if (![0, 3, 4, 5].includes(h.board.length) || h.board.length !== h.street) return { error: 'Waiting for the board.' };
 
       const snapOf = (id) => (this.snap && this.snap.players.find((x) => x.id === id)) || null;
       const heroSnap = snapOf(heroId);

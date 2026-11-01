@@ -1707,5 +1707,20 @@ test('safety net: when the chips stop matching the table, advice stops for the h
   for (const fx of [real, three, sd]) assert.ok(!replay(fx).t.hand.desync);
 });
 
+test('safety net: a missed fold is taken from the table, a missed board card stops advice', () => {
+  // Bob's flop fold is lost; the table shows him folded at hero's turn.
+  const fold = three.slice(0, -2);
+  fold.push({ ev: 'game:player_turn_started', data: { playerID: 1 }, snap: snap3(970, 970, 970, { b: 'folded' }) });
+  const x = replay(fold).turns[1];
+  assert.ok(!x.error, x.error);
+  assert.deepStrictEqual(x.input.opponents.map((o) => o.name), ['Ann']);
+  // The flop's third card is lost: two cards on the flop is no board to advise on.
+  const card = three.map((m) => (m.ev === 'game:cards_deal_to_stack' ? Object.assign({}, m, { data: m.data.slice(0, 2) }) : m));
+  assert.strictEqual(replay(card).turns[1].error, 'Waiting for the board.');
+  // The flop never starts (stage_began lost) but its cards come: last street's bets would stay.
+  const stage = three.filter((m) => !(m.ev === 'game:stage_began' && m.data.stageType === 'flop'));
+  assert.strictEqual(replay(stage).turns[1].error, 'Waiting for the board.');
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');
