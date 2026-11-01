@@ -163,8 +163,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
   loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 2,000 deals, flop solver
   with a 24,000-iteration Monte Carlo -39.4 ± 16.7 against the same Monte Carlo alone, and about -40 with the sim's
-  3,000 (speed thread). The sim's 3,000 Monte Carlo iterations against 24,000: +1.4 ± 14.6 (the 64 ± 38 gap at 400
-  deals was noise).
+  3,000 (speed thread); heads-up (v1.7.7, 1,000 deals) +1.0 ± 28.8, so neutral there. The sim's 3,000 Monte Carlo
+  iterations against 24,000: +1.4 ± 14.6 (the 64 ± 38 gap at 400 deals was noise).
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%), on both the
   multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
