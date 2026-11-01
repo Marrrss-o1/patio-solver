@@ -7,9 +7,12 @@ const CORES = Math.max(2, Math.min(10, (navigator.hardwareConcurrency || 4) - 2)
 // Budget multipliers over the phone's settings, and the turn solver's time per worker.
 // River 4,000 and preflop 4,800 iterations: with the kernels they take about 0.2-0.7 s and 1-2.5 s.
 const POWER = { mc: 24, plan: 8, river: 16, preflop: 16 };
-// The turn solve runs for about 30% of the time left on the game's clock (2.5-8 s; 6 s if
-// unknown). The quick read on the spare worker shows something within about a second meanwhile.
-const turnMs = (input) => (input.timeLeftMs > 0 ? Math.max(2500, Math.min(8000, 0.3 * input.timeLeftMs)) : 6000);
+// The turn solve runs for 10% of the time left on the game's clock, 1-1.5 s (1.5 s if unknown),
+// so the full read arrives in about 2 s: Marwin acts in a median 2.4 s on the turn (raw logs), and
+// with the old 30% (about 7 s) he almost always played the quick read. The solve is converged by
+// about 100 iterations (97% the same pick as 1,600). The quick read on the spare worker shows
+// something within about a second meanwhile.
+const turnMs = (input) => (input.timeLeftMs > 0 ? Math.max(1000, Math.min(1500, 0.1 * input.timeLeftMs)) : 1500);
 const PREFLOP_MS = 2500;
 // Flops: the flop solver (flop and turn solved together, river checked down) on every worker
 // for the same time as a turn solve, averaged like the turn. Off: the Monte Carlo decides.

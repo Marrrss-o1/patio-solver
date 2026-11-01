@@ -25,7 +25,7 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
                          share with `partial: true` (and, heads-up on the turn, its own turn solve for `turnMs`:
-                         30% of the time left on the game's clock, 2.5-8 s, 6 s if unknown; the clock is 23 s), with
+                         10% of the time left on the game's clock, 1-1.5 s, 1.5 s if unknown; the clock is 23 s), with
                          its own river-card samples; one final analysis with `merge` adds the tallies, averages the
                          turn solves (`solvedMerge`) and runs the preflop and river solvers. Budget = POWER x the
                          phone's (24x MC, 8x plan samples, 16x river and preflop iterations). One more worker answers
@@ -140,8 +140,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (hero < 3% of max weight, opponent < 1%). The opponent's river fixed strategy uses their read's reach along that
   line. Sizes are `turnBets`/`turnRiverBets`/`turnRaises` in the input (at most 3 bets or 2 raises, so a node has
   at most 4 actions). A half-pot raise for hero next to the pot-size one (`turnRaises` [0.5, 1]) lost -24.2 ± 15.1
-  (1,000 deals 4-handed, turn solver on in both, v1.7.4). ~25-45 ms per iteration in the cloud sandbox; each
-  offscreen worker solves for `turnMs` and the results are averaged.
+  (1,000 deals 4-handed, turn solver on in both, v1.7.4). With the kernels about 50-100 iterations in 1.5 s in the
+  cloud sandbox under load (more on simple spots); each offscreen worker solves for `turnMs` and the results are
+  averaged. `turnMs` was about 7 s until v1.7.5, but Marwin acts in a median 2.4 s on the turn (p90 about 4.5 s, raw
+  logs), so he almost always played the quick read; the solve picks the same action as 1,600 iterations 97% of the
+  time by 100 (0.003 bb per decision; speed thread), so 1-1.5 s now gets him the full read in about 2 s.
 - Flop solver (`flopSolve`, computer only: `input.flopSolver === true`; the offscreen pool's `FLOP_SOLVER` turns it
   on, currently off): flop and turn betting in one Discounted CFR with the river checked down (leaves average the
   showdown over sampled rivers; `flopRiverBet` = beta replaces that with a crude river: the hand that is ahead bets
