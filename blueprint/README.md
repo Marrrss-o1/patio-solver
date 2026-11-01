@@ -149,11 +149,38 @@ below is paired on identical deals, 4-handed against the friend bots, blend on m
 | Finer minus shipped 4-handed blueprint, both blended, same deals | 3,000 | +6.6 ± 12.2 | (no clear gain; the shipped one blended is about -63 against off on these deals) |
 
 So neither matching the sizes nor finer buckets changes the picture, and preflop alone loses about as much as the
-whole thing: the loss is the blind defence, where balanced 150bb play folds hands that are profitable against
-these opponents. A finer-sized tree (several opens, min-raise 3-bets, small and overbet sizes) would multiply the
+whole thing: most of the loss is in the blinds (next section). A finer-sized tree (several opens, min-raise 3-bets, small and overbet sizes) would multiply the
 tree several times over for the same reason to lose; the 3-handed blueprint already has two opens and two flop
 sizes and did not win either (-9.6 ± 18.9). A heads-up-only blueprint was not trained: heads-up tables are about 2% of the logged hands,
 and heads-up pots that start multiway have ranges a heads-up blueprint never saw.
+
+### Why the blinds lose
+
+Most of every loss above is in the blinds, so that was checked for a bug last. There is none in the lookup: the
+JS tree matches the trainer's hash, every lookup in the simulator runs found the actor the tree expected (no
+out-of-order lookups in over 15,000 blended decisions), and blinds, completes and limps follow the tree as they
+should. The blueprint's own blind play is also sane for balanced 150bb poker: the big blind defends 35% against
+a 3.5bb button open, about the minimum defence the price allows.
+
+The cause is what the blueprint assumes about the other players. Its strategy at each spot is right against the
+blueprint's own ranges arriving there, and those are tight: its first player plays 28% of hands (8% limps,
+mostly suited hands and small pairs that are happy to see a flop), where the friend bots (fitted to
+Marwin's logs) play 53-93% of their hands.
+So it treats limps and opens as strong. It folds the small blind against two limpers 79% of the time, raises a
+single limp from the big blind 8%, and checks most hands in limped pots after the flop. A run that logged all 4,324
+blended decisions (600 deals, 4-handed, friend bots) adds up the EV the blend gives up against the engine's own
+read-based EVs at each decision: 62 bb/100, about what the paired runs measured (-51 to -63). Half of it is the
+blinds:
+
+* after the flop with no bet in front of them, 402 bb. In limped pots the engine bets 71% of these spots and the
+  blend 27%; in raised pots 84% and 65%.
+* preflop, 208 bb. The small blind folds 52% against two limpers where the engine folds 17%.
+* facing a bet after the flop, 149 bb. The big blind folds 72% to a flop bet where the engine folds 52%.
+
+The blinds play the most limped and multiway pots, out of position, so they show it most. Fixing it would mean
+training the blueprint against the friends' tendencies instead of against itself, which is what the reads
+already do. So training has stopped. The last 4-handed checkpoint with the finer buckets is kept with the
+project files, should it ever be wanted.
 
 What is left for the blueprint is what ships: the panel line and the hand log's `bp` field, which make it
 checkable on real hands later.
