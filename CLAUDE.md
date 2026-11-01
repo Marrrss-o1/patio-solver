@@ -155,10 +155,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (`flopBets`, `flopTurnBets`), the opponent their size, one pot-size raise per street. Heads-up, or against the
   field (2-4 opponents, no side pots; `turnField` works on the flop too) with kappa^(0.4^bets) as on the turn.
   WebAssembly kernels (#24): in a 6 s worker budget 3-way 311-369 iterations, heads-up 303-528 (3.1-4.3x the JS
-  loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 400 deals, flop solver
-  with a 24,000-iteration Monte Carlo -79 ± 39 against the same Monte Carlo alone (speed thread; longer run pending).
-  The same sweep found the sim's default 3,000 Monte Carlo iterations cost about 64 ± 38 bb/100 against 24,000 (the
-  phone's budget), so sim A/Bs at 3,000 understate both builds and may misjudge changes that interact with noise.
+  loops), with about 50-230 MB of kernel memory per solve. Still off: on v1.7.4, 4-handed, 1,000 deals, flop solver
+  with a 24,000-iteration Monte Carlo -37.2 ± 24.6 against the same Monte Carlo alone, and about -33 with the sim's
+  3,000 (speed thread). The sim's 3,000 Monte Carlo iterations against 24,000: -4.8 ± 21 (the 64 ± 38 gap at 400 deals
+  was noise).
 - Hero's story: with `heroActions`, the engine builds hero's range as a solid regular's (`HERO_STYLE`). If that range looks
   stronger than average on the board, opponents' fold rates shift up (`credibility`, up to ±8%), on both the
   multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
@@ -355,7 +355,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   No constants changed. Knobs: test/sim/knobs.js, tune.js.
 - Monte Carlo budgets (speed thread): against a 384,000-iteration reference on 104 logged postflop spots, 24,000
   (phone) picks the same 97% of the time (0.001 bb per decision), 48,000 97%, 96,000 100%. No build needs a bigger
-  budget; only the sim's --iters 3000 is under-converged, so confirm sim winners at 24,000.
+  budget. The sim's --iters 3000 picks differ more often, but over 1,000 deals it plays about as well (-4.8 ± 21).
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
