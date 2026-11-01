@@ -1647,12 +1647,12 @@
   // 35-60, 4% above; facing 8bb+ to call: 53% / 50% / 50% / 8% / 4%; 96 and 74 spots). The callBig floor was
   // size-blind above 8bb, so a raise to 100bb looked as often called as one to 20bb and big hands raised far too big.
   // Above 30bb it now fades as (30bb / size)^2.5, to no less than a quarter (so junk shoves don't start to look good on
-  // a few dozen logged folds). input.bigCliff === false keeps the old floor.
-  let BIG_CLIFF = true;
+  // a few dozen logged folds; input.bigCliffFloor sets it). input.bigCliff === false keeps the old floor.
+  let BIG_CLIFF = true, BIG_FLOOR = 0.25;
   function bigFade(chips, bigBlind) {
     if (!BIG_CLIFF) return 1;
     const L = chips / Math.max(1e-9, bigBlind);
-    return L <= 30 ? 1 : Math.max(0.25, Math.pow(30 / L, 2.5));
+    return L <= 30 ? 1 : Math.max(BIG_FLOOR, Math.pow(30 / L, 2.5));
   }
 
   // A player's learned response to an open raise to `toBB` big blinds (stats.vsOpen, when the
@@ -4984,6 +4984,7 @@
    */
   function createAnalysis(input) {
     BIG_CLIFF = input.bigCliff !== false;
+    BIG_FLOOR = input.bigCliffFloor != null ? clamp(+input.bigCliffFloor, 0, 1) : 0.25;
     const hero = input.hero.slice();
     const board = input.board.slice();
     const street = board.length;
