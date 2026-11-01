@@ -5138,7 +5138,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead === true, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -6020,7 +6020,7 @@
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead === true,
+        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });
