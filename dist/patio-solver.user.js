@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.7.8
+// @version      1.7.9
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1899,6 +1899,36 @@ function ENGINE() {
       for (let g = 0; g <= 60; g++) grid[g] = q(aggScale * foldAtSize(o.stats, g * 0.05, s));
       const callCut = (f) => grid[Math.min(60, Math.round(f * 20))];
       const c0 = lowerBound(x, callCut(HERO_BET));
+      // After they check a later street of the lookahead and face hero's bet, the answer comes from
+      // the hands that checked (below vCut, less the bluffs that bet instead), at the read's
+      // after-check fold rate (stats.line, #47). Cutting the whole street's range there instead made
+      // checkers fold far more than their read (a 45% read gave about 55%, 55% about 70%), which
+      // overpaid hero's river bluffs after a call. Built on first use.
+      let chk = null;
+      const checked = () => {
+        if (chk) return chk;
+        const V = lb(vCut), A = Math.min(lb(airCut), V), keepA = 1 - pBluff;
+        const wA = keepA * A, Wc = wA + (V - A);
+        const qc = (p) => {
+          if (!(Wc > 0)) return q(p);
+          const m = clamp(p, 0, 1) * Wc;
+          const idx = m <= wA ? (keepA > 0 ? m / keepA : 0) : A + (m - wA);
+          return x[clamp(Math.floor(idx), 0, n - 1)];
+        };
+        const kf = (o.stats.line && o.stats.line.checkedFold) || 1;
+        const g2 = new Float64Array(61);
+        for (let g = 0; g <= 60; g++) g2[g] = qc(oddsScale(aggScale * foldAtSize(o.stats, g * 0.05, s), kf));
+        const cut = (f) => g2[Math.min(60, Math.round(f * 20))];
+        const c = Math.min(lowerBound(x, cut(HERO_BET)), V);
+        chk = {
+          callCut: cut,
+          foldHero: oddsScale(aggScale * foldAtSize(o.stats, HERO_BET, s), kf),
+          // Hero value-bets when it beats 55% of the checked hands that would call.
+          valueCut: c < V ? x[c + Math.floor(0.55 * (V - 1 - c))] : vCut,
+          eqVsCall: (h) => (c < V ? clamp((lb(h) - c) / (V - c), 0, 1) : 1),
+        };
+        return chk;
+      };
       // Raises: value raises from the top of their range, plus a few bluff-raises.
       const rf = clamp(ss.raiseFreq + (o.stats.raiseShift || 0), 0.02, 0.35);
       const rCut = q(1 - rf * 0.85);
@@ -1913,7 +1943,7 @@ function ENGINE() {
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
         foldHero: aggScale * foldAtSize(o.stats, HERO_BET, s),
-        callCut,
+        callCut, checked,
         // Hero value-bets when it beats 55% of the hands that would call.
         valueCut: c0 < n ? x[c0 + Math.floor(0.55 * (n - 1 - c0))] : 2,
         eqVsCall: (h) => (c0 < n ? Math.max(0, lb(h) - c0) / (n - c0) : 1),
@@ -5309,6 +5339,8 @@ function ENGINE() {
     // Either side can raise once per street; hero only bluffs the river.
     // `room`: the opponent's chips behind, so bets never go past what they can put in.
     // `m`: streets on which they already continued against a bet in this lookahead (makePlan).
+    // Opponents who checked a later street answer bets from their checking range (makePlan's checked()).
+    const laChecked = input.lookaheadChecked !== false;
     function playOut(i, P, heroIn, share, rng, startCur, v, from, room, m) {
       const plan = planFor(i, v);
       const oc = oppCombo[i];
@@ -5335,13 +5367,15 @@ function ENGINE() {
         };
         // Hero bets for value or as a river bluff; the opponent folds, calls or raises.
         let raisedNow = false;
-        const heroBets = () => {
+        // `afterCheck`: the opponent checked to hero on this (later) street (t.checked()).
+        const heroBets = (afterCheck) => {
           const B = Math.min(left, roundChips(HERO_BET * P, bigBlind));
-          const value = sh >= t.valueCut;
-          const bluff = !value && s === 5 && t.eqVsCall(sh) < 0.2 && t.foldHero * P - (1 - t.foldHero) * B > 0.05 * P;
+          const c = afterCheck && laChecked ? t.checked() : t;
+          const value = sh >= c.valueCut;
+          const bluff = !value && s === 5 && c.eqVsCall(sh) < 0.2 && c.foldHero * P - (1 - c.foldHero) * B > 0.05 * P;
           if (!value && !bluff) return 'check';
           const raises = left > B && (so >= t.rCut || (so < t.airCut && rng() < t.pBluffR));
-          if (!raises && so < t.callCut(B / P)) return 'won';
+          if (!raises && so < c.callCut(B / P)) return 'won';
           if (raises) {
             raisedNow = true;
             const R = Math.min(left, roundChips(B + (P + 2 * B), bigBlind));
@@ -5367,7 +5401,7 @@ function ENGINE() {
             if (r === false) return -heroIn - extra;
             if (r === 'won') return P - heroIn - extra;
           } else {
-            r = heroBets();
+            r = heroBets(true);
             line = r === 'called' ? (raisedNow ? LINE_BET : LINE_CALL) : LINE_CHECK;
             if (r === 'won') return P - heroIn - extra;
             if (r === 'lost') return -heroIn - extra;
@@ -5454,7 +5488,11 @@ function ENGINE() {
           if (a === HERO) {
             if (k >= opensFrom) continue;
             let value = true;
-            for (const i of list) if (multiAlive[i] && sh < planAt(i, v, s).valueCut) { value = false; break; }
+            for (const i of list) {
+              if (!multiAlive[i]) continue;
+              const t = planAt(i, v, s), c = laChecked && s !== street && multiLine[i] === LINE_CHECK ? t.checked() : t;
+              if (sh < c.valueCut) { value = false; break; }
+            }
             if (value) { bettor = HERO; B = Math.min(left, roundChips(HERO_BET * P, bigBlind)); at = k; }
           } else if (multiAlive[a] && (s !== street || opps[a].pending)) {
             // (On the current street the others have already checked.)
@@ -5497,7 +5535,7 @@ function ENGINE() {
               if (raiser === -2 && so >= t.rCut && left > B) {
                 R = Math.min(left + heroPut, roundChips(B + (P + B), bigBlind));
                 raiser = a; multiState[a] = 3; P += R - multiPut[a]; multiPut[a] = R;
-              } else if (raiser === -2 ? so >= t.callCut(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
+              } else if (raiser === -2 ? so >= (laChecked && s !== street && multiLine[a] === LINE_CHECK ? t.checked() : t).callCut(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
                 P += target - multiPut[a]; multiPut[a] = target; if (multiState[a] !== 1) multiState[a] = 2;
               } else multiAlive[a] = 0;
             }

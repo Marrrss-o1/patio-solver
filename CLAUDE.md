@@ -119,6 +119,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   who had called the flop folded only 14% to a turn bet, so weak multiway stabs and raises looked good (J-high bet
   12 into 24 four-way); with full narrowing (read rate after every call) hero bluffed turns and checked top sets.
   On the current street players who already checked can't open the betting again.
+  On later streets of the lookahead, a player who checks and then faces hero's bet answers from the hands that
+  checked (below their betting cut, less the bluffs), at the after-check read (`stats.line.checkedFold`, #47), with
+  hero's value and bluff checks against those hands too (makePlan `checked()`, `input.lookaheadChecked`; v1.7.9).
+  Before, the cut was a quantile of their whole range on that street, and almost all the hands under it had checked,
+  so checkers folded about 80% where the read said 63-68% (stab fixtures), which overpaid hero's IP bets and river
+  bluffs after a call. Live budget, on vs off: 4-handed +17.9 ± 18.7, +18.2 ± 19.7 (Mac, seeds 301/302) and
+  -2.5 ± 14.9 (cloud, seed 7), pooled about +9 ± 10 over 3,000 deals; heads-up +8.0 ± 27.5 and +29.5 ± 20.3 (pooled
+  about +19 ± 17).
 - Preflop solver (`preflopSolve`): heads-up preflop spots (one opponent left, any action so far) and opens with
   2-8 players still to act (all pending; they are one "field" whose hand is the strongest continuing one,
   `fieldMax`; no open-limp option there). Discounted CFR over the 169 classes, compatible-pair counts from
