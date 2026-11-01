@@ -371,7 +371,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   overlap, and the single runs that got merged are biased upward by being picked). Exploiter bots on v1.7.4 (600
   deals 4-handed, seed 7): base friend 262.5 ± 36, adapt 253.1 ± 36, sticky 236.9 ± 36; hero folds 34-38% to river
   bets and 2% to 3-bets, and the base bots answer hero's flop raises fold 37% / call 49% / raise 14% (logs: 32 / 47 /
-  16). Bots are simple; this is a regression check, not proof
+  16). v1.3.0 (b83d5f1) vs 4ed4335 (v1.7.7 + #59/#60) at `--budget live`: 4-handed +38.3 ± 24.7 and +35.6 ± 26.2
+  (seeds 31 and 41, 2,000 deals each; pooled +37 ± 18), heads-up +30.6 ± 29.8 (2,000 deals); the 4-handed gain is
+  mostly the 10-25% hands (+32 to +41 of it). Bots are simple; this is a regression check, not proof
   of an edge against real players.
 - Tuning sweep (sim thread, fresh-deal confirmations vs current constants, 4-handed refit bots): robustWeight
   0.35->0.7 -13.8 ± 11.5 (2,400 deals; +21.9 in the sweep), exploitWeight x0.75 +2.8 ± 12.7, credibility off
