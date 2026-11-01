@@ -3300,7 +3300,9 @@
       n.regret = new Float32Array(acts.length * N);
       n.sum = new Float32Array(acts.length * N);
       if (player === 1) {
-        const aggS = n5 === 4 ? aggAlways : (oppAgg ? aggIfBet : aggAlways);
+        // On the river, once they check and face hero's bet, no aggressor scale with aggroFold 'unacted' (#65).
+        const checkedHere = cfg.aggroUnacted && n5 === 5 && heroIP && facing > 0 && !vsRaise;
+        const aggS = n5 === 4 ? aggAlways : checkedHere ? 1 : (oppAgg ? aggIfBet : aggAlways);
         // Hero raising the bet the opponent made before this decision: their range is their betting range.
         const rootRaise = !!vsRaise && n5 === 4 && toCall > 0 && oIn === 0;
         n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, rootRaise, q, n5, aggS, n5 === 5 ? riverTies(card) : null);
@@ -3968,7 +3970,9 @@
       n.regret = new Float32Array(acts.length * N);
       n.sum = new Float32Array(acts.length * N);
       if (player === 1) {
-        const aggS = n5 === 3 ? aggAlways : (oppAgg ? aggIfBet : aggAlways);
+        // On the turn, once they check and face hero's bet, no aggressor scale with aggroFold 'unacted' (#65).
+        const checkedHere = cfg.aggroUnacted && n5 === 4 && heroIP && facing > 0 && !vsRaise;
+        const aggS = n5 === 3 ? aggAlways : checkedHere ? 1 : (oppAgg ? aggIfBet : aggAlways);
         const rootRaise = !!vsRaise && n5 === 3 && toCall > 0 && oIn === 0;
         n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, rootRaise, q, n5, aggS);
         n.kids = kids.map((k, j) => {
@@ -5755,7 +5759,7 @@
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroFold ? aggS : 1, aggScaleIfAgg: aggS,
+        aggScale: o.aggroFold ? aggS : 1, aggScaleIfAgg: aggS, aggroUnacted: AGGRO_FOLD === 'unacted' && input.turnRiverCheckScale !== true,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending, heroIP: inPosition,
         iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
@@ -5781,7 +5785,7 @@
         const ts = turnSolve({
           board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
           oppStats: fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats)), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
+          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS, aggroUnacted: AGGRO_FOLD === 'unacted' && input.turnRiverCheckScale !== true,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
@@ -5823,7 +5827,7 @@
         const aggS = aggScaleOf(o.stats);
         const fs = flopSolve({
           board, heroCombo, strengths3: strengths[3], bigBlind, heroW, oppW, oppStats, p,
-          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
+          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS, aggroUnacted: AGGRO_FOLD === 'unacted' && input.turnRiverCheckScale !== true,
           pot: potWin, toCall, stack: opps.length > 1 ? mwStackF : isFinite(stack) ? stack : 100 * bigBlind + pot,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.flopIterations, timeMs: input.flopTimeMs, turnSamples: input.flopTurnSamples,
