@@ -1820,8 +1820,8 @@ test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old s
   assert.ok(on[2].cont >= 0.25 * off[2].cont - 1e-9, 'the fade stops at a quarter of the floor');
 });
 
-test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead false: old rule)', () => {
-  const on = fourBetSpot({}), off = fourBetSpot({ pfRaisedRead: false });
+test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead true; off: old rule)', () => {
+  const on = fourBetSpot({ pfRaisedRead: true }), off = fourBetSpot({});
   assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
   assert.ok(off[0].reraise < 0.2);
   near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule

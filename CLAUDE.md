@@ -311,7 +311,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   and isolating bigger (a --diag run: small blind raises medium hands 43% instead of 15%, weak hands unchanged).
   On the logs it changes 20 of 331 decisions, all preflop (KK's 4-bet 86 -> 59 chips, JJ 58 -> 41, AA's 4-bet to
   111bb into three players unchanged: with the 0.25 floor a 3-bettor still continues about 19% there).
-- Raisers facing hero's re-raise (v1.8.3, `input.pfRaisedRead`, default on): the first time a raiser faces a
+- Raisers facing hero's re-raise (`input.pfRaisedRead: true`, off by default in v1.8.3): the first time a raiser faces a
   re-raise in a hand the logs show fold 16%, call 42%, re-raise 42% (45 spots), and below 35bb fold 3% (n 39); the
   bots answer the same (25/32/43%). continueRule's raised branch had them folding 30-45% and re-raising about 12%
   (`0.55 x mdf / 0.5`, floor by callBig), and the reads' `foldTo3bet` / `fourBet` (home prior 13% / 50%) were
@@ -320,7 +320,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   +117 ± 38 against the bots but was an artifact: the preflop solver opened 93-98% of weak hands and 4-bet bluffed
   to 35bb+ into bots that fold to big raises and never adapt (--diag). The 30bb version plays like the cliff alone
   (weak hands unchanged). Simulator, live, 2,000 deals 4-handed, v1.8.3 bots, against the cliff alone: +43.7 ± 14.8
-  (seed 512; premium +11.1 ± 4.6, good +17.5 ± 8.2, every seat up), RESULTS_S511.
+  (seed 512; premium +11.1 ± 4.6, good +17.5 ± 8.2, every seat up) and +45.5 ± 12.8 (seed 511; blinds +36, good
+  +22.2 ± 7.7, weak +2.4 ± 3.4). On the old bots (no cliff: a raiser facing a re-raise above 35bb calls 64% where the
+  friends folded 6 of 6) -10.1 ± 21.0 (seed 521, 1,000 deals; big blind -20.4 ± 10.3, medium -15.2 ± 10.7). Both bot
+  sets answer re-raises up to 35bb alike (fold 28/25%, re-raise 46/43%), so the difference is in the tree below:
+  re-raised about half the time, hero meets more 4-bets and shoves over them more (--diag, phone: good hands 9 -> 19%
+  of those spots, medium 0 -> 11%), which pays only if big re-raises get folded as in the logs. Off by default
+  until more seeds are in.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the

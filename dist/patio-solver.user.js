@@ -4675,8 +4675,7 @@ function ENGINE() {
         if (isRoot) {
           for (const a of rootActs) if (a.amount > facing + 1e-9) raiseAmts.push(Math.min(a.amount, maxAdd));
         } else {
-          // Experiment (cfg.oppMinRaise): the friends re-raise with min-raises (about 4 in 5).
-          const r = round(player === 1 && cfg.oppMinRaise ? facing + Math.max(facing, bigBlind) : facing + (potNow + facing));
+          const r = round(facing + (potNow + facing));
           if (r < 0.45 * maxAdd) raiseAmts.push(r);
           raiseAmts.push(maxAdd);
         }
@@ -5155,7 +5154,7 @@ function ENGINE() {
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead === true, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -6037,7 +6036,7 @@ function ENGINE() {
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi, oppMinRaise: input.pfOppRaise === 'min', heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
+        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead === true,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });
@@ -6185,8 +6184,7 @@ function ENGINE() {
       if (aggressive(best)) {
         const tol = Math.max(0.02 * (pot + toCall), 1.5 * best.se, 0.1 * bigBlind);
         const near = ranked.filter((sc) => aggressive(sc) && best.ev - sc.ev <= tol);
-        // Experiment (input.sizePick 'maxPot'): keep the best-EV size unless it is an overbet.
-        if (!(input.sizePick === 'maxPot' && best.amount - toCall <= pot + toCall + 1e-9)) best = near.sort((a, b) => a.amount - b.amount)[0];
+        best = near.sort((a, b) => a.amount - b.amount)[0];
       }
       let runnerUp = ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
