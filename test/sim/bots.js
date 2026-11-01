@@ -160,6 +160,8 @@ const HOME_DEFAULT = {
   bluffRaise: 0.04,           // raises with a draw or nothing
   callMw: null,               // facing a bet multiway: threshold shift [first to answer, last after folds, after a call] (fitted, pooled)
   reRaise: 1,                 // after betting or raising on the street and being raised: re-raise share x this (fitted, pooled)
+  lineBet: null,              // checked to on the turn / river: log-odds shift of betting by their own line on the street before,
+                              // [called turn, bet turn, called river, bet river] (fitted, pooled; friends who called rarely lead)
   betSize: 0.5,               // typical bet, fraction of the pot
   sizeTell: 0.6,              // bigger bets with stronger hands (log-size per strength)
   minBet: 0.15,               // share of bets that are one big blind
@@ -247,7 +249,13 @@ function homeBot(params) {
         if (strongDraw) pb = P.semi / (1 + 0.5 * k);
         else if (weakDraw) pb = P.semi / 3 / (1 + k);
         else if (air) pb = P.bluff[si] * (si === 0 && v.pfAgg === v.seat ? P.cbet : 1) / (1 + k);
-        const pBet = clamp(pv + (1 - pv) * pb, 0, 1);
+        let pBet = clamp(pv + (1 - pv) * pb, 0, 1);
+        if (P.lineBet && si >= 1) {
+          const pl = v.seq[STREET_OF[v.street - 1]] || [];
+          const j = pl.some((x) => x === 'bet' || x === 'raise') ? 1 : pl.includes('call') ? 0 : -1;
+          const sh = j < 0 ? 0 : P.lineBet[2 * (si - 1) + j];
+          if (sh) { const q = clamp(pBet, 1e-4, 1 - 1e-4); pBet = sig(Math.log(q / (1 - q)) + sh); }
+        }
         // Bet size: a min-bet sometimes, otherwise around their usual size, bigger when stronger.
         const target = Math.log(P.betSize) + P.sizeTell * (hp - 0.7) + (P.potSlope ? P.potSlope * (Math.log(Math.max(1, pot / bb)) - Math.log(12)) : 0);
         const sd = P.sizeSd, grid = sd > 0.45 || P.potSlope ? SIZES_WIDE : SIZES;

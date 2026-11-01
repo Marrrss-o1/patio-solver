@@ -13,6 +13,7 @@ const r2 = (x) => Math.round(x * 1000) / 1000;
 // or turn 'facing an open' into 'facing a shove'. Each bet's size is capped at 2x pot for the same reason.
 const SHOVE_BB = 12, BET_CAP = 2;
 
+const lineOpenBlank = () => ({ calledN: 0, called: 0, aggrN: 0, aggr: 0, checkedN: 0, checked: 0 });
 function blank() {
   const st = () => ({ check: 0, bet: 0, fold: 0, call: 0, raise: 0 });
   const pos = () => ({ n: 0, vpip: 0, pfr: 0 });
@@ -37,6 +38,9 @@ function blank() {
     // 2 and 3 to answer, kept on the first answerer.
     huAnsN: 0, huAnsFold: 0, mwFirstN: 0, mwFirstFold: 0, mwLastFoldedN: 0, mwLastFoldedFold: 0, mwLastStayedN: 0, mwLastStayedFold: 0,
     mw2N: 0, mw2Fold: 0, mw3N: 0, mw3Fold: 0,
+    // The first chance to bet a turn or river nobody has bet yet, by the player's own line on the street before:
+    // called a bet (without betting or raising), bet or raised, or only checked (the street went by without a bet).
+    lineOpen: { turn: lineOpenBlank(), river: lineOpenBlank() },
     sawFlop: 0, wtsd: 0, showdowns: 0,
     // Shown hands: strength (percentile vs all hands, no draws) on each street they acted.
     shows: [],
@@ -63,6 +67,14 @@ function addEntry(prof, h, opts = {}) {
     if (agg) t.pfr++;
     if (p.position && t.pos[p.position]) { const g = t.pos[p.position]; g.n++; if (vol) g.vpip++; if (agg) g.pfr++; }
     for (const s of STREETS) for (const k of a[s] || []) if (t.st[s][k] != null) t.st[s][k]++;
+    // A street's first action is a check or a bet only when nobody has bet before them, so the per-player lists
+    // are enough (older logs have no ordered action log).
+    for (const s of ['turn', 'river']) {
+      const first = (a[s] || [])[0], pl = a[s === 'turn' ? 'flop' : 'turn'] || [];
+      if (first !== 'check' && first !== 'bet') continue;
+      const line = pl.some((k) => k === 'bet' || k === 'raise') ? 'aggr' : pl.includes('call') ? 'called' : pl.length && pl.every((k) => k === 'check') ? 'checked' : null;
+      if (line) { const lo = t.lineOpen[s]; lo[line + 'N']++; if (first === 'bet') lo[line]++; }
+    }
     const sawFlop = h.board.length >= 3 && ((a.flop || []).length > 0 || !p.folded);
     if (sawFlop) t.sawFlop++;
     if (sawFlop && !p.folded && live >= 2) t.wtsd++;
@@ -248,6 +260,10 @@ function summarize(t) {
   s.huAnsFold = ratio(t.huAnsFold, t.huAnsN); s.mwFirstFold = ratio(t.mwFirstFold, t.mwFirstN); s.mwLastFoldedFold = ratio(t.mwLastFoldedFold, t.mwLastFoldedN);
   s.mwLastStayedFold = ratio(t.mwLastStayedFold, t.mwLastStayedN); s.mw2Fold = ratio(t.mw2Fold, t.mw2N); s.mw3Fold = ratio(t.mw3Fold, t.mw3N);
   Object.assign(s, { huAnsN: t.huAnsN, mwFirstN: t.mwFirstN, mwLastFoldedN: t.mwLastFoldedN, mwLastStayedN: t.mwLastStayedN, mw2N: t.mw2N, mw3N: t.mw3N });
+  for (const st of ['turn', 'river']) {
+    const lo = t.lineOpen[st], S = st === 'turn' ? 'Turn' : 'River';
+    for (const k of ['called', 'aggr', 'checked']) { const K = k[0].toUpperCase() + k.slice(1); s['open' + K + S] = ratio(lo[k], lo[k + 'N']); s['open' + K + S + 'N'] = lo[k + 'N']; }
+  }
   s.vsRaiseFold = ratio(t.vsRaiseFold, t.vsRaiseN); s.vsRaiseRe = ratio(t.vsRaiseRe, t.vsRaiseN); s.vsRaiseN = t.vsRaiseN;
   const bl = t.betLog, bm = mean(bl);
   s.betLogSd = bl.length > 2 ? Math.sqrt(bl.reduce((a, x) => a + (x - bm) ** 2, 0) / (bl.length - 1)) : null; s.betLogN = bl.length;
