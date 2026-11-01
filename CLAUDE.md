@@ -214,6 +214,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   advice bluffed into players who could only chop (Marwin's log, 2d7h on Jd Qc Tc 9h 8c).
 - Counts decay 0.3% per hand a player is dealt into (`DECAY` = 0.997 in tracker.js, about 330 hands of memory; it
   was 1%, which forgot everything after ~100 hands), so they are floats. Round before display. Last 80 shows kept.
+  On the 1 Nov session faster decay predicts facing-bet answers better (0.9: 0.861 -> 0.840) but preflop actions
+  and shown hands worse; nearly all of that gain comes through the table size step (below), which the simulator
+  needs, so DECAY stays.
 - Preflop ranges are soft (`topClassWeights` uses a sigmoid edge, plus a small floor for every hand). Hard top-X%
   cut-offs gave zero weight to hands people really play (KQo raises at 8% PFR), which made reads predict shown
   hands worse than a random guess in the simulator and led to bad turn/river calls.
@@ -263,6 +266,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shown-hand likelihood). `--engine=a,b` compares engines, `--from=<ISO>` scores only later hands. v1.4.0 vs the
   rebuild on three logs: actions 0.831 -> 0.787, seen 0-9 0.958 -> 0.879, open responses 1.31 -> 1.00, shown hands
   x0.73 -> x1.72 (on the 100 hands the priors never saw: 0.809 -> 0.776, x0.92 -> x1.45). Simulator: about +8 ± 12.
+  Held-out on the 1 Nov session (59 hands, v1.7.9, read after the older logs): all actions 0.879 (v1.4.0) -> 0.851,
+  facing bets 0.899 -> 0.861, shown hands x0.67 -> x1.41 (#60 alone x1.31 -> x1.41). Folds against hero's bets are
+  on target there (residual +0.02 ± 0.31 log-odds heads-up). Refitting READ_PRIORS.home on all four logs moves
+  nothing out of sample (vsOpen fitted on one session scores worse on the other than the hand-set prior, both
+  ways: 1.026 -> 1.084, 1.011 -> 1.036); the full refit also made top set check 3-way (pfr blinds .258 -> .291).
+  Not refitted. POOL_K 60/240, SIZE_K 32-512, SHOW_VALUE_K 15/60, fold tau 0.1-0.35: all within 0.003.
+  Think time: slower checks show stronger hands (r -0.19 ± 0.09 per show, both sessions) but check speed does
+  not predict folding to a bet afterwards (slope -0.17 ± 0.27, n 165), so it is not used.
 - `foldAfterAgg` (tally `aggVsN`/`aggVsFold`): folding to a bet after having bet or raised earlier in the hand.
   When an opponent has an aggressive line (`aggroFold` in analyzeSync), plans and the river, turn and flop solvers
   scale fold rates by foldAfterAgg / foldToBet (about x0.7). Without it the solver floated turn bets with air
@@ -380,7 +391,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   share divides by the fold rate raiseFreq was built from (multiway raises predicted 12%, real 9%, now 10%). Sim
   +48.3 ± 14.6 vs v1.7.2 (2,000 deals 4-handed). Tried and dropped: linking families (bet effect -> raise prior,
   VPIP -> fold), more shrinkage on vsOpen / 3-bet / foldAfterAgg (all under 0.003 log-loss); EV - 1 SE size
-  tie-break -6.2 ± 12.7.
+  tie-break -6.2 ± 12.7. Dropping the table step predicts unseen hands better (facing-bet log-loss on the 1 Nov
+  session 0.861 -> 0.848; the 31 Oct and 1 Nov sessions read after the older logs 0.858 -> 0.851; bots' hands
+  0.829 -> 0.831), but lost -28.5 ± 15.9 at the live budget (1,000 deals 4-handed, mostly button, strong hands), so
+  it stays: the bots answer each size the same way all night and answer hero like each other, the friends don't
+  (heads-up they fold less to each other's bets than the read at every size, about 0.05-0.10). A level-neutral
+  table step (shape only) scored no better (0.863).
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
