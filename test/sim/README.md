@@ -134,8 +134,9 @@ the log-likelihood gain per observation of each friend's own bot over the averag
 
 By default the solver plays with a cheap budget (3,000 Monte Carlo iterations, river solver 120 iterations, no
 turn solver). That is not the advice Marwin plays. He plays on the computer (the extension), whose full solve
-(`extension/offscreen.js`: 24x the Monte Carlo, the turn solver on, preflop and river solvers at 16x) lands before
-he acts on nearly every decision since the turn solve was cut to 1.2-2 s. (In the logs he acts in a median 2.4 s.)
+(`extension/offscreen.js`: 24x the Monte Carlo, the turn solver on for 1-1.5 s per worker, river solver 16x,
+preflop solver 4x) lands before he acts on nearly every decision since #51-#53. (In the logs he acts in a median
+2.4 s.)
 The phone, and the computer's quick read, use 24,000 Monte Carlo iterations (16,000 against 3+ opponents) and
 the engine's solver defaults.
 
@@ -145,8 +146,9 @@ the engine's solver defaults.
 | `phone` | 24,000 / 16,000 | off | 250 / 300 | flop 87% / 95%; turn 36-42%; preflop and river 98-100% |
 | `live` | 24,000 / 16,000 | 100 iterations | 250 / 300 | flop 87% / 95%; turn 100% (44 of 44); preflop and river 98-100% |
 
-The full solve's bigger preflop and river budgets changed no decisions, and 100 turn-solver iterations pick
-what the full solve's averaged workers pick. With the default budget the simulator mostly measures a weaker
+The full solve's bigger preflop and river budgets changed no decisions (measured with preflop at 4,800 iterations,
+before #53 cut it to 1,200 with the same picks), and 100 turn-solver iterations pick what the full solve's
+averaged workers pick (8 workers at 100 iterations each, about what 1-1.5 s gives on a fast computer). With the default budget the simulator mostly measures a weaker
 player on the flop and a different one on the turn. Confirm a change with `--budget live` before trusting it.
 It costs about 3x the default's time, mostly the turn solves at about 1.5 s each. `--iters` and `--river-iters`
 override the budget's numbers, and `--a-opts` / `--b-opts` go on top. Runs without `--budget` keep their old

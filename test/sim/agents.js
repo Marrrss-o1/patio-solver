@@ -12,7 +12,8 @@ const bots = require('./bots.js');
 //   phone: the phone, and the computer's quick read: the tracker's 24,000 (16,000 against 3+ opponents)
 //          Monte Carlo iterations and the engine's default solver budgets (river 250, preflop 300, plan 500).
 //   live:  the computer's full solve (extension/offscreen.js), what Marwin plays: the phone's budget plus the
-//          turn solver (heads-up and against the field) at 100 iterations. On the 292 logged decisions this picks
+//          turn solver (heads-up and against the field) at 100 iterations (about what each worker's 1-1.5 s turn
+//          solve gets on a fast computer; the full solve averages 8 of them). On the 292 logged decisions this picks
 //          the full solve's action on 44 of 44 turns (the simulator's default: 36-42%), 87-95% of flops (default
 //          53-79%; the full solve's 24x Monte Carlo is the rest), and preflop and river as the full solve does
 //          (98-100%: the full solve's bigger preflop and river budgets change no decisions). About 1.5 s per turn
