@@ -265,6 +265,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   main, about +13 ± 10 pooled on d8e866e. This fix instead: 4-handed +40.5 ± 22.9 and +14.9 ± 22.2 on two seeds of
   1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). Re-raise rate 1x instead of 2x:
   -20.8 ± 21.2 (4-handed, 1,000 deals). `input.reraiseModel: false` turns it off.
+- Raised bettors fold less (v1.7.4): continueRule scales a raised bettor's fold-to-bet by 0.55 (was 0.75;
+  `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
+  about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
+  against 0.75: 4-handed +22.6 ± 20.6 (1,000 deals), heads-up +11.7 ± 18.6 (1,500 deals). This is the cause behind
+  the audit thread's flop-raise gate (pooled about +15 ± 9 on 3+ handed tables, -17 ± 13 heads-up), which is not merged.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
@@ -312,7 +317,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   4-handed (2,000 deals) and +19 ± 22 heads-up on the log-sized bots (1,500 deals); full narrowing was -16 ± 22; turn solver river
   sizes 33/66/100% vs 50/100% (turn solver on in both) +24.9 ± 18.7 and +12.0 ± 14.8 on two seeds. Bots are simple; this is a regression check, not proof
   of an edge against real players.
-- Ideas: real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
+- Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
+  positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
+  rates already describe answers to typical lines; recentring it on a typical line's credibility is untested (the
+  sim bots ignore hero's line, so only the logs can judge it). Real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
   devices is not wanted: the owner keeps phone and computer separate.)
 
