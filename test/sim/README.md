@@ -6,6 +6,8 @@ for measuring changes (those two still work and are left as they were).
 
 ```
 node test/sim/run.js --hands 2000 --players 4 --bots friends                  # solver vs bots fitted to Marwin's friends
+node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
+     --a-ref main --b-ref my-branch                                           # the same, with the budget Marwin plays
 node test/sim/run.js --hands 2000 --players 2 --bots maniac --stack 100 \
      --a-opts '{"preflopSolver":false}' --b-opts '{}'                         # paired A/B: preflop solver off vs on
 node test/sim/run.js --hands 2000 --players 4 --bots friends --a-ref main --b-ref my-branch   # two versions of src/
@@ -131,6 +133,43 @@ For a held-out check, fit on half the hands and validate on the other half (`cal
 --names n.json`, then `validate.js odd.json --profiles p.json --names n.json`); "per-friend bots vs the pooled bot" is
 the log-likelihood gain per observation of each friend's own bot over the average friend's on hands it never saw.
 `--sizes` prints the spread of open, re-raise, raise and bet sizes, real vs bots.
+
+## Budgets: play what Marwin plays (`--budget live`)
+
+By default the solver plays with a cheap budget (3,000 Monte Carlo iterations, river solver 120 iterations, no
+turn solver). That is not the advice Marwin plays. He plays on the computer (the extension), whose full solve
+(`extension/offscreen.js`: 24x the Monte Carlo, the turn solver on for 1-1.5 s per worker, river solver 16x,
+preflop solver 4x) lands before he acts on nearly every decision since #51-#53. (In the logs he acts in a median
+2.4 s.)
+The phone, and the computer's quick read, use 24,000 Monte Carlo iterations (16,000 against 3+ opponents) and
+the engine's solver defaults.
+
+| `--budget` | Monte Carlo | Turn solver | River / preflop solver | Same action as the full solve (292 logged decisions) |
+|---|---|---|---|---|
+| none (default) | 3,000 | off | 120 / 300 | flop 53% heads-up, 79% multiway; turn 36-42%; preflop and river 98-100% |
+| `phone` | 24,000 / 16,000 | off | 250 / 300 | flop 87% / 95%; turn 36-42%; preflop and river 98-100% |
+| `live` | 24,000 / 16,000 | 100 iterations | 250 / 300 | flop 87% / 95%; turn 100% (44 of 44); preflop and river 98-100% |
+
+The full solve's bigger preflop and river budgets changed no decisions (measured with preflop at 4,800 iterations,
+before #53 cut it to 1,200 with the same picks), and 100 turn-solver iterations pick what the full solve's
+averaged workers pick (8 workers at 100 iterations each, about what 1-1.5 s gives on a fast computer). With the default budget the simulator mostly measures a weaker
+player on the flop and a different one on the turn. Confirm a change with `--budget live` before trusting it.
+It costs about 6x the default's time per decision (781 ms against 133 ms; `phone` 348 ms), mostly the turn solves.
+`--iters` and `--river-iters` override the budget's numbers, and `--a-opts` / `--b-opts` go on top. Runs without
+`--budget` keep their old results and block keys.
+
+How far apart the budgets play (4-handed friends, 150bb, 1,000 deals, seed 61, main after #53; the two runs paired
+with `diff.js`):
+
+| Budget | bb/100 (AIVAT) | Paired with the default |
+|---|---|---|
+| default | 216.7 ± 30.1 | |
+| `phone` (`--budget live --a-opts '{"turnSolver":false}'`) | 269.0 ± 31.6 | +52 ± 20 |
+| `live` | 262.7 ± 27.7 | +46 ± 21 |
+
+So the default plays well below what Marwin plays (an earlier run on an older main had 3,000 against 24,000
+Monte Carlo iterations at -4.8 ± 21; pooled about +25 ± 15), and the turn solver at the real budget is
+-6.3 ± 21.1 against the same budget without it (on the default budget it measured about +12 ± 15 pooled).
 
 ## Speed
 
