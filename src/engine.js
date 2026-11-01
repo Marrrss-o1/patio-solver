@@ -408,8 +408,8 @@
   const STREET_KEYS = { 3: 'flop', 4: 'turn', 5: 'river' };
   // Facing-bet size buckets (bet as a fraction of the pot before it) and the size each one stands for.
   const SIZE_BUCKETS = [['small', 0.33], ['medium', 0.66], ['large', 1.1]];
-  // Pseudo-counts behind the table's and each player's fold rate in a size bucket (computeStats).
-  const TABLE_SIZE_K = 20, SIZE_K = 64;
+  // Pseudo-counts behind each player's fold rate in a size bucket (computeStats).
+  const SIZE_K = 64;
   // Pseudo-shows behind each player's value share of their bets (computeStats).
   const SHOW_VALUE_K = 30;
   const BIG_BET = 0.75;
@@ -624,8 +624,6 @@
       mu.all = (X + POOL_K * b.mu.all) / (N + POOL_K);
       out[fam] = Object.assign({}, b, { mu });
     }
-    // The table's counts minus this player's (the size buckets' table correction uses them).
-    out.poolRest = rest;
     return out;
   }
 
@@ -731,30 +729,21 @@
     // sits at the average size seen in it (tally `fs`/`fn`), not at a fixed point: the small
     // bucket is full of min-bets, which friends call, and read at 1/3 pot it made a third-pot bet
     // look like it gets called as often as a min-bet (44% folds in the logs, 33% predicted).
-    // The curve is first moved by how the whole table (everyone else's counts in the bucket,
-    // TABLE_SIZE_K pseudo-counts) answers that size compared with what the curve gives the
-    // table's fold rate, so a table that calls small bets more than the logs did is learned
-    // from all of its players. A player's own folds then move it only slowly (SIZE_K
-    // pseudo-counts): in the logs, how one friend answers one size compared with the others was
-    // noise at home-game sample sizes (with 4 pseudo-counts, facing-bet predictions were worse
-    // than reading every player off the table's average), while their fold rate by street is real.
+    // A player's own folds move it only slowly (SIZE_K pseudo-counts): in the logs, how one friend
+    // answers one size compared with the others was noise at home-game sample sizes (with 4
+    // pseudo-counts, facing-bet predictions were worse than reading every player off the table's
+    // average), while their fold rate by street is real. The curve used to be moved first by how the
+    // rest of the table answered each size (20 pseudo-counts, #37); on hands it had not seen that
+    // predicted folds worse (facing-bet log-loss on the 1 Nov session 0.861, 0.848 without it).
     stats.foldBySize = {};
     stats.sizeAnchor = {};
     stats.raw.foldBySize = {};
-    const rest = prior.poolRest && prior.poolRest.vs;
     for (const [key, c] of SIZE_BUCKETS) {
       const x = Object.assign({ fold: 0, call: 0, raise: 0, fs: 0, fn: 0 }, (t.vs && t.vs[key]) || {});
       const nf = x.fold + x.call + x.raise;
       const f = (x.fs + 2 * c) / (x.fn + 2);
       stats.sizeAnchor[key] = f;
-      let base = modelFold(stats.foldToBet, f);
-      const y = rest && rest[key];
-      const ny = y ? Math.max(0, (y.fold || 0) + (y.call || 0) + (y.raise || 0)) : 0;
-      if (ny > 0) {
-        const ey = modelFold(prior.fold.mu.all, ((y.fs || 0) + 2 * c) / ((y.fn || 0) + 2));
-        const ry = (Math.max(0, y.fold || 0) + TABLE_SIZE_K * ey) / (ny + TABLE_SIZE_K);
-        base = clamp(sigmoid(logit(base) + logit(clamp(ry, 0.02, 0.98)) - logit(ey)), 0.02, 0.98);
-      }
+      const base = modelFold(stats.foldToBet, f);
       stats.foldBySize[key] = (x.fold + SIZE_K * base) / (nf + SIZE_K);
       stats.raw.foldBySize[key] = nf ? x.fold / nf : null;
       stats.raw.foldBySize[key + 'N'] = nf;
