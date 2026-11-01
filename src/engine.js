@@ -1802,6 +1802,8 @@
   const LINE_CALL = 1, LINE_CHECK = 2, LINE_BET = 3;
   const lineAt = (m, s, kind) => (m & ~(3 << (2 * (s - 3)))) | (kind << (2 * (s - 3)));
   const LINE_SOFT = 0.5;
+  // Fold odds of players still to act once someone has called (see sc.oppAfter).
+  const OVERCALL_FOLD = 1.3;
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
@@ -5118,6 +5120,21 @@
           return hu;
         });
       }
+      // Once someone has called hero's bet (or hero calls one), the players still to act fold more
+      // than their multiway read: logs 54% where the read said 47% (37 spots; earlier counts 64-69%
+      // for the last to answer after a call). Fold odds x overcallFold for them (sc.oppAfter).
+      const ocf = input.overcallFold != null ? +input.overcallFold : OVERCALL_FOLD;
+      if (ocf !== 1) {
+        for (const sc of scenarios) {
+          if (sc.kind === 'fold' || sc.kind === 'check' || (toCall > 0 && sc.amount > toCall + 1e-9)) continue;
+          sc.oppAfter = opps.map((o, i) => {
+            const r = sc.opp[i];
+            if (!o.pending || r.cont >= 0.999) return r;
+            const cont = clamp(1 - oddsScale(1 - r.cont, ocf), 0.03, 0.97);
+            return Object.assign({}, r, { cont, reraise: Math.min(r.reraise || 0, cont) });
+          });
+        }
+      }
     }
 
     const heroCombo = COMBO_INDEX[hero[0] * 52 + hero[1]];
@@ -5485,22 +5502,23 @@
       let per = contCache.get(sc);
       if (!per) contCache.set(sc, (per = new Map()));
       let t = per.get(shift);
-      // With heads-up rules (sc.oppHU) each opponent has a second table for them at i + opps.length.
-      if (!t) per.set(shift, (t = Array.from({ length: sc.oppHU ? 2 * opps.length : opps.length }, () => new Float64Array(NUM_COMBOS).fill(NaN))));
+      // With heads-up rules (sc.oppHU) each opponent has a second table for them at i + opps.length,
+      // and with after-a-call rules (sc.oppAfter) a third at i + 2 x opps.length.
+      if (!t) per.set(shift, (t = Array.from({ length: (sc.oppAfter ? 3 : sc.oppHU ? 2 : 1) * opps.length }, () => new Float64Array(NUM_COMBOS).fill(NaN))));
       return t;
     }
     function decide(sc, shift, tabs) {
       let reraisedBy = -1;
-      const hu = sc.oppHU;
-      // Someone is already in (an all-in player): nobody faces the bet alone.
+      const hu = sc.oppHU, af = sc.oppAfter;
+      // Someone is already in (an all-in player, or the bettor hero calls): nobody faces the bet alone.
       let anyIn = 0;
-      if (hu) for (let i = 0; i < opps.length; i++) if (sc.opp[i].cont >= 0.999) anyIn = 1;
+      if (hu || af) for (let i = 0; i < opps.length; i++) if (sc.opp[i].cont >= 0.999) anyIn = 1;
       for (const i of respOrder) {
-        const alone = hu && !anyIn;
-        const rule = alone ? hu[i] : sc.opp[i];
+        const alone = hu && !anyIn, after = !alone && af && anyIn;
+        const rule = alone ? hu[i] : after ? af[i] : sc.opp[i];
         if (rule.cont >= 0.999 || (ties && ties[oppCombo[i]])) oppIn[i] = 1;
         else {
-          const k = oppCombo[i], tab = tabs[alone ? i + opps.length : i];
+          const k = oppCombo[i], tab = tabs[alone ? i + opps.length : after ? i + 2 * opps.length : i];
           let p = tab[k];
           if (p !== p) {
             const cont = shift ? clamp(rule.cont - shift, 0.01, 0.99) : rule.cont;
