@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.1
+// @version      1.8.2
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -366,6 +366,15 @@ function ENGINE() {
       // continues. Fitted on the facing-bet log-loss of both sessions in the logs (old format
       // 0.895 -> 0.877, new 0.869 -> 0.857; each session alone picks about these values).
       line: { checkedFold: 1.25, checkedRaise: 0.5, unactedRaise: 1.4 },
+      // Bets of `size` x pot or more: every hand of medium strength or better makes them at least at
+      // `floor` x the player's bet rate (applyAction), so a pot-size bet is no longer read as mostly
+      // the top of the range plus bluffs. In both logs the friends' bigger bets showed weaker hands:
+      // mean made-hand percentile 0.84 under 0.45 pot, 0.78 at 0.45-0.85, 0.70 at 0.85-1.2, 0.61 above
+      // (87 shown bets; log size per percentile -0.69 +- 0.33), and 10 of 23 shown bets of 0.85 pot or
+      // more were medium pairs (percentile 0.49-0.77). Shown hands after a pot-size or bigger bet
+      // went from x1.08 to x1.26 of a random guess (22 shows; all shows x1.58 -> x1.63, 31 Oct and
+      // 1 Nov both up; action log-loss unchanged). Hero's own range (solid) keeps the old rule.
+      bigBetMedium: { size: 0.9, floor: 1 },
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -838,6 +847,7 @@ function ENGINE() {
     // around the population's level, from each show's likelihood at every NOISES level.
     const nz = prior.noise || { mu: 0.45, k: 3 };
     stats.rangeNoise = nz.mu;
+    stats.bigBetMedium = prior.bigBetMedium || null;
     const fn = fits.filter((f) => f.nl && f.nl.length === NOISES.length);
     if (fn.length) {
       const sum = NOISES.map((_, i) => fn.reduce((a, f) => a + f.nl[i], 0));
@@ -1430,7 +1440,9 @@ function ENGINE() {
       P = aggressionProbs(W, st, clamp(stats.betFreq * sizeScale, 0.03, 0.95), vr);
       // Home players also bet medium hands (second pair, weak top pair) "to see where they are".
       // Without this slice, a friend's TT betting the flop and turn on J-J-Q was ruled out of the range.
-      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? MEDIUM_BET * stats.betFreq * sizeScale : 0);
+      // Big bets at the owner's table come with medium hands too (READ_PRIORS.home.bigBetMedium).
+      const bm = stats.bigBetMedium, mb = bm && size >= bm.size ? bm.floor : MEDIUM_BET;
+      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? mb * stats.betFreq * sizeScale : 0);
     } else if (action === 'check') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
       const slow = clamp(0.5 - 0.1 * stats.af, 0.1, 0.45);
@@ -5034,6 +5046,7 @@ function ENGINE() {
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
+      if (input.bigBetMedium === false) { stats.bigBetMedium = null; if (statsHU) statsHU.bigBetMedium = null; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -6541,15 +6554,18 @@ ENGINE();
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
         currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: this.settingsBB || s.bigBlind || null,
-        finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
+        finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || this.now(),
       };
       this.pendingRaw = null;
       this.emit('hand', this.hand);
     }
 
+    // The clock for think times and raw event times; rebuildReads replays a hand on its recorded times.
+    now() { return this.clock ? this.clock() : Date.now(); }
+
     handle(ev, data, snap) {
       if (snap) this.snap = snap;
-      if (ev === 'game:stage_began' && data && data.stageType === 'set_blinds') this.rawStart = Date.now();
+      if (ev === 'game:stage_began' && data && data.stageType === 'set_blinds') this.rawStart = this.now();
       this.recordRaw(ev, data, snap);
       const h = this.hand;
       switch (ev) {
@@ -6643,7 +6659,7 @@ ENGINE();
           this.onAction(data);
           break;
         case 'game:player_turn_started':
-          if (h) h.turnAt[data.playerID] = Date.now();
+          if (h) h.turnAt[data.playerID] = this.now();
           if (h && !h.finished) {
             if (snap) this.checkChips(snap);
             const left = data.turnTimeDurationMS > 0 ? data.turnTimeDurationMS - (data.turnTimeElapsedMS || 0) : null;
@@ -6855,7 +6871,7 @@ ENGINE();
       const h = this.hand;
       const heroId = this.heroId();
       const entry = {
-        t: Date.now(), board: h.board.slice(), bigBlind: h.bigBlind,
+        t: this.now(), board: h.board.slice(), bigBlind: h.bigBlind,
         hero: h.heroUids.map((u) => h.heroCards[u]).filter(Boolean),
         pot: Object.values(h.players).reduce((a, p) => a + p.total, 0),
         advice: (h.advice || []).slice(),
@@ -6888,7 +6904,7 @@ ENGINE();
         pot: r2(potBefore), facing: r2(facing),
       };
       if (isHero) e.hero = true;
-      if (h.turnAt[p.id]) { e.ms = Date.now() - h.turnAt[p.id]; delete h.turnAt[p.id]; }
+      if (h.turnAt[p.id]) { e.ms = this.now() - h.turnAt[p.id]; delete h.turnAt[p.id]; }
       if (snapP && snapP.stack != null) e.stack = r2(+snapP.stack);
       if (potBefore > 0 && (kind === 'bet' || kind === 'raise' || kind === '3bet')) e.potPct = Math.round(100 * Math.max(0, added - facing) / (potBefore + facing));
       if (p.allin) e.allin = true;
@@ -7003,7 +7019,7 @@ ENGINE();
         d = txt && txt.length > RAW_MAX_EVENT ? { cut: txt.length } : JSON.parse(txt);
       } catch (e) { d = { unserializable: true }; }
       const t0 = isNewHand ? this.rawStart : h.t0;
-      const rec = { t: Date.now() - (t0 || Date.now()), ev, d };
+      const rec = { t: this.now() - (t0 || this.now()), ev, d };
       if (snap && (isNewHand || ev === 'game:player_turn_started' || ev === 'game:game_ended' || ev === 'game:stage_began')) {
         // The account id last, so an imported log rebuilds reads under the same keys (rebuildReads).
         rec.s = (snap.players || []).map((x) => [x.id, x.name, x.stack, x.posType, x.playState, x.authUserId]);
@@ -7350,7 +7366,13 @@ ENGINE();
       const heroP = (e.players || []).find((p) => p.hero);
       const heroName = heroP ? heroP.name : null;
       let snap = null;
+      // Replay on the hand's own clock (it ended at e.t), so think times come out as they were played.
+      const last = e.raw[e.raw.length - 1];
+      const base = (e.t || 0) - ((last && last.t) || 0);
+      let cur = base;
+      t.clock = () => cur;
       for (const r of e.raw) {
+        cur = base + (r.t || 0);
         if (r.s) {
           const players = r.s.map(([id, name, stack, posType, playState, auth]) => ({ id, name, stack, posType, playState, authUserId: idOf(e, name, auth) }));
           const me = heroName && players.find((x) => x.name === heroName);
