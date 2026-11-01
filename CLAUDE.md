@@ -320,8 +320,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   product of heads-up reads (`fieldStats(list, base, foldList)`). Against the old bots, which over-folded multiway
   the same way as the model (two fold together 38%), this lost -27 ± 20; against the refit bots (#36: 53% / 53% /
   63%, two together 31%) it gained +32.8 ± 21.2 (1,000 deals 4-handed; weak hands +30 ± 10, SB +33 ± 13).
-  Open lead: after someone has called, the logs fold 54% where the multiway read says 47% (37 spots; no caller yet:
-  52% vs 57%, 93 spots, before #39's heads-up first answers).
+  After someone has called, the logs fold 54% where the multiway read says 47% (37 spots; no caller yet: 52% vs 57%,
+  93 spots, before #39's heads-up first answers). Since v1.7.7 players still to act fold with odds x1.3 once someone
+  has called hero's bet or a bet hero called (`OVERCALL_FOLD`, `sc.oppAfter`, `input.overcallFold`; players who acted
+  before hero keep the check-line read, #47). Simulator, 4-handed, 1,000 deals per seed: -8.4 ± 20.3, +26.7 ± 21.7,
+  +11.2 ± 18.4, +36.9 ± 18.3 (pooled +16.6 ± 9.9). It makes the small multiway stabs a little better through the
+  lookahead (fewer overcallers, so more heads-up river bluffs): the test's flop king-high stab went from 1.03 to 1.34
+  chips over checking (pot 12); on the spot the stabs still lose about 1.8 chips.
   Joint folds by size, exactly 2 opponents, first bets (both fold / product of heads-up rates): under 40% pot 9% / 5%
   (n 22), 40-75% 16% / 31% (n 19), 75-100% 38% / 48% (n 8), over 100% 60% / 49% (n 5); 3+ opponents at 75%+ 28% / 34%
   (n 18). So the product of heads-up rates holds overall (20% vs about 25% pooled); only mid sizes fall short, on
