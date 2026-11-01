@@ -350,6 +350,15 @@
       // continues. Fitted on the facing-bet log-loss of both sessions in the logs (old format
       // 0.895 -> 0.877, new 0.869 -> 0.857; each session alone picks about these values).
       line: { checkedFold: 1.25, checkedRaise: 0.5, unactedRaise: 1.4 },
+      // Bets of `size` x pot or more: every hand of medium strength or better makes them at least at
+      // `floor` x the player's bet rate (applyAction), so a pot-size bet is no longer read as mostly
+      // the top of the range plus bluffs. In both logs the friends' bigger bets showed weaker hands:
+      // mean made-hand percentile 0.84 under 0.45 pot, 0.78 at 0.45-0.85, 0.70 at 0.85-1.2, 0.61 above
+      // (87 shown bets; log size per percentile -0.69 +- 0.33), and 10 of 23 shown bets of 0.85 pot or
+      // more were medium pairs (percentile 0.49-0.77). Shown hands after a pot-size or bigger bet
+      // went from x1.08 to x1.26 of a random guess (22 shows; all shows x1.58 -> x1.63, 31 Oct and
+      // 1 Nov both up; action log-loss unchanged). Hero's own range (solid) keeps the old rule.
+      bigBetMedium: { size: 0.9, floor: 1 },
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -822,6 +831,7 @@
     // around the population's level, from each show's likelihood at every NOISES level.
     const nz = prior.noise || { mu: 0.45, k: 3 };
     stats.rangeNoise = nz.mu;
+    stats.bigBetMedium = prior.bigBetMedium || null;
     const fn = fits.filter((f) => f.nl && f.nl.length === NOISES.length);
     if (fn.length) {
       const sum = NOISES.map((_, i) => fn.reduce((a, f) => a + f.nl[i], 0));
@@ -1414,7 +1424,9 @@
       P = aggressionProbs(W, st, clamp(stats.betFreq * sizeScale, 0.03, 0.95), vr);
       // Home players also bet medium hands (second pair, weak top pair) "to see where they are".
       // Without this slice, a friend's TT betting the flop and turn on J-J-Q was ruled out of the range.
-      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? MEDIUM_BET * stats.betFreq * sizeScale : 0);
+      // Big bets at the owner's table come with medium hands too (READ_PRIORS.home.bigBetMedium).
+      const bm = stats.bigBetMedium, mb = bm && size >= bm.size ? bm.floor : MEDIUM_BET;
+      for (let k = 0; k < NUM_COMBOS; k++) P[k] = Math.max(0.03, P[k], st.hs[k] >= 0.35 ? mb * stats.betFreq * sizeScale : 0);
     } else if (action === 'check') {
       P = aggressionProbs(W, st, stats.betFreq, vr);
       const slow = clamp(0.5 - 0.1 * stats.af, 0.1, 0.45);
@@ -5046,6 +5058,7 @@
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
+      if (input.bigBetMedium === false) { stats.bigBetMedium = null; if (statsHU) statsHU.bigBetMedium = null; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;

@@ -168,15 +168,18 @@
         players, street: 0, started: false, board: [], heroUids: [], heroCards: {}, uidPos: {},
         pfRaiser: null, flopBet: false,
         currentBet: 0, preRaises: 0, dealerPos: null, bigBlind: this.settingsBB || s.bigBlind || null,
-        finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || Date.now(),
+        finished: false, log: [], raw: this.pendingRaw || [], turnAt: {}, t0: this.rawStart || this.now(),
       };
       this.pendingRaw = null;
       this.emit('hand', this.hand);
     }
 
+    // The clock for think times and raw event times; rebuildReads replays a hand on its recorded times.
+    now() { return this.clock ? this.clock() : Date.now(); }
+
     handle(ev, data, snap) {
       if (snap) this.snap = snap;
-      if (ev === 'game:stage_began' && data && data.stageType === 'set_blinds') this.rawStart = Date.now();
+      if (ev === 'game:stage_began' && data && data.stageType === 'set_blinds') this.rawStart = this.now();
       this.recordRaw(ev, data, snap);
       const h = this.hand;
       switch (ev) {
@@ -270,7 +273,7 @@
           this.onAction(data);
           break;
         case 'game:player_turn_started':
-          if (h) h.turnAt[data.playerID] = Date.now();
+          if (h) h.turnAt[data.playerID] = this.now();
           if (h && !h.finished) {
             if (snap) this.checkChips(snap);
             const left = data.turnTimeDurationMS > 0 ? data.turnTimeDurationMS - (data.turnTimeElapsedMS || 0) : null;
@@ -482,7 +485,7 @@
       const h = this.hand;
       const heroId = this.heroId();
       const entry = {
-        t: Date.now(), board: h.board.slice(), bigBlind: h.bigBlind,
+        t: this.now(), board: h.board.slice(), bigBlind: h.bigBlind,
         hero: h.heroUids.map((u) => h.heroCards[u]).filter(Boolean),
         pot: Object.values(h.players).reduce((a, p) => a + p.total, 0),
         advice: (h.advice || []).slice(),
@@ -515,7 +518,7 @@
         pot: r2(potBefore), facing: r2(facing),
       };
       if (isHero) e.hero = true;
-      if (h.turnAt[p.id]) { e.ms = Date.now() - h.turnAt[p.id]; delete h.turnAt[p.id]; }
+      if (h.turnAt[p.id]) { e.ms = this.now() - h.turnAt[p.id]; delete h.turnAt[p.id]; }
       if (snapP && snapP.stack != null) e.stack = r2(+snapP.stack);
       if (potBefore > 0 && (kind === 'bet' || kind === 'raise' || kind === '3bet')) e.potPct = Math.round(100 * Math.max(0, added - facing) / (potBefore + facing));
       if (p.allin) e.allin = true;
@@ -630,7 +633,7 @@
         d = txt && txt.length > RAW_MAX_EVENT ? { cut: txt.length } : JSON.parse(txt);
       } catch (e) { d = { unserializable: true }; }
       const t0 = isNewHand ? this.rawStart : h.t0;
-      const rec = { t: Date.now() - (t0 || Date.now()), ev, d };
+      const rec = { t: this.now() - (t0 || this.now()), ev, d };
       if (snap && (isNewHand || ev === 'game:player_turn_started' || ev === 'game:game_ended' || ev === 'game:stage_began')) {
         // The account id last, so an imported log rebuilds reads under the same keys (rebuildReads).
         rec.s = (snap.players || []).map((x) => [x.id, x.name, x.stack, x.posType, x.playState, x.authUserId]);
@@ -977,7 +980,13 @@
       const heroP = (e.players || []).find((p) => p.hero);
       const heroName = heroP ? heroP.name : null;
       let snap = null;
+      // Replay on the hand's own clock (it ended at e.t), so think times come out as they were played.
+      const last = e.raw[e.raw.length - 1];
+      const base = (e.t || 0) - ((last && last.t) || 0);
+      let cur = base;
+      t.clock = () => cur;
       for (const r of e.raw) {
+        cur = base + (r.t || 0);
         if (r.s) {
           const players = r.s.map(([id, name, stack, posType, playState, auth]) => ({ id, name, stack, posType, playState, authUserId: idOf(e, name, auth) }));
           const me = heroName && players.find((x) => x.name === heroName);
