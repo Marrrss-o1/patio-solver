@@ -326,7 +326,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   before hero keep the check-line read, #47). Simulator, 4-handed, 1,000 deals per seed: -8.4 ± 20.3, +26.7 ± 21.7,
   +11.2 ± 18.4, +36.9 ± 18.3 (pooled +16.6 ± 9.9). It makes the small multiway stabs a little better through the
   lookahead (fewer overcallers, so more heads-up river bluffs): the test's flop king-high stab went from 1.03 to 1.34
-  chips over checking (pot 12); on the spot the stabs still lose about 1.8 chips.
+  chips over checking (pot 12); on the spot the stabs still lose about 1.8 chips. The same rule in the lookahead's
+  multiway rounds on later streets (heads-up answers until someone calls, then the multiway read with odds x1.3;
+  the plans are built from `statsHU`, so every answer there is heads-up) lost -0.8 ± 18.7 and -53.5 ± 20.4 on two
+  seeds (pooled -27 ± 14), so later streets keep heads-up answers.
   Joint folds by size, exactly 2 opponents, first bets (both fold / product of heads-up rates): under 40% pot 9% / 5%
   (n 22), 40-75% 16% / 31% (n 19), 75-100% 38% / 48% (n 8), over 100% 60% / 49% (n 5); 3+ opponents at 75%+ 28% / 34%
   (n 18). So the product of heads-up rates holds overall (20% vs about 25% pooled); only mid sizes fall short, on
