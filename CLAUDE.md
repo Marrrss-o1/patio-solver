@@ -263,8 +263,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `input.reraiseAgg`; logs: 3 of 11 flop bettors and 4 of 22 overall re-raised, against about 8% facing a first bet).
   Found by the audit thread: blocking flop raises with under 50% showdown share when called was +29 ± 12 on an older
   main, about +13 ± 10 pooled on d8e866e. This fix instead: 4-handed +40.5 ± 22.9 and +14.9 ± 22.2 on two seeds of
-  1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). `input.reraiseModel: false` turns
-  it off.
+  1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). Re-raise rate 1x instead of 2x:
+  -20.8 ± 21.2 (4-handed, 1,000 deals). `input.reraiseModel: false` turns it off.
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
