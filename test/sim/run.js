@@ -29,6 +29,9 @@
 //   --workers N        worker threads (default: all cores)
 //   --block N          deals per block (default 100); results do not depend on the number of workers
 //   --iters N          solver Monte Carlo iterations (default 3000), --river-iters N (default 120)
+//   --budget NAME      play with the budget the advice is really computed with: phone (the phone and the
+//                      computer's quick read) or live (the computer's full solve, what Marwin plays); see
+//                      agents.js BUDGETS. --iters / --river-iters then override only those two settings.
 // Output
 //   --tag NAME         output file test/out/sim-<tag>.json (per-deal results), summary printed as JSON
 //   --quiet            no progress lines
@@ -122,7 +125,10 @@ function buildConfig(args) {
     aivat: args.aivat === 'off' ? null : { pending: args.aivat && args.aivat !== true ? args.aivat : 'call', pfSamples: +(args['pf-samples'] || 2000), future: args.future != null ? +args.future : 0.8, cap: args.cap != null ? +args.cap : 1.5 },
     warm: args.warm != null ? +args.warm : 300, block: +(args.block || 100),
     workers: Math.max(1, +(args.workers || os.cpus().length)),
-    iters: +(args.iters || 3000), riverIters: +(args['river-iters'] || 120),
+    // With --budget, iters / river-iters are only set when given (the budget has its own).
+    budget: args.budget ? String(args.budget) : null,
+    iters: args.budget ? (args.iters ? +args.iters : null) : +(args.iters || 3000),
+    riverIters: args.budget ? (args['river-iters'] ? +args['river-iters'] : null) : +(args['river-iters'] || 120),
     tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(),
     diag: !!args.diag, parts: !!args.parts,
   };
@@ -147,7 +153,7 @@ function lineup(cfg, block) {
 }
 
 function makeHero(variant, cfg) {
-  if (variant.agent === 'solver') return solverAgent({ src: variant.src, solver: variant.solver, iters: cfg.iters, riverIters: cfg.riverIters, blueprint: variant.bp });
+  if (variant.agent === 'solver') return solverAgent({ src: variant.src, solver: variant.solver, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: variant.bp });
   if (variant.agent === 'baseline') return bots.baseline();
   const m = /^bot:(.+)$/.exec(variant.agent);
   if (m) return bots.makeBot(m[1], cfg.profiles);
@@ -162,7 +168,7 @@ function playBlock(cfg, block) {
   const shared = specs.map((s) => (isSolver(s) ? null : bots.makeBot(s, cfg.profiles)));
   // Solver opponents keep reads (of hero too), so each variant gets its own copy; they watch the table from their seat.
   const botSets = cfg.variants.map(() => specs.map((s, j) => (isSolver(s)
-    ? solverAgent({ src: cfg.solverBots[s].src, iters: cfg.iters, riverIters: cfg.riverIters, blueprint: '' }) : shared[j])));
+    ? solverAgent({ src: cfg.solverBots[s].src, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: '' }) : shared[j])));
   const watchersOf = (set) => set.map((b, j) => (b.onEvent ? { seat: j + 1, onEvent: (ev, data, snapFn) => b.onEvent(ev, data, snapFn) } : null)).filter(Boolean);
   const heroes = cfg.variants.map((v) => makeHero(v, cfg));
   const stacks = new Array(n).fill(cfg.stack);
@@ -182,7 +188,7 @@ function playBlock(cfg, block) {
   const allWatchers = botSets.flatMap(watchersOf);
   const v0 = cfg.variants[0];
   const warmHero = allWatchers.length && v0.agent === 'solver'
-    ? solverAgent({ src: v0.src, solver: v0.solver, iters: cfg.iters, riverIters: cfg.riverIters, blueprint: v0.bp }) : bots.baseline();
+    ? solverAgent({ src: v0.src, solver: v0.solver, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: v0.bp }) : bots.baseline();
   const listeners = heroes.filter((h) => h.onEvent).concat(warmHero.onEvent ? [warmHero] : []);
   if (cfg.warm > 0 && (listeners.length || allWatchers.length)) {
     for (let w = 0; w < cfg.warm; w++) {
@@ -240,6 +246,7 @@ function summarize(cfg, results, sec) {
   const deals = results.flatMap((b) => b.deals).sort((a, b) => a.d - b.d);
   const sum = { players: cfg.n, bots: cfg.bots, deals: deals.length, handsPlayed: deals.length * (cfg.dup ? cfg.n : 1) * cfg.variants.length,
     stackBB: cfg.stack / cfg.bb, dup: cfg.dup, aivat: cfg.aivat ? cfg.aivat.pending : 'off', warm: cfg.warm, sec: Math.round(sec), variants: {} };
+  if (cfg.budget) sum.budget = cfg.budget;
   for (const v of cfg.variants) {
     const raw = meanSe(deals.map((x) => x[v.name].net)), adj = meanSe(deals.map((x) => x[v.name].adj));
     const st = results.map((b) => b.stats[cfg.variants.indexOf(v)]).filter(Boolean);
@@ -270,6 +277,8 @@ function blockKey(cfg) {
   const crypto = require('crypto');
   const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp]);
   const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
+  // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
+  if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {

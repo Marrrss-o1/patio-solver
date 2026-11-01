@@ -7,8 +7,24 @@ const zlib = require('zlib');
 const { keyed } = require('./game.js');
 const bots = require('./bots.js');
 
+// Solver budgets (`--budget`): what the advice Marwin plays is computed with, instead of the simulator's
+// cheap default (3,000 Monte Carlo iterations, river solver 120, no turn solver).
+//   phone: the phone, and the computer's quick read: the tracker's 24,000 (16,000 against 3+ opponents)
+//          Monte Carlo iterations and the engine's default solver budgets (river 250, preflop 300, plan 500).
+//   live:  the computer's full solve (extension/offscreen.js), what Marwin plays: the phone's budget plus the
+//          turn solver (heads-up and against the field) at 100 iterations. On the 292 logged decisions this picks
+//          the full solve's action on 44 of 44 turns (the simulator's default: 36-42%), 87-95% of flops (default
+//          53-79%; the full solve's 24x Monte Carlo is the rest), and preflop and river as the full solve does
+//          (98-100%: the full solve's bigger preflop and river budgets change no decisions). About 1.5 s per turn
+//          decision, so a run takes about 3x as long as with the default.
+const BUDGETS = {
+  phone: {},
+  live: { turnSolver: true, turnIterations: 100 },
+};
+
 // opts: { src: directory holding engine.js and tracker.js (default: this checkout's src/),
-//         solver: extra analyzeSync input (e.g. { preflopSolver: false }), iters, riverIters, tableStyle, db }
+//         solver: extra analyzeSync input (e.g. { preflopSolver: false }), iters, riverIters, budget, tableStyle, db }
+// Without a budget, iters and riverIters default to 3,000 and 120; with one they override the budget's.
 function solverAgent(opts = {}) {
   const src = opts.src || path.join(__dirname, '..', '..', 'src');
   const E = require(path.join(src, 'engine.js'));
@@ -35,6 +51,10 @@ function solverAgent(opts = {}) {
   const fallback = bots.baseline();
   const stats = { decisions: 0, errors: 0, ms: 0, solved: {} };
   const extra = Object.assign({}, opts.solver || {});
+  if (opts.budget && !BUDGETS[opts.budget]) throw new Error('unknown budget ' + opts.budget + ' (' + Object.keys(BUDGETS).join(', ') + ')');
+  const budget = opts.budget
+    ? Object.assign({}, BUDGETS[opts.budget], opts.iters ? { iterations: opts.iters } : {}, opts.riverIters ? { riverIterations: opts.riverIters } : {})
+    : { iterations: opts.iters || 3000, riverIterations: opts.riverIters || 120 };
   const agent = {
     E, T, tracker, stats,
     onEvent(ev, data, snapFn) { tracker.handle(ev, data, snapFn()); },
@@ -42,8 +62,7 @@ function solverAgent(opts = {}) {
       const b = tracker.solverInput(style);
       if (b.error) { stats.errors++; return fallback.act(v); }
       const t0 = Date.now();
-      const input = Object.assign({}, b.input, {
-        iterations: opts.iters || 3000, riverIterations: opts.riverIters || 120,
+      const input = Object.assign({}, b.input, budget, {
         seed: Math.floor(keyed(v.rk, v.nAct, 4242) * 4294967296) >>> 0,
       }, extra);
       if (bpObj) input.blueprintObj = bpObj;
@@ -72,4 +91,4 @@ function envSolverOpts(env = process.env) {
   return o;
 }
 
-module.exports = { solverAgent, envSolverOpts };
+module.exports = { solverAgent, envSolverOpts, BUDGETS };
