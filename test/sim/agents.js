@@ -77,9 +77,11 @@ function solverAgent(opts = {}) {
       if (best.kind === 'fold') return { t: 'fold' };
       if (best.kind === 'check') return { t: 'check' };
       if (best.kind === 'call') return { t: 'call' };
-      // Measurement only (opts _shrink, _shrinkEq): play the advice but bet/raise only a share of the advised
-      // size with strong hands, the way the logs show hero under-sizing value (18 of 43 bets/raises under 0.7x).
-      if (extra._shrink && res.equity && res.equity.share >= (extra._shrinkEq || 0.6) && best.amount > v.toCall) {
+      // Measurement only (opts _shrink, _shrinkEq, _shrinkP): play the advice but bet/raise only a share of the
+      // advised size (with equity >= _shrinkEq, on a share _shrinkP of bets), the way the 1 Nov log shows hero
+      // under-sizing (18 of 43 bets/raises under 0.7x the advice, median about 0.4x).
+      if (extra._shrink && best.amount > v.toCall && (extra._shrinkEq == null || (res.equity && res.equity.share >= extra._shrinkEq))
+        && (extra._shrinkP == null || keyed(v.rk, v.nAct, 9191) < extra._shrinkP)) {
         return { t: 'raise', to: v.myBet + v.toCall + (best.amount - v.toCall) * extra._shrink };
       }
       return { t: 'raise', to: v.myBet + best.amount };
