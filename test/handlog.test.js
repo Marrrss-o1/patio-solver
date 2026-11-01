@@ -257,10 +257,15 @@ test('import: reads rebuilt from the hand log match the reads built at the table
   const live = new T({ players: {} });
   const setup = (t) => { t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical'); };
   setup(live);
-  const feed = (t, list) => { for (const m of list) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); } };
+  // A table clock that moves 700 ms per event, so think times are not 0 and do not depend on how fast the test runs.
+  let clock = Date.UTC(2026, 10, 1, 14);
+  live.clock = () => clock;
+  const feed = (t, list) => { for (const m of list) { clock += 700; if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); } };
   feed(live, sd);
   feed(live, sd.filter((m) => m.ev !== 'hook:attached')); // the hand again: decay and a second hand
   live.finishHand();
+  const tts = Object.values(live.db.players).flatMap((p) => Object.values(p.tally.tt || {}).map((x) => x.sum || 0));
+  assert.ok(tts.some((x) => x > 0), 'think times recorded');
   const hands = JSON.parse(JSON.stringify(live.db.history));
   assert.ok(hands.length === 2 && hands.every((e) => e.raw && e.raw.length && e.raw.find((r) => r.s).s[0].length === 6), 'raw snapshots carry the account id');
   const same = (a, b) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)));

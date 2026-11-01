@@ -214,6 +214,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   advice bluffed into players who could only chop (Marwin's log, 2d7h on Jd Qc Tc 9h 8c).
 - Counts decay 0.3% per hand a player is dealt into (`DECAY` = 0.997 in tracker.js, about 330 hands of memory; it
   was 1%, which forgot everything after ~100 hands), so they are floats. Round before display. Last 80 shows kept.
+  On the 1 Nov session faster decay predicts facing-bet answers better (0.9: 0.861 -> 0.840) but preflop actions
+  and shown hands worse; nearly all of that gain comes through the table size step (below), which the simulator
+  needs, so DECAY stays.
 - Preflop ranges are soft (`topClassWeights` uses a sigmoid edge, plus a small floor for every hand). Hard top-X%
   cut-offs gave zero weight to hands people really play (KQo raises at 8% PFR), which made reads predict shown
   hands worse than a random guess in the simulator and led to bad turn/river calls.
@@ -242,7 +245,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   postflop raises of pot or more were top pair or better, and a 6.7x-pot flop check-raise shove (Aura Qd7d on Qs 7h 8s)
   was read as 31% no-pair hands. On that spot it only moves hero's equity 0.69 -> 0.67 (still a call). Not judged on
   the simulator: the bots pick postflop raise sizes independently of their hand (`raiseShove`), so they would score it
-  against an assumption the logs contradict. Revisit with more shown big raises.
+  against an assumption the logs contradict. On the reads benchmark (187 hands) it made shown hands after raises of
+  pot or more fit worse (x1.25 -> x1.13, 6 shows; all shows x1.63 -> x1.62), so it stays off. Revisit with more
+  shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
@@ -261,6 +266,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shown-hand likelihood). `--engine=a,b` compares engines, `--from=<ISO>` scores only later hands. v1.4.0 vs the
   rebuild on three logs: actions 0.831 -> 0.787, seen 0-9 0.958 -> 0.879, open responses 1.31 -> 1.00, shown hands
   x0.73 -> x1.72 (on the 100 hands the priors never saw: 0.809 -> 0.776, x0.92 -> x1.45). Simulator: about +8 ± 12.
+  Held-out on the 1 Nov session (59 hands, v1.7.9, read after the older logs): all actions 0.879 (v1.4.0) -> 0.851,
+  facing bets 0.899 -> 0.861, shown hands x0.67 -> x1.41 (#60 alone x1.31 -> x1.41). Folds against hero's bets are
+  on target there (residual +0.02 ± 0.31 log-odds heads-up). Refitting READ_PRIORS.home on all four logs moves
+  nothing out of sample (vsOpen fitted on one session scores worse on the other than the hand-set prior, both
+  ways: 1.026 -> 1.084, 1.011 -> 1.036); the full refit also made top set check 3-way (pfr blinds .258 -> .291).
+  Not refitted. POOL_K 60/240, SIZE_K 32-512, SHOW_VALUE_K 15/60, fold tau 0.1-0.35: all within 0.003.
+  Think time: slower checks show stronger hands (r -0.19 ± 0.09 per show, both sessions) but check speed does
+  not predict folding to a bet afterwards (slope -0.17 ± 0.27, n 165), so it is not used.
 - `foldAfterAgg` (tally `aggVsN`/`aggVsFold`): folding to a bet after having bet or raised earlier in the hand.
   When an opponent has an aggressive line (`aggroFold` in analyzeSync), plans and the river, turn and flop solvers
   scale fold rates by foldAfterAgg / foldToBet (about x0.7). Without it the solver floated turn bets with air
@@ -300,7 +313,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (`handLog.addHands`, newest 1,000 kept) and rebuilds the reads by replaying every stored hand with raw events
   (`PatioTracker.rebuildReads`, about 15 ms a hand). Older logs have names only: a name maps to the account id its
   chat lines carried that day, else to the id the current reads use for that name, else "name:<name>". A current
-  read with clearly more hands than the rebuilt one (history beyond the stored log) is kept.
+  read with clearly more hands than the rebuilt one (history beyond the stored log) is kept. The tracker takes its
+  time from `now()` (`tracker.clock` if set); the rebuild replays each hand on its recorded times, so think times
+  (`tt`, shows' `ms`) come out as played (they were about 0 in v1.8.1's rebuild).
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
@@ -342,6 +357,20 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   against 0.75: 4-handed +22.6 ± 20.6 (1,000 deals), heads-up +11.7 ± 18.6 (1,500 deals). This is the cause behind
   the audit thread's flop-raise gate (pooled about +15 ± 9 on 3+ handed tables, -17 ± 13 heads-up), which is not merged:
   on top of 0.55 a multiway-only gate lost -18.6 ± 14.4.
+- Friends' big bets are not stronger (`READ_PRIORS.home.bigBetMedium` {size 0.9, floor 1}; `input.bigBetMedium:
+  false` turns it off): on bets of 0.9 pot or more every hand of medium strength or better (hs >= 0.35) bets at
+  least at the player's bet rate (the `MEDIUM_BET` floor elsewhere is 0.3 of it), so a pot-size bet is no longer read
+  as the top of the range plus bluffs. Logs (31 Oct + 1 Nov, 87 shown first bets after the flop): mean made-hand
+  percentile 0.84 under 0.45 pot, 0.78 at 0.45-0.85, 0.70 at 0.85-1.2, 0.61 above, and 10 of 23 shown bets of
+  0.85 pot or more were medium pairs. Shown hands after a pot-size or bigger bet x1.08 -> x1.26 of a random guess
+  (22), all shows x1.58 -> x1.63 (both sessions up), action log-loss unchanged. Hero's own range (solid) keeps the
+  old polarized rule. Less noise, a lower value share or a wider bet rate on big bets did not fit (the shown big
+  bets were mostly medium pairs, not the draws and air the bluff slot picks). It changes 2 of 416 logged hero
+  decisions (a pot-size flop bet called with bottom pair, a bigger preflop raise). The simulator's bots bet big
+  with weaker hands only with `--bot-params '{"sizeTell":-0.6}'` (test/sim/README.md); at the default they are flat.
+  Simulator, on vs off, 1,000 deals each: with sizeTell -0.6, 4-handed live +14.5 ± 13.0 (cloud) and -1.0 ± 13.4
+  (Mac), phone -7.0 ± 15.6, heads-up live +20.1 ± 23.6 (Mac); default bots 4-handed live +12.6 ± 11.1. Pooled about
+  +7 ± 6: neutral to slightly positive, as expected from a change that moves few decisions (v1.8.2).
 - Bet sizes are capped at 1.5x pot (flop to river) and 1x pot in the river solver. 2x overbets lost real money in
   the owner's home game: friends call big bets far more than the old fold curve assumed. Against a raise, opponents
   continue only with the top of their range (`vsRaise` in `riverSolve`, `raiseCallCut` in `makePlan`).
@@ -365,7 +394,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   share divides by the fold rate raiseFreq was built from (multiway raises predicted 12%, real 9%, now 10%). Sim
   +48.3 ± 14.6 vs v1.7.2 (2,000 deals 4-handed). Tried and dropped: linking families (bet effect -> raise prior,
   VPIP -> fold), more shrinkage on vsOpen / 3-bet / foldAfterAgg (all under 0.003 log-loss); EV - 1 SE size
-  tie-break -6.2 ± 12.7.
+  tie-break -6.2 ± 12.7. Dropping the table step predicts unseen hands better (facing-bet log-loss on the 1 Nov
+  session 0.861 -> 0.848; the 31 Oct and 1 Nov sessions read after the older logs 0.858 -> 0.851; bots' hands
+  0.829 -> 0.831), but lost -28.5 ± 15.9 at the live budget (1,000 deals 4-handed, mostly button, strong hands), so
+  it stays: the bots answer each size the same way all night and answer hero like each other, the friends don't
+  (heads-up they fold less to each other's bets than the read at every size, about 0.05-0.10). A level-neutral
+  table step (shape only) scored no better (0.863).
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
