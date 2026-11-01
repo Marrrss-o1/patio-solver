@@ -356,6 +356,49 @@ test('reads: predictAction gives a distribution, and the tracker scores reads on
   assert.ok(T.predSummary(t.db.players.V.tally).n >= 4);
 });
 
+test('reads: after checking a street they fold more and check-raise less; facing a lead they raise more', () => {
+  const base = E.computeStats(tallyWith({}), 'typical');
+  const checked = E.computeStats(tallyWith({}), 'typical', null, { street: 4, line: 'checked' });
+  const unacted = E.computeStats(tallyWith({}), 'typical', null, { street: 4, line: 'unacted' });
+  assert.ok(checked.byStreet[4].foldToBet > base.byStreet[4].foldToBet + 0.02);
+  assert.ok(checked.byStreet[4].raiseFreq < 0.7 * base.byStreet[4].raiseFreq);
+  assert.ok(unacted.byStreet[4].raiseFreq > 1.2 * base.byStreet[4].raiseFreq);
+  assert.ok(Math.abs(unacted.byStreet[4].foldToBet - base.byStreet[4].foldToBet) < 1e-9);
+  // Only that street moves.
+  for (const n of [3, 5]) assert.ok(Math.abs(checked.byStreet[n].foldToBet - base.byStreet[n].foldToBet) < 1e-9 && Math.abs(checked.byStreet[n].raiseFreq - base.byStreet[n].raiseFreq) < 1e-9);
+  assert.ok(E.foldAtSize(checked, 0.5, 4) > E.foldAtSize(base, 0.5, 4));
+  // predictAction reads the same thing from d.checked.
+  const st = E.computeStats({}, 'typical');
+  const d = { kind: 'face', n: 4, frac: 0.5 };
+  const p0 = E.predictAction(st, d), pc = E.predictAction(st, Object.assign({ checked: true }, d)), pu = E.predictAction(st, Object.assign({ checked: false }, d));
+  assert.ok(pc.fold > p0.fold && pc.raise < p0.raise && pu.raise > p0.raise && Math.abs(pu.fold - p0.fold) < 1e-12);
+  // The tracker tells the predictor which of the two it was.
+  const mk = () => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' }] });
+  const t = new T({ players: {} });
+  const seen = [];
+  t.predictor = (tally, dd) => { if (dd.kind === 'face') seen.push([dd.n, dd.checked]); return [{ fold: 0.5, call: 0.4, raise: 0.1 }, { fold: 0.5, call: 0.4, raise: 0.1 }]; };
+  const snap = mk();
+  // Heads-up the dealer (s1, Hero) posts the small blind and acts last after the flop.
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'call', makeBetValue: 1 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['game:stage_began', { stageType: 'flop' }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 2 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'call', makeBetValue: 2 }],
+    ['game:stage_began', { stageType: 'turn' }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'check', makeBetValue: 0 }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'check', makeBetValue: 0 }],
+    ['game:stage_began', { stageType: 'river' }],
+  ]) t.handle(ev, data, snap);
+  assert.deepStrictEqual(seen, [[3, true]], JSON.stringify(seen));
+});
+
 test('reads: vsOpen counts the response to a single open by its size', () => {
   const mk = () => ({ tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
     { id: 1, authUserId: 'H', name: 'Hero', stack: 200, posType: 's1', playState: 'playing' },
@@ -1112,6 +1155,27 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
   assert.ok(ev(qq, 'bet') >= 0.95 * qq.ranked[0].ev, 'top set bet EV ' + ev(qq, 'bet') + ' vs best ' + qq.ranked[0].ev);
 });
 
+test('multiway stabs from the logs: a stab alone loses, and the lookahead adds only a small edge', () => {
+  // Four real spots (names removed; 2026-10-31 log hands 35, 101, 112, 125): air checked to hero in
+  // a pot with two or three friends. Everyone folded to such bets only 14-35% of the time in the logs.
+  // The advice bets small in all four. On its own the bet loses about 1.8 chips: its edge over
+  // checking is a river bluff after a call, which the logs support (players who called a flop or turn
+  // bet in a multiway pot folded to a river bet 70-80% of the time, 25 spots) and which the river
+  // advice makes. Before #35 the lookahead checked all four. If a reads change makes these stabs win
+  // on the spot, or the lookahead's edge grows past a small one, this fails.
+  const spots = require('./fixtures/real-multiway-stabs.json');
+  for (const [name, x] of Object.entries(spots)) {
+    const run = (extra) => E.analyzeSync(Object.assign({}, x, { mix: false, seed: 1, iterations: 6000 }, extra));
+    const gap = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet' || s.kind === 'allin').map((s) => s.ev)) - r.ranked.find((s) => s.kind === 'check').ev;
+    const now = run({ lookahead: false }), later = run({});
+    assert.ok(gap(now) < -1, `${name}: without the lookahead the best stab is ${gap(now).toFixed(2)} chips over checking`);
+    assert.ok(gap(later) < 1.2, `${name}: with the lookahead the best stab is ${gap(later).toFixed(2)} chips over checking`);
+    for (const s of later.ranked.filter((b) => b.kind === 'bet' && b.amount <= 0.5 * x.pot)) {
+      assert.ok(s.foldPct < 0.35, `${name}: everyone folds ${s.foldPct} to ${s.amount} into ${x.pot}`);
+    }
+  }
+});
+
 test('tracker passes chips committed and behind for side pots', () => {
   const x = replay(three).turns[1];
   assert.strictEqual(x.input.heroCommitted, 30);
@@ -1365,6 +1429,40 @@ test('re-raises after the flop: strong hands call them, air folds, and preflop h
   const pre = E.analyzeSync({ hero: C('Ah Kd'), board: [], pot: 3, toCall: 1, stack: 298, bigBlind: 2, inPosition: true, mix: false, seed: 3,
     iterations: 2000, heroActions: {}, opponents: [{ name: 'M', tally: RAISER, actions: { pre: 'pending' }, stack: 298 }] });
   assert.ok(pre.ranked.every((x) => !x.rrN), 'preflop re-raises were played out');
+});
+
+// The computer's worker pool (offscreen.js): each worker returns its Monte Carlo tallies
+// (partial), and one final analysis adds them up (merge). A tally the merge leaves out (the
+// re-raise play-out's rrN/rrCall were new in #40) would change the advice on the computer only.
+test('worker pool: merging one worker\'s tallies gives that worker\'s own result', () => {
+  const stabs = require('./fixtures/real-multiway-stabs.json');
+  const spots = {
+    'flop bet into a re-raiser': flopSpot('Ah Kd', { iterations: 2000, opponents: [{ name: 'V', tally: RAISER, actions: { pre: 'call', flop: 'check' } }] }),
+    'flop facing a bet': flopSpot('Qh Qd', { iterations: 2000, toCall: 60, opponents: [{ name: 'V', tally: RAISER, actions: { pre: 'raise', flop: 'bet' }, sizes: { flop: 0.6 } }] }),
+    'flop without lookahead': flopSpot('9h 8h', { iterations: 2000, lookahead: false }),
+    'river solver': riverSpot('As Kc'),
+    'preflop solver': { hero: C('Ah Qs'), board: [], pot: 1.5, toCall: 0.5, stack: 99.5, bigBlind: 1, inPosition: true, iterations: 2000, preflopIterations: 200,
+      opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }], heroActions: { pre: 'pending' } },
+    'multiway flop from the logs': Object.assign({}, stabs.flopKingHighBoard, { iterations: 2000 }),
+  };
+  for (const [name, x] of Object.entries(spots)) {
+    const input = Object.assign({}, x, { mix: false, seed: 7 });
+    const own = E.analyzeSync(input);
+    const part = E.analyzeSync(Object.assign({}, input, { partial: true }));
+    const merged = E.analyzeSync(Object.assign({}, input, { merge: [part.partial], solvedMerge: [part.solved] }));
+    assert.strictEqual(merged.ranked.length, own.ranked.length, name);
+    for (const sc of own.ranked) {
+      const m = merged.ranked.find((y) => y.kind === sc.kind && Math.abs(y.amount - sc.amount) < 1e-9);
+      assert.ok(m, `${name}: ${sc.kind} ${sc.amount} is missing after the merge`);
+      for (const f of ['ev', 'evRead', 'evWorst', 'se', 'n', 'foldPct', 'equityWhenCalled', 'reraisedPct', 'rrN', 'callsReraise']) {
+        assert.ok(sc[f] === m[f] || Math.abs(sc[f] - m[f]) < 1e-9, `${name}: ${sc.kind} ${sc.amount} ${f} is ${sc[f]} alone, ${m[f]} merged`);
+      }
+    }
+    assert.deepStrictEqual([merged.best.kind, merged.best.amount], [own.best.kind, own.best.amount], name);
+  }
+  // The spots above really exercise the re-raise play-out and both solvers.
+  assert.ok(E.analyzeSync(Object.assign({}, spots['flop facing a bet'], { mix: false, seed: 7 })).ranked.some((s) => s.rrN > 0));
+  assert.strictEqual(E.analyzeSync(Object.assign({}, spots['river solver'], { mix: false, seed: 7 })).solver.kind, 'river');
 });
 
 test('fuzz: random hands through the tracker match the table (chips, price, stacks, seats) and get legal advice', () => {
