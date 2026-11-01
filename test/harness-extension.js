@@ -27,6 +27,11 @@ const fs = require('fs');
       console.log(await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; }));
     }
   }
+  // IMPORT=<export.json> loads a hand-log export through the panel's Import button afterwards.
+  if (process.env.IMPORT) {
+    await page.locator('#patio-solver-host input[type=file]').setInputFiles(process.env.IMPORT.split(','));
+    await page.waitForFunction(() => /Imported|Import failed/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 120000 });
+  }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'ext_end.png') });
   const panel = await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; });

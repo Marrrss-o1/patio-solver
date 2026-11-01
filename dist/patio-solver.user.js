@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.0
+// @version      1.8.1
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -7005,7 +7005,8 @@ ENGINE();
       const t0 = isNewHand ? this.rawStart : h.t0;
       const rec = { t: Date.now() - (t0 || Date.now()), ev, d };
       if (snap && (isNewHand || ev === 'game:player_turn_started' || ev === 'game:game_ended' || ev === 'game:stage_began')) {
-        rec.s = (snap.players || []).map((x) => [x.id, x.name, x.stack, x.posType, x.playState]);
+        // The account id last, so an imported log rebuilds reads under the same keys (rebuildReads).
+        rec.s = (snap.players || []).map((x) => [x.id, x.name, x.stack, x.posType, x.playState, x.authUserId]);
         if (isNewHand) rec.bb = snap.bigBlind;
       }
       // Past the cap, keep only the events the tracker itself uses, so chatty extras can't push them out.
@@ -7316,6 +7317,56 @@ ENGINE();
     if (!p || !(p.n >= 1)) return null;
     return { n: Math.round(p.n), gain: Math.round(((p.pop - p.read) / p.n) * 1000) / 1000, surprise: Math.round((p.read / p.n) * 1000) / 1000 };
   }
+  // Reads rebuilt from hand-log entries (an export, or the stored log plus an import): every hand
+  // with raw events is replayed, oldest first, through a fresh tracker, exactly as at the table.
+  // Raw snapshots from v1.8.1 on carry each player's account id; older ones only names, so a name
+  // maps to the id its chat lines carried that day, else to the id `known` gives it (the reads
+  // the page already has), else to "name:<name>". `setup(tracker)` sets the scorer, predictor and
+  // fit version like the overlay's. Async: it yields every `yieldEvery` hands so a page stays usable.
+  // -> { db: { players }, replayed, skipped (no raw events) }
+  async function rebuildReads(entries, opts) {
+    const o = opts || {};
+    const day = (e) => new Date(e.t || 0).toISOString().slice(0, 10);
+    const votes = {};
+    for (const e of entries) for (const r of e.raw || []) {
+      if (r.ev === 'chat_message' && r.d && r.d.username && r.d.userId && r.d.userId !== -1) {
+        const k = day(e) + '|' + r.d.username;
+        const v = votes[k] || (votes[k] = {});
+        v[r.d.userId] = (v[r.d.userId] || 0) + 1;
+      }
+    }
+    const voted = (e, name) => {
+      const v = votes[day(e) + '|' + name];
+      return v ? Object.entries(v).sort((a, b) => b[1] - a[1])[0][0] : null;
+    };
+    const known = o.known || {};
+    const idOf = (e, name, given) => given || voted(e, name) || known[name] || 'name:' + name;
+    const t = new PatioTracker({ players: {} });
+    t.rawKeep = 0;
+    if (o.setup) o.setup(t);
+    const list = entries.filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
+    let i = 0;
+    for (const e of list) {
+      const heroP = (e.players || []).find((p) => p.hero);
+      const heroName = heroP ? heroP.name : null;
+      let snap = null;
+      for (const r of e.raw) {
+        if (r.s) {
+          const players = r.s.map(([id, name, stack, posType, playState, auth]) => ({ id, name, stack, posType, playState, authUserId: idOf(e, name, auth) }));
+          const me = heroName && players.find((x) => x.name === heroName);
+          snap = { tableType: 'private', heroAuthId: me ? me.authUserId : o.heroAuth || null, bigBlind: r.bb || (snap && snap.bigBlind) || e.bigBlind, players };
+        }
+        try { t.handle(r.ev, r.d, r.s ? snap : null); } catch (err) { /* a broken event skips itself */ }
+      }
+      if (t.hand && !t.hand.finished) t.finishHand();
+      if (o.yieldEvery && ++i % o.yieldEvery === 0) {
+        if (o.onProgress) o.onProgress(i, list.length);
+        await new Promise((res) => setTimeout(res, 0));
+      }
+    }
+    return { db: { players: t.db.players }, replayed: list.length, skipped: entries.length - list.length };
+  }
+  PatioTracker.rebuildReads = rebuildReads;
   PatioTracker.predSummary = predSummary;
   PatioTracker.blankTally = blankTally;
   PatioTracker.DECAY = DECAY;

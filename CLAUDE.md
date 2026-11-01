@@ -288,10 +288,19 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   Players already in the pot (limpers, raisers) get a higher floor. Hand log players carry `fit` and `accuracy`
   (`accuracySummary` in tracker.js); advice `reads` carry trust, accuracy, strengthBias and callBig.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
-  (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state] }`), for the newest 100 hands (60 on the
+  (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
+  v1.8.1), for the newest 100 hands (60 on the
   userscript, whose localStorage is shared with the game; `save` drops raw first when full). Both hooks forward all
   `game:`/`player:game:`/`admin:game:` events and `game_log` chat for this; the tracker ignores unknown ones.
   Replay a raw hand by feeding `d` back through `handle`.
+- Import (v1.8.1, panel button "Import"): removing the extension in Chrome deletes its storage, so a fresh install
+  starts with no reads and no hand log (1 Nov: Marwin deletes and re-adds it for every version, so the reads started
+  from zero although Jagger and PermPetch were 31 Oct's phuketdemon and MaPokerrk). Updating in place (same folder,
+  reload arrow on chrome://extensions) keeps everything. Import adds the hands of hand-log exports to the stored log
+  (`handLog.addHands`, newest 1,000 kept) and rebuilds the reads by replaying every stored hand with raw events
+  (`PatioTracker.rebuildReads`, about 15 ms a hand). Older logs have names only: a name maps to the account id its
+  chat lines carried that day, else to the id the current reads use for that name, else "name:<name>". A current
+  read with clearly more hands than the rebuilt one (history beyond the stored log) is kept.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
