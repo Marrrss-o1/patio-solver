@@ -1812,6 +1812,9 @@
   // Fold odds of players still to act once someone has called (see sc.oppAfter).
   const OVERCALL_FOLD = 1.3;
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
+  // Bit 9 (flop) or 10 (turn) on top of LINE_CALL: they checked that street, then called hero's bet.
+  const CC_SHIFT = 9;
+  const ccBit = (s) => 1 << (CC_SHIFT + s - 3);
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
   const VARIANTS = [{}, { foldShift: 0.15, betShift: -0.08 }, { foldShift: -0.15 }, { betShift: 0.15, valueShift: 0.15, raiseShift: 0.1 }];
@@ -1911,6 +1914,7 @@
           valueCut: c < V ? x[c + Math.floor(0.55 * (V - 1 - c))] : vCut,
           eqVsCall: (h) => (c < V ? clamp((lb(h) - c) / (V - c), 0, 1) : 1),
         };
+        chk.q = qc;
         return chk;
       };
       // Raises: value raises from the top of their range, plus a few bluff-raises.
@@ -1955,16 +1959,18 @@
       for (let j = 0; j < N; j++) u[j] = urng();
     }
     const below = (s) => (1 << (2 * (s - 3))) - 1;
-    // Keyed s * 512 + m (below 3072); arrays filled up front so lookups stay on the fast path.
-    const memo = new Array(3072).fill(undefined), sets = new Array(3072).fill(undefined);
+    // Keyed s * 2048 + m (below 12288); arrays filled up front so lookups stay on the fast path.
+    const memo = new Array(12288).fill(undefined), sets = new Array(12288).fill(undefined);
+    const ccBelow = (s) => (s >= 4 ? ccBit(3) : 0) | (s >= 5 ? ccBit(4) : 0);
     const canon = (s, m) => {
       const line = m & below(s);
-      return line && ((line >> (2 * (street - 3))) & 3) === LINE_CALL ? line | (m & ~15) : line;
+      if (!line) return 0;
+      return (((line >> (2 * (street - 3))) & 3) === LINE_CALL ? line | (m & 0x1f0) : line) | (m & ccBelow(s));
     };
     const survivors = (s, m) => {
       m = canon(s, m);
       if (!m) return null;
-      const key = s * 512 + m;
+      const key = s * 2048 + m;
       if (sets[key] !== undefined) return sets[key];
       let b = 4;
       while (b >= 3 && !((m >> (2 * (b - 3))) & 3)) b--;
@@ -1974,10 +1980,14 @@
       // Callers: the share that continued, widened by LINE_SOFT toward the whole range, because
       // players who called once fold less to the next bet than their read (logs: 33% on the turn
       // after calling the flop, read about 45%; whole-range quantiles gave 14%).
-      const share = b === street && m >> 4 ? ((m >> 4) - 1) / 20 : 1 - t.foldHero;
-      const cut = t.q(1 - (share + LINE_SOFT * (1 - share))), xb = xs[b];
+      // A check-call (ccBit): the hands that checked and then called, from the checking range (checked()).
+      const cc = kind === LINE_CALL && (m >> (CC_SHIFT + b - 3)) & 1 ? t.checked() : null;
+      const lc = (m >> 4) & 31;
+      const share = cc ? 1 - cc.foldHero : b === street && lc ? (lc - 1) / 20 : 1 - t.foldHero;
+      const cut = (cc || t).q(1 - (share + LINE_SOFT * (1 - share))), xb = xs[b];
       const keep = (j) => {
         const x = xb[j];
+        if (cc) return x >= cut && !(x >= t.vCut || (x < t.airCut && u[j] < t.pBluff));
         if (kind === LINE_CALL) return x >= cut;
         const bets = x >= t.vCut || (x < t.airCut && u[j] < t.pBluff);
         return kind === LINE_BET ? bets : !bets;
@@ -1990,7 +2000,7 @@
     plan.at = (s, m) => {
       m = canon(s, m);
       if (!m || !xs[s]) return plan[s];
-      const key = s * 512 + m;
+      const key = s * 2048 + m;
       let p = memo[key];
       if (!p) {
         const idx = survivors(s, m);
@@ -5325,6 +5335,8 @@
     // `m`: streets on which they already continued against a bet in this lookahead (makePlan).
     // Opponents who checked a later street answer bets from their checking range (makePlan's checked()).
     const laChecked = input.lookaheadChecked !== false;
+    // A check-call on a later street narrows their next street's range from the checking range (makePlan ccBit).
+    const laCheckCall = laChecked && input.lookaheadCheckCall !== false;
     function playOut(i, P, heroIn, share, rng, startCur, v, from, room, m) {
       const plan = planFor(i, v);
       const oc = oppCombo[i];
@@ -5372,7 +5384,7 @@
           return 'called';
         };
         // `line`: what the opponent did on this street, for their thresholds on the next ones.
-        let r, line;
+        let r, line, checkCalled = false;
         if (s === street) {
           // Hero checked; the opponent acts behind.
           if (oppBets()) { line = LINE_BET; r = heroFaces(); } else line = LINE_CHECK;
@@ -5387,6 +5399,7 @@
           } else {
             r = heroBets(true);
             line = r === 'called' ? (raisedNow ? LINE_BET : LINE_CALL) : LINE_CHECK;
+            checkCalled = laCheckCall && line === LINE_CALL;
             if (r === 'won') return P - heroIn - extra;
             if (r === 'lost') return -heroIn - extra;
           }
@@ -5402,7 +5415,7 @@
             if (r === 'won') return P - heroIn - extra;
           } else line = LINE_CHECK;
         }
-        if (s < 5) m = lineAt(m, s, line);
+        if (s < 5) m = lineAt(m, s, line) | (checkCalled ? ccBit(s) : 0);
       }
       return share * P - heroIn - extra;
     }
@@ -5530,7 +5543,8 @@
           for (const i of list) {
             if (!multiAlive[i]) continue;
             const st = multiState[i], line = st === 1 || st === 3 ? LINE_BET : st === 2 ? LINE_CALL : multiLine[i];
-            if (line) multiMask[i] = lineAt(multiMask[i], s, line);
+            const cc = laCheckCall && st === 2 && s !== street && multiLine[i] === LINE_CHECK;
+            if (line) multiMask[i] = lineAt(multiMask[i], s, line) | (cc ? ccBit(s) : 0);
           }
         }
       }
