@@ -22,6 +22,7 @@ src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker
 extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
+  handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
                          share with `partial: true` (and, heads-up on the turn, its own turn solve for `turnMs`:
@@ -62,6 +63,9 @@ npm run test:mobile      # runs the userscript on an iPhone-sized fake table, re
 node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals, AIVAT luck correction, paired A/B
                          # (--a-opts/--b-opts JSON or --a-ref/--b-ref), bots fitted to Marwin's friends. Read
                          # test/sim/README.md. Read aivatBB100 ± aivatSE100 (diff.* for A/B).
+                         # --budget live (the computer's full solve: phone budget + turn solver at 100 iterations)
+                         # and --budget phone: judge every solver change at live, and run both for any change
+                         # touching flops or turns. The default (3,000 Monte Carlo, 120 river) is for quick checks.
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/reads-bench.js <logs>  # how well reads predict actions and shown hands (see Known gaps)
 node test/fit-priors.js <logs>   # refits the home-game read prior (READ_PRIORS.home) from hand-log exports
@@ -228,7 +232,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   foldAfterAgg / foldToBet. Without it the solver floated turn bets with air planning river bluffs.
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
-- `db.history` keeps the last 150 hands for the "Hand log" export. Each entry has `log` (every action in order with
+- `db.history` keeps the last 150 hands in the page; the extension stores each hand under its own key
+  (extension/handlog.js, unlimitedStorage), keeps the newest 1,000 with raw events, and the "Hand log" export has all
+  of them (#59). Each entry has `log` (every action in order with
   `amt` added, `to`, `pot` before it, `facing`, `stack` before it, `potPct` for bets/raises, blinds as `sb`/`bb`),
   each player's starting `stack`, `advice` (pot, price, equity, hand, top 5 options with EVs, reads, hero's actual
   action in `did` and `followed`), and `net`/`heroNet`/`heroNetBB`, filled in from the next hand's starting stacks.
@@ -366,6 +372,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Monte Carlo budgets (speed thread): against a 384,000-iteration reference on 104 logged postflop spots, 24,000
   (phone) picks the same 97% of the time (0.001 bb per decision), 48,000 97%, 96,000 100%. No build needs a bigger
   budget. The sim's --iters 3000 picks differ more often, but over 2,000 deals it plays as well (+1.4 ± 14.6).
+  The sim's whole default budget (3,000 Monte Carlo and 120 river iterations, no turn solver) is another matter
+  (audit thread, #55): it matched the full solve on only 53-79% of flops and 36-42% of turns, and at the real budget
+  the solver scored +46 ± 21 bb/100 over the default (4-handed, 1,000 deals); the turn solver at the real budget
+  scored -6 ± 21. Results before #55 were measured at the default and may not hold at `--budget live`.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
