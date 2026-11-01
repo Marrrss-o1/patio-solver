@@ -978,6 +978,22 @@ test('multiway: the field folds only when every player folds', () => {
   assert.ok(f.betFreq > Math.max(a.betFreq, b.betFreq));
 });
 
+test('multiway: until someone stays, everyone folds as often as each heads-up read folds, multiplied', () => {
+  // #39: a bet into two players is answered with each one's heads-up read until one of them stays,
+  // so the chance that both fold is the product of their heads-up fold rates (same pot, same bet).
+  const T2 = { bet: 10, check: 20, call: 14, raise: 2, fold: 6 };
+  const A = { name: 'A', tally: {}, actions: { pre: 'call', flop: '' }, committed: 6, stack: 300 };
+  const B = { name: 'B', tally: T2, actions: { pre: 'raise', flop: '' }, committed: 6, stack: 300 };
+  const spot = (opponents) => E.analyzeSync({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 18, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: false, mix: false, seed: 7, iterations: 6000, lookahead: false, opponents });
+  const ra = spot([A]), rb = spot([B]), rab = spot([A, B]);
+  const fold = (r, amt) => r.ranked.find((s) => s.kind === 'bet' && s.amount === amt).foldPct;
+  for (const amt of [6, 14, 27]) {
+    const want = fold(ra, amt) * fold(rb, amt), got = fold(rab, amt);
+    assert.ok(Math.abs(got - want) < 0.02, `bet ${amt}: both fold ${got}, heads-up rates multiplied ${want}`);
+  }
+});
+
 test("multiway: hero's story moves every player's folds, as heads-up", () => {
   // The credibility shift (hero's line looks strong) used to reach only o.stats; multiway bets are
   // answered with the heads-up read until someone stays (#39), so all-fold rates ignored it.
@@ -1309,6 +1325,46 @@ test('fuzz: advice is legal and EVs stay within what can be lost or won (random 
   // Computer mode: turn and flop solvers too.
   run(12, 30, { turnSolver: true, turnIterations: 3, turnTimeMs: 200, flopSolver: true, flopIterations: 2, flopTimeMs: 200 });
   assert.deepStrictEqual(bad, []);
+});
+
+// A player who raises most bets they face (and bets a lot): re-raises of hero's bets come up often.
+const RAISER_ST = { bet: 8, check: 4, call: 4, raise: 14, fold: 3 };
+const RAISER = { bet: 24, check: 12, call: 12, raise: 42, fold: 9, pfCall: 20, pfRaise: 10, pfFold: 10,
+  st: { flop: Object.assign({}, RAISER_ST), turn: Object.assign({}, RAISER_ST), river: Object.assign({}, RAISER_ST) } };
+
+test('fuzz: random spots against players who re-raise a lot give legal advice (re-raise play-out)', () => {
+  const r = F.rng32(14);
+  const bad = [];
+  let rr = 0;
+  for (let k = 0; k < 120;) {
+    const s = F.randomSpot(r);
+    if (!s) continue;
+    k++;
+    for (const o of s.opponents) o.tally = RAISER;
+    const res = E.analyzeSync(s);
+    rr += res.ranked.reduce((a, x) => a + (x.rrN || 0), 0);
+    for (const x of F.adviceProblems(s, res)) bad.push(`spot ${k} (street ${s.board.length}, ${s.opponents.length} opp): ${x}`);
+  }
+  assert.deepStrictEqual(bad, []);
+  assert.ok(rr > 1000, 're-raised deals played out: ' + rr);
+});
+
+test('re-raises after the flop: strong hands call them, air folds, and preflop has no play-out', () => {
+  const spot = (h, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: C('Ks 8d 2c'), pot: 20, toCall: 0, stack: 290, bigBlind: 2,
+    inPosition: true, mix: false, seed: 3, iterations: 3000, heroActions: { pre: 'raise' }, heroPfAggressor: true,
+    opponents: [{ name: 'M', tally: RAISER, actions: { pre: 'call', flop: 'check' }, committed: 10, stack: 290 }] }, extra));
+  const bets = (r) => r.ranked.filter((x) => x.kind === 'bet');
+  const strong = spot('Ah Kd'), air = spot('7c 3d');
+  for (const x of bets(strong).concat(bets(air))) assert.ok(x.rrN > 0.15 * x.n, `bet ${x.amount}: ${x.rrN} of ${x.n} deals re-raised`);
+  for (const x of bets(strong)) assert.strictEqual(x.callsReraise, true, 'top pair top kicker folds to a re-raise of ' + x.amount);
+  for (const x of bets(air)) assert.strictEqual(x.callsReraise, false, '7-high calls a re-raise of ' + x.amount);
+  // A bluff that folds to every re-raise loses at most its bet.
+  for (const x of bets(air)) assert.ok(x.ev > -x.amount - 1e-9, `7-high bet ${x.amount}: EV ${x.ev}`);
+  const off = spot('Ah Kd', { reraiseModel: false });
+  assert.ok(off.ranked.every((x) => !x.rrN), 'reraiseModel: false still played re-raises out');
+  const pre = E.analyzeSync({ hero: C('Ah Kd'), board: [], pot: 3, toCall: 1, stack: 298, bigBlind: 2, inPosition: true, mix: false, seed: 3,
+    iterations: 2000, heroActions: {}, opponents: [{ name: 'M', tally: RAISER, actions: { pre: 'pending' }, stack: 298 }] });
+  assert.ok(pre.ranked.every((x) => !x.rrN), 'preflop re-raises were played out');
 });
 
 test('fuzz: random hands through the tracker match the table (chips, price, stacks, seats) and get legal advice', () => {
