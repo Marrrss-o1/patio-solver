@@ -132,5 +132,28 @@ the clearest result here. The blueprint as the continuation strategy inside the 
 rollout would need fresh card buckets for every runout (a full strength table per board), far over the time
 budget per decision.
 
+### Does the abstraction fit the live game?
+
+A third round asked whether it loses because its abstraction does not match the friends' game, and whether a
+smaller piece of it would be a cheaper win. The sizes do not match well. In Marwin's logs opens run from 2.5bb to
+16bb (10th to 90th percentile; a third are 4.5-6bb), where the 4 and 5-handed blueprints know one 3.5bb open;
+3-bets are mostly min-raises at 1.5-1.9x the open, where the blueprint only has pot-size ones; and 40% of flop
+bets are under 40% pot with 11-14% over the pot, where the 4 and 5-handed trees have a single 50% size. Each test
+below is paired on identical deals, 4-handed against the friend bots, blend on minus off unless noted:
+
+| change | deals | B - A (bb/100) | where it loses |
+|--------|-------|----------------|----------------|
+| Preflop only (`blueprintStreets: '0'`), seed 3 | 3,000 | -54.3 ± 15.6 | blinds |
+| Only where the real sizes are close to the tree's (largest log size error of a mapped raise under 0.35, which skips about a quarter of the spots it would apply to), seed 3 | 3,000 | -50.9 ± 14.8 | big blind -117 ± 32 |
+| Finer card buckets: a 4-handed run with the same sizes and 128 / 96 / 64 buckets (`--flop 32x4 --turn 24x4 --river 64`, 290M iterations) instead of 64 / 64 / 48, seed 4, v1.7.7 | 3,000 | -56.3 ± 16.1 | blinds -96 / -88 |
+| Finer minus shipped 4-handed blueprint, both blended, same deals | 3,000 | +6.6 ± 12.2 | (no clear gain; the shipped one blended is about -63 against off on these deals) |
+
+So neither matching the sizes nor finer buckets changes the picture, and preflop alone loses about as much as the
+whole thing: the loss is the blind defence, where balanced 150bb play folds hands that are profitable against
+these opponents. A finer-sized tree (several opens, min-raise 3-bets, small and overbet sizes) would multiply the
+tree several times over for the same reason to lose; the 3-handed blueprint already has two opens and two flop
+sizes and did not win either (-9.6 ± 18.9). A heads-up-only blueprint was not trained: heads-up tables are about 2% of the logged hands,
+and heads-up pots that start multiway have ranges a heads-up blueprint never saw.
+
 What is left for the blueprint is what ships: the panel line and the hand log's `bp` field, which make it
 checkable on real hands later.
