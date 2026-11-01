@@ -161,6 +161,7 @@ const HOME_DEFAULT = {
   raiseProb: 0.55,            // raises this often above the threshold
   bluffRaise: 0.04,           // raises with a draw or nothing
   callMw: null,               // facing a bet multiway: threshold shift [first to answer, last after folds, after a call] (fitted, pooled)
+  callHu: 0,                  // facing a bet heads-up: threshold shift (fitted, pooled; profiles without it keep 0)
   reRaise: 1,                 // after betting or raising on the street and being raised: re-raise share x this (fitted, pooled)
   lineBet: null,              // checked to on the turn / river: log-odds shift of betting by their own line on the street before,
                               // [called turn, bet turn, called river, bet river] (fitted, pooled; friends who called rarely lead)
@@ -274,8 +275,9 @@ function homeBot(params) {
       const f = toCall / Math.max(1, pot - toCall);
       // Multiway: the old bots raise the threshold by mw per extra opponent. Fitted bots (callMw set) answer by the
       // spot instead, like the friends: first to answer with others behind, last after everyone else folded, or
-      // after someone has already called (overcall); heads-up has no shift.
-      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : 0;
+      // after someone has already called (overcall); heads-up from the start of the street has its own shift (callHu:
+      // friends fold 52% to a first heads-up bet of 25-110% pot, n 61, where bots fitted without it folded 63%).
+      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : (P.callHu || 0);
       const tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + mwShift + (v.raises >= 2 ? 0.06 : 0);
       let pCont = sig((hp - tc) / P.wc);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);
