@@ -13,7 +13,7 @@ const tick = () => new Promise((r) => setImmediate(r));
 const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
 
 // offscreen.js in a sandbox. Workers are created in this order: CORES pool workers, the final
-// worker, the quick worker (and replacements after them).
+// worker (and replacements after them).
 function loadOffscreen(cores) {
   const workers = [], timers = [];
   class FakeWorker {
@@ -51,9 +51,9 @@ function loadOffscreen(cores) {
   return { workers, timers, send, answer, live, CORES, pool: () => live().slice(0, 0) };
 }
 
-test('pool: the final and quick workers load the blueprints when they start, the others do not', async () => {
+test('pool: the final worker loads the blueprints when it starts, the others do not (no quick worker)', async () => {
   const o = loadOffscreen(6);
-  assert.strictEqual(o.workers.length, o.CORES + 2);
+  assert.strictEqual(o.workers.length, o.CORES + 1);
   o.workers.forEach((w, i) => assert.deepStrictEqual(w.inbox.map((m) => m.mode), i >= o.CORES ? ['warm'] : []));
 });
 
@@ -83,8 +83,8 @@ test('pool: a newer decision at the same table replaces the one still solving', 
   // The old request is answered at once, and its workers are replaced instead of finishing it.
   assert.ok(a.done && a.value.superseded && !a.value.ok, JSON.stringify(a.value));
   assert.ok(old.every((w) => w.dead));
-  assert.ok(!o.workers[o.CORES].dead && !o.workers[o.CORES + 1].dead, 'final and quick workers are kept');
-  const fresh = o.workers.slice(o.CORES + 2);
+  assert.ok(!o.workers[o.CORES].dead, 'the final worker is kept');
+  const fresh = o.workers.slice(o.CORES + 1);
   assert.strictEqual(fresh.length, o.CORES);
   assert.ok(fresh.every((w) => w.inbox.length === 1 && w.inbox[0].mode === 'partial' && w.inbox[0].input.seed !== undefined));
   fresh.forEach(o.answer);
@@ -150,19 +150,24 @@ test('pool: a crashed worker fails its job at once and is replaced', async () =>
 
 test('pool: a hung worker is replaced after 30 s and the next decision gets advice', async () => {
   const o = loadOffscreen(4);
-  const q = o.send({ input: { seed: 1 }, quick: true });
+  const q = o.send({ input: { seed: 1 }, tab: 1 });
   await settle();
+  for (let i = 0; i < o.CORES; i++) o.answer(o.workers[i]);
+  await settle();
+  // The final pass hangs.
   const limit = o.timers.filter((t) => t.on && t.ms === 30000);
   assert.strictEqual(limit.length, 1);
   limit[0].fn();
   await settle();
   assert.ok(q.done && !q.value.ok && /too long/.test(q.value.error), JSON.stringify(q.value));
-  assert.ok(o.workers[o.CORES + 1].dead);
-  const quick = o.workers[o.workers.length - 1];
-  assert.deepStrictEqual(quick.inbox.map((m) => m.mode), ['warm'], 'the new quick worker loads the blueprints');
-  const q2 = o.send({ input: { seed: 2 }, quick: true });
+  assert.ok(o.workers[o.CORES].dead);
+  const fin = o.workers[o.workers.length - 1];
+  assert.deepStrictEqual(fin.inbox.map((m) => m.mode), ['warm'], 'the new final worker loads the blueprints');
+  const q2 = o.send({ input: { seed: 2 }, tab: 1 });
   await settle();
-  o.answer(quick);
+  for (let i = 0; i < o.CORES; i++) o.answer(o.workers[i]);
+  await settle();
+  o.answer(fin);
   await settle();
   assert.ok(q2.done && q2.value.ok, JSON.stringify(q2.value));
   assert.ok(o.timers.filter((t) => t.on).length === 0, 'answered jobs clear their timers');

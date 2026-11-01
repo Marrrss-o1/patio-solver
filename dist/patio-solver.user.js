@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.7.9
+// @version      1.8.0
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1469,7 +1469,10 @@ function ENGINE() {
     let eps = noise > 0 ? Math.min(0.9, noise * (aggr && size > 0 ? clamp(0.6 / size, 0.4, 1.3) : 1)) : 0;
     // Turn and river raises are seldom random, even small ones: 8 of 10 shown river raises in the
     // logs were strong hands. A quarter of the noise, and no extra for a small raise.
-    if (action === 'raise' && st.street >= 4) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
+    // Experiment (`input.flopBigRaise`, off): flop raises of pot size or more the same way. In the
+    // logs (31 Oct + 1 Nov) 5 of 6 shown postflop raises of pot or more were top pair or better, both
+    // flop ones (A3 on A-5-4, Q7 on Q-7-8 for 6.7x the pot); flop min-raises stay wide.
+    if (action === 'raise' && (st.street >= 4 || (stats.flopBigRaise && size >= 1))) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
     if (eps > 0) {
       let sw = 0, sp = 0;
       for (let k = 0; k < NUM_COMBOS; k++) if (W[k] > 0) { sw += W[k]; sp += W[k] * P[k]; }
@@ -5030,6 +5033,7 @@ function ENGINE() {
       const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
+      if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;

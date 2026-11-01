@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         try {
           // The tab lets the offscreen page drop a decision the same table has moved past.
           const tab = sender && sender.tab ? sender.tab.id : null;
-          r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input, quick: !!msg.quick, tab });
+          r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'analyze', input: msg.input, tab });
         } catch (e) {
           // The offscreen page is gone (it crashed or was closed): make a new one next time
           // instead of solving here, on one core, for the rest of the session.
