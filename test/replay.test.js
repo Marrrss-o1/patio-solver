@@ -1023,6 +1023,44 @@ test('preflop solver: limped and raised multiway pots use multiway equity', () =
   assert.ok(m.kappa[cls('72o')] < m.kappa[cls('AA')]);
 });
 
+// A 5-way squeeze like hand 76 of the 2 Nov log (J8o, 30bb, a raise, two callers and two limpers in).
+const squeeze = (h, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: [], pot: 36, toCall: 8, heroBet: 2, stack: 60, bigBlind: 2, inPosition: false,
+  mix: false, seed: 3, iterations: 4000, preflopIterations: 300, heroActions: { pre: 'pending' },
+  opponents: [
+    { name: 'L1', tally: {}, actions: { pre: 'call' }, bet: 2, stack: 80 }, { name: 'L2', tally: {}, actions: { pre: 'call' }, bet: 2, stack: 130 },
+    { name: 'R', tally: {}, actions: { pre: 'raise' }, bet: 10, stack: 90, pfAggressor: true },
+    { name: 'C1', tally: {}, actions: { pre: 'call' }, bet: 10, stack: 120 }, { name: 'C2', tally: {}, actions: { pre: 'call' }, bet: 10, stack: 70 },
+  ] }, extra));
+
+test('preflop solver: each raise size meets the field that calls it (pfFieldBySize)', () => {
+  const cls = (n) => E._pf.classIndex(n);
+  // The field's hand when it calls a raise that only the top of each range calls is stronger
+  // (fieldMax puts the all-fold share at the bottom: 0.8^3 and 0.3^3 here).
+  const w = () => new Float64Array(169).fill(1);
+  const loose = E._pf.fieldMax([w(), w(), w()], [0.7, 0.7, 0.7]), tight = E._pf.fieldMax([w(), w(), w()], [0.2, 0.2, 0.2]);
+  for (const n of ['AA', 'KK', 'AKs']) assert.ok(tight[cls(n)] / (1 - 0.512) > 1.5 * loose[cls(n)] / (1 - 0.027), n);
+  // Measured multiway share: with everyone calling it is kappa on the same samples; with fewer
+  // callers aces keep more of the pot.
+  const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
+  const sc = (c) => ({ kind: 'raise', amount: 50, opp: [{ cont: c }, { cont: c }, { cont: c }] });
+  const all = E._pf.preflopMulti(opps, [], [sc(1)], (x) => x, 0, 400, 7, { bySize: true, pot: 10, oMax: 100 });
+  for (const n of ['AA', 'T9s', '72o']) assert.ok(Math.abs(all.kapBy(50)[cls(n)] - all.kappa[cls(n)]) < 1e-12, n);
+  assert.strictEqual(all.kapBy(51), null);
+  const few = E._pf.preflopMulti(opps, [], [sc(0.3)], (x) => x, 0, 400, 7, { bySize: true, pot: 10, oMax: 100 });
+  assert.ok(few.kapBy(50)[cls('AA')] > all.kapBy(50)[cls('AA')]);
+  // The squeeze: off, J8o's shove looks about even; on, it loses (a direct simulation with the same
+  // reads says about -6 chips), while aces and strong hands still shove.
+  const off = squeeze('Jd 8c'), on = squeeze('Jd 8c', { pfFieldBySize: true });
+  const shove = (r) => r.ranked.find((x) => x.kind === 'allin').ev;
+  assert.ok(shove(on) < shove(off) - 2, `${shove(on)} vs ${shove(off)}`);
+  assert.ok(shove(on) < 0);
+  assert.notStrictEqual(on.best.kind, 'allin');
+  for (const h of ['Ah Ad', 'Ks Qs']) assert.strictEqual(squeeze(h, { pfFieldBySize: true }).best.kind, 'allin', h);
+  // Heads-up is unchanged.
+  const hu = { pot: 3.5, toCall: 1.5, stack: 99, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] };
+  assert.deepStrictEqual(pfSpot('Ts 9s', Object.assign({ pfFieldBySize: true }, hu)).ranked.map((x) => x.ev), pfSpot('Ts 9s', hu).ranked.map((x) => x.ev));
+});
+
 const turnSpot = (h, extra) => Object.assign({
   hero: C(h), board: C('Ts 9s 4d 2c'), pot: 20, toCall: 8, stack: 80, bigBlind: 1, inPosition: true, mix: false, seed: 5, iterations: 2000,
   opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' } }], heroActions: { pre: 'call', flop: 'call' },
@@ -1255,6 +1293,12 @@ test('kernels: river, preflop, turn and flop solves give bit-identical results w
     // Multiway preflop leaves (a raise and a caller in front).
     { hero: C('9s 8s'), board: [], pot: 75, toCall: 20, stack: 1000, bigBlind: 10, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60,
       opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] },
+    // The field by raise size (an open with players behind, and a squeeze into five).
+    { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60, pfFieldBySize: true,
+      opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) },
+    { hero: C('Td 9d'), board: [], pot: 36, toCall: 8, heroBet: 2, stack: 60, bigBlind: 2, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60, pfFieldBySize: true,
+      heroActions: { pre: 'pending' }, opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' }, bet: 2 }, { name: 'L2', tally: {}, actions: { pre: 'call' }, bet: 2 },
+        { name: 'R', tally: {}, actions: { pre: 'raise' }, bet: 10, pfAggressor: true }, { name: 'C1', tally: {}, actions: { pre: 'call' }, bet: 10 }, { name: 'C2', tally: {}, actions: { pre: 'call' }, bet: 10 }] },
     // Turn solver: facing a bet, first to act (odd and even hand counts), and multiway.
     turnSpot('Qs Js', { turnSolver: true, turnIterations: 6, heroActions: { pre: 'raise', flop: 'call' } }),
     turnSpot('Ah Kd', { turnSolver: true, turnIterations: 6, toCall: 0, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: '' } }], heroActions: { pre: 'raise', flop: 'bet' } }),
