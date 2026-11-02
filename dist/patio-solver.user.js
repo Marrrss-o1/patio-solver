@@ -5141,7 +5141,9 @@ function ENGINE() {
       addScenario({ kind: toCall >= stack ? 'allin' : 'call', label: toCall >= stack ? 'Call all-in' : 'Call', amount: cap(toCall) });
       if (stack > toCall) {
         // input.pfRaiseHUOnly: the extra sizes only with one opponent left (the field solver's hand doesn't narrow with size).
-        const pfExtra = Array.isArray(input.pfRaiseFracs) && (input.pfRaiseHUOnly !== true || opps.length === 1);
+        // input.pfRaiseNoOpen: nor in an unopened pot with two or more players still to act (opens from early seats and the button).
+        const pfOpen = opps.length >= 2 && opps.every((o) => o.pending) && toCall <= bigBlind + 1e-9;
+        const pfExtra = Array.isArray(input.pfRaiseFracs) && (input.pfRaiseHUOnly !== true || opps.length === 1) && !(input.pfRaiseNoOpen === true && pfOpen);
         const fracs = street === 0 ? (pfExtra ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) : [0.6, 1];
         for (const f of fracs) {
           const amt = cap(roundChips(toCall + f * (pot + toCall), bigBlind));

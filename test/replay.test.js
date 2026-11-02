@@ -1311,6 +1311,11 @@ test('preflop sizes: pfRaiseFracs and pfBetFracs add sizes for the simulator, de
   assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseCapBB: 15 }))), [50, 75, 115]);
   // pfRaiseHUOnly: three opponents here, so only the usual sizes.
   assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseHUOnly: true }))), [50, 75, 115]);
+  // pfRaiseNoOpen: limpers in front, so the extra size stays; an open with three players behind gets none.
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseNoOpen: true }))), [50, 75, 115, 180]);
+  const open3 = Object.assign({}, big, { pot: 15, toCall: 10, inPosition: false, pfRaiseNoOpen: true, opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) });
+  assert.deepStrictEqual(raises(E.analyzeSync(open3)), [25, 35, 50]);
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, open3, { pfRaiseNoOpen: false }))), [25, 35, 50, 75]);
   assert.ok(r.solver, 'the preflop solver ran with the extra size');
   if (E.kernelsActive()) {
     E.useKernels(false);
