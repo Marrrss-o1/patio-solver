@@ -4486,7 +4486,7 @@
   function preflopMulti(opps, scenarios, raisesSc, capE, toCall, samples, seed, opt) {
     const NC = 169, K = opps.length;
     const rng = mulberry32((seed ^ 0x3c6ef372) >>> 0);
-    const by = opt && opt.bySize && raisesSc.length ? opt : null;
+    const by = opt && opt.bySize && (raisesSc.length || opt.call) ? opt : null;
     const cdfs = opps.map((o) => {
       const c = new Float64Array(NUM_COMBOS);
       let t = 0;
@@ -4532,6 +4532,13 @@
         const o = Math.max(0, Math.min(amt - toCall, by.oMax));
         const potK = (n) => by.pot + amt + n * o;
         sizes.push({ amt, keep, kbar, potK, ref: potK(kbar), num: new Float64Array(NC), den: new Float64Array(NC), n: 0, best: 0, ties: 0, top: 0, w: 0 });
+      }
+      // Hero's call or check (by.call): everyone in but the players behind who fold to it. No chips
+      // follow at that leaf, so no pot weighting.
+      if (by.call) {
+        const pas = scenarios.find((s) => s.kind !== 'fold' && s.amount <= toCall + 1e-9);
+        const keep = opps.map((o, i) => (o.pending && pas ? 1 - clamp(pas.opp[i].cont, 0, 1) : 0));
+        sizes.push({ amt: 'call', keep, kbar: 1, potK: () => 1, ref: 1, num: new Float64Array(NC), den: new Float64Array(NC), n: 0, best: 0, ties: 0, top: 0, w: 0 });
       }
     }
     for (let it = 0; it < samples * 4 && got < samples; it++) {
@@ -4609,17 +4616,22 @@
       for (const r of sc.opp) { const c = clamp(r.cont, 0, 1); sum += c; none *= 1 - c; }
       return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
     };
-    let kapBy = null;
+    let kapBy = null, kapCall = null;
     if (sizes) {
       const vec = new Map();
       for (const z of sizes) {
+        if (z.amt === 'call') {
+          kapCall = new Float64Array(NC);
+          for (let a = 0; a < NC; a++) kapCall[a] = clamp((z.num[a] + 0.5) / (z.den[a] + 0.5), 0.05, 1.1);
+          continue;
+        }
         const v = new Float64Array(NC);
         for (let a = 0; a < NC; a++) v[a] = clamp((z.num[a] + 0.5) / (z.den[a] + 0.5), 0.05, 1.1);
         vec.set(z.amt, v);
       }
       kapBy = (amt) => { for (const [x, v] of vec) if (Math.abs(x - amt) < 1e-9) return v; return null; };
     }
-    return { K, kappa, kCall: Math.max(1, kCall), kRaise, kapBy, samples: got };
+    return { K, kappa, kCall: Math.max(1, kCall), kRaise, kapBy, kapCall, samples: got };
   }
 
   function preflopSolve(cfg) {
@@ -4742,8 +4754,11 @@
       // Players in at a leaf below this node: all of them after hero's call or check (or the
       // option checked back), the expected callers after hero's first raise, one deeper.
       const kLeaf = !multi ? 1 : depth === 0 ? multi.kCall : depth === 1 && player === 1 ? (facing > 0 ? multi.kRaise(hIn) : multi.kCall) : 1;
-      // Hero's measured share where the field calls this root raise (preflopMulti's kapBy).
-      const kapLeaf = multi && multi.kapBy && depth === 1 && player === 1 && facing > 0 ? multi.kapBy(hIn) : null;
+      // Hero's measured share where the field calls this root raise (preflopMulti's kapBy), or
+      // where everyone is in after hero's call or check (cfg.callField, its kap).
+      const cf = cfg.callField;
+      const kapLeaf = !multi ? null : depth === 1 && player === 1 && facing > 0 ? (multi.kapBy ? multi.kapBy(hIn) : null)
+        : cf && (depth === 0 || (depth === 1 && player === 1)) ? cf.kap : null;
       const childRange = (kind) => {
         if (player === 0) return [lo, hi];
         const span = hi - lo, foldEdge = lo + (1 - cont) * span, raiseEdge = hi - Math.min(raise, cont) * span;
@@ -4755,12 +4770,17 @@
         const c = Math.min(facing, maxAdd);
         const [h2, o2] = put(c);
         const callKind = c >= maxAdd - 1e-9 ? 'allin' : 'call';
+        const qc = isRoot && cf ? branchQ(cf.w) : q;
         const callLeaf = isRoot && option && c < maxAdd - 1e-9
-          ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1, q); }
+          ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1, qc); }
           : () => leaf(h2, o2, kLeaf, kapLeaf);
-        add({ kind: callKind, amount: c, isCall: true }, callLeaf);
+        const a = { kind: callKind, amount: c, isCall: true };
+        if (isRoot && cf) a.fieldW = cf.w;
+        add(a, callLeaf);
       } else {
-        add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn, kLeaf));
+        const a = { kind: 'check', amount: 0 };
+        if (isRoot && cf) a.fieldW = cf.w;
+        add(a, () => leaf(hIn, oIn, kLeaf, kapLeaf));
       }
       raiseAmts.forEach((amt, j) => {
         const [h3, o3] = put(amt);
@@ -6127,15 +6147,27 @@
       const vRaised = pres.some((x) => /bet|raise/.test(x));
       const raises = /bet|raise/.test(heroPre) || reraised ? 2 : (!field || fieldOther) && vRaised ? 3 : 4;
       const pendingOpps = opps.filter((o) => o.pending);
-      const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed,
-        bySize && input.pfKappaBySize !== false ? { bySize: true, pot: potWin, oMax: Math.max(0, E - toCall) } : null) : null;
+      // Opens with several players behind (input.pfOpenMulti, with pfFieldBySize): the field's
+      // chips count once per expected caller and hero's share is the measured multiway one, as in
+      // the other multiway spots. Without it an open called by two players is played as heads-up.
+      const openMulti = fieldOpen && bySize && input.pfOpenMulti === true;
+      const callField = fieldOther && bySize && input.pfCallField === true;
+      const multi = fieldOther || openMulti ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed,
+        bySize && (input.pfKappaBySize !== false || callField) ? { bySize: true, pot: potWin, oMax: Math.max(0, E - toCall), call: callField } : null) : null;
+      if (multi && multi.kapBy && input.pfKappaBySize === false) multi.kapBy = null;
+      // Hero's call or check (input.pfCallField, with pfFieldBySize): the field's hand is the strongest of
+      // everyone in at that leaf (the players behind at their rate against the call), and hero's share is
+      // measured the same way. Before, it was the field that calls a pot-size raise, with kappa for K players.
+      const pasSc = scenarios.find((s) => s.kind !== 'fold' && s.amount <= toCall + 1e-9);
+      const callCf = callField && multi && multi.kapCall
+        ? { w: fieldMax(oppCws, opps.map((o, i) => (o.pending && pasSc ? pasSc.opp[i].cont : 1))), kap: multi.kapCall } : null;
       const pf = preflopSolve({
         heroW: heroCw, oppW: oppCw, heroClass: hc, pot: potWin, toCall, stack: E, bigBlind, heroIP: inPosition,
         rootActs: raisesSc.map((s) => (bySize ? { amount: capE(s.amount), fieldW: fieldWOf(s) } : { amount: capE(s.amount) })),
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
+        raises, noLimp: fieldOpen, multi, callField: callCf, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });

@@ -1056,6 +1056,21 @@ test('preflop solver: each raise size meets the field that calls it (pfFieldBySi
   assert.ok(shove(on) < 0);
   assert.notStrictEqual(on.best.kind, 'allin');
   for (const h of ['Ah Ad', 'Ks Qs']) assert.strictEqual(squeeze(h, { pfFieldBySize: true }).best.kind, 'allin', h);
+  // An open-shove at 20bb with three behind: called by more than one player, aces win a bigger pot
+  // and weak hands' fold equity is the same, so with pfOpenMulti (callers counted, measured
+  // multiway share) the shove is worth more with aces. Against the read's strategy alone a direct
+  // simulation says about 39 chips, the solve 36 with it and 26 without; here (half the read, half
+  // an adaptive field) 21 and 17.
+  const open = (h, extra) => pfSpot(h, Object.assign({ pot: 3, toCall: 2, stack: 40, bigBlind: 2, iterations: 4000, preflopIterations: 300,
+    opponents: [0, 1, 2].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'pending' }, stack: 300 })) }, extra));
+  const aaOff = open('Ah Ad', { pfFieldBySize: true }), aaOn = open('Ah Ad', { pfFieldBySize: true, pfOpenMulti: true });
+  assert.ok(shove(aaOn) > shove(aaOff) + 3, `${shove(aaOn)} vs ${shove(aaOff)}`);
+  assert.strictEqual(open('9c 4d', { pfFieldBySize: true, pfOpenMulti: true }).best.kind, 'fold');
+  // Calling: with the call's own field (everyone in, players behind at their rate against the
+  // call) the solve still runs and stays sane.
+  const call = squeeze('Ah Ad', { pfFieldBySize: true, pfCallField: true });
+  assert.strictEqual(call.best.kind, 'allin');
+  assert.ok(call.ranked.every((x) => isFinite(x.ev)));
   // Heads-up is unchanged.
   const hu = { pot: 3.5, toCall: 1.5, stack: 99, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] };
   assert.deepStrictEqual(pfSpot('Ts 9s', Object.assign({ pfFieldBySize: true }, hu)).ranked.map((x) => x.ev), pfSpot('Ts 9s', hu).ranked.map((x) => x.ev));
@@ -1293,10 +1308,11 @@ test('kernels: river, preflop, turn and flop solves give bit-identical results w
     // Multiway preflop leaves (a raise and a caller in front).
     { hero: C('9s 8s'), board: [], pot: 75, toCall: 20, stack: 1000, bigBlind: 10, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60,
       opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] },
-    // The field by raise size (an open with players behind, and a squeeze into five).
-    { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60, pfFieldBySize: true,
+    // The field by raise size (an open with players behind, and a squeeze into five), with the
+    // multiway open and the call's own field.
+    { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60, pfFieldBySize: true, pfOpenMulti: true,
       opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) },
-    { hero: C('Td 9d'), board: [], pot: 36, toCall: 8, heroBet: 2, stack: 60, bigBlind: 2, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60, pfFieldBySize: true,
+    { hero: C('Td 9d'), board: [], pot: 36, toCall: 8, heroBet: 2, stack: 60, bigBlind: 2, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60, pfFieldBySize: true, pfCallField: true,
       heroActions: { pre: 'pending' }, opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' }, bet: 2 }, { name: 'L2', tally: {}, actions: { pre: 'call' }, bet: 2 },
         { name: 'R', tally: {}, actions: { pre: 'raise' }, bet: 10, pfAggressor: true }, { name: 'C1', tally: {}, actions: { pre: 'call' }, bet: 10 }, { name: 'C2', tally: {}, actions: { pre: 'call' }, bet: 10 }] },
     // Turn solver: facing a bet, first to act (odd and even hand counts), and multiway.
