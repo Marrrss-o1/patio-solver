@@ -192,9 +192,10 @@ const SIZES_WIDE = [0.08, 0.12, 0.18, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5,
 const ADAPT_REF = { open: 0.116, rr: 0.030, r8: 0.035, r30: 0.024 };
 const RAISE_CLASSES = Object.keys(ADAPT_REF);
 // What the bots remember of hero: decayed counts of hero's raises by class per hand dealt, starting from the table's
-// rates with k pseudo-hands. alpha: continue log-odds per log of (hero's rate / the table's).
+// rates with k pseudo-hands. alpha: continue log-odds per log of (hero's rate / the table's). rr: the same for the
+// share that re-raises (opens and re-raises under 8bb only; the logs: +0.59 ± 0.40 against opens, continue unchanged).
 function heroModel(o) {
-  const m = { alpha: +o.alpha || 0, k: o.k != null ? +o.k : 40, decay: o.decay != null ? +o.decay : 0.99, hands: 0, n: {}, tot: {}, handsTot: 0 };
+  const m = { alpha: +o.alpha || 0, rr: +o.rr || 0, k: o.k != null ? +o.k : 40, decay: o.decay != null ? +o.decay : 0.99, hands: 0, n: {}, tot: {}, handsTot: 0 };
   for (const c of RAISE_CLASSES) { m.n[c] = 0; m.tot[c] = 0; }
   return m;
 }
@@ -211,18 +212,21 @@ function observeHero(m, entry) {
     nr++;
   }
 }
-// Shift of a bot's continue log-odds against hero's raise (the one it faces: v.cur, raise number v.raises).
-function heroShift(m, v) {
+// Shift of a bot's continue log-odds (kind 'rr': re-raise log-odds) against hero's raise (the one it faces: v.cur,
+// raise number v.raises).
+function heroShift(m, v, kind) {
   const c = raiseClass(v.cur, v.bb, v.raises - 1);
+  const a = kind === 'rr' ? (c === 'open' || c === 'rr' ? m.rr : 0) : m.alpha;
+  if (!a) return 0;
   const rate = (m.n[c] + m.k * ADAPT_REF[c]) / (m.hands + m.k);
-  return clamp(m.alpha * Math.log(rate / ADAPT_REF[c]), -2, 2);
+  return clamp(a * Math.log(rate / ADAPT_REF[c]), -2, 2);
 }
 
 const STREET_OF = { 3: 'flop', 4: 'turn', 5: 'river' };
 // hooks (optional): { model, heroSeat } adapts preflop answers to hero's raises (heroModel above).
 function homeBot(params, hooks) {
   const P = Object.assign({}, HOME_DEFAULT, params || {});
-  const adapt = hooks && hooks.model && hooks.model.alpha ? hooks : null;
+  const adapt = hooks && hooks.model && (hooks.model.alpha || hooks.model.rr) ? hooks : null;
   const posMul = { early: 0.85, late: 1.15, blinds: 1.0 };
   return {
     params: P,
@@ -263,11 +267,14 @@ function homeBot(params, hooks) {
         else if (!big && v.limped) cont = P.limpCont * Math.min(0.97, P.vpip * pm) * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
         else if (!big && v.put > (v.pos === 'blinds' ? bb : 0) && v.seq.pre.length) cont = Math.max(cont, 0.85 * P.vpip * pm);
         cont = clamp(cont, 0.02, 0.97);
+        let tb = P.threeBet * Math.pow(P.rrDecay, v.raises - 1);
         if (adapt && v.lastAgg === adapt.heroSeat) {
           const sft = heroShift(adapt.model, v);
           if (sft) cont = clamp(sig(Math.log(cont / (1 - cont)) + sft), 0.02, 0.97);
+          const srr = heroShift(adapt.model, v, 'rr');
+          if (srr) tb = sig(Math.log(tb / (1 - tb)) + srr);
         }
-        const tb = clamp(P.threeBet * Math.pow(P.rrDecay, v.raises - 1), 0.003, cont);
+        tb = clamp(tb, 0.003, cont);
         const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tb - pct) / (w * 0.7)));
         const out = [];
         if (v.raises < 8) {

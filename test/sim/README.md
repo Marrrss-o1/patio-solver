@@ -137,6 +137,11 @@ bots, seed and block size), so a third arm can be added later without replaying 
   the same solver against static (A) and adapting (B) bots on the same deals. Each variant's adapting bots are its
   own and start every block fresh. The summary's `heroRaisesPerHand` (every run) gives hero's raise rates by kind
   against those table rates (Marwin's own: about 0.057 per hand to 8bb+, 0.013 to 30bb+).
+  JSON `{"alpha":0,"rr":0.6}` moves the share that re-raises instead: re-raise log-odds + rr x ln(hero's rate / the
+  table's) against hero's opens and re-raises under 8bb, with the continue share unchanged. That is what the logs hint
+  at against frequent openers (re-raise +0.59 ± 0.40 per log of the opener's rate ratio, continue +0.21 ± 0.23, n 448).
+  Against a hero who opens 25% of hands (2.1x the table), a bot's re-raise share against a 3bb open goes from 0.23 to
+  0.30 at rr 0.6 and 0.37 at rr 1.2 (f1, big blind).
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 

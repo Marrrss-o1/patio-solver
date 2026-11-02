@@ -17,7 +17,9 @@
 //                      (opens, re-raises, raises to 8-30bb, to 30bb+): continue log-odds + ALPHA x ln(hero's rate /
 //                      the logs' rate), from decayed counts (--adapt-k 40 pseudo-hands at the logs' rates, --adapt-decay
 //                      0.99 per hand). A stress test, off by default (the logs show no such adapting; bots.js heroModel).
-//                      --a-adapt / --b-adapt set it for one variant only (a number, or JSON {alpha, k, decay}), so one
+//                      JSON {"alpha":0,"rr":0.6} moves the re-raise share instead (opens and re-raises under 8bb), as the
+//                      logs hint against frequent openers (+0.59 ± 0.40, continue share unchanged).
+//                      --a-adapt / --b-adapt set it for one variant only (a number, or JSON {alpha, rr, k, decay}), so one
 //                      run can pair the same solver against static and adapting bots on the same deals.
 // What is measured
 //   --agent X          solver (default) | baseline | bot:<spec> (a bot spec, or bot:{...} home-bot parameters)
@@ -122,8 +124,8 @@ function buildConfig(args) {
     const sv = args[x + '-adapt'] != null ? args[x + '-adapt'] : args.adapt;
     if (sv == null || sv === true) return null;
     const o = /^\s*\{/.test(String(sv)) ? JSON.parse(sv) : { alpha: +sv };
-    if (!(+o.alpha)) return null;
-    return { alpha: +o.alpha, k: o.k != null ? +o.k : args['adapt-k'] != null ? +args['adapt-k'] : 40,
+    if (!(+o.alpha) && !(+o.rr)) return null;
+    return { alpha: +o.alpha || 0, rr: +o.rr || 0, k: o.k != null ? +o.k : args['adapt-k'] != null ? +args['adapt-k'] : 40,
       decay: o.decay != null ? +o.decay : args['adapt-decay'] != null ? +args['adapt-decay'] : 0.99 };
   };
   // A variant's src/: a git ref's (or the working tree's), with knobs.js edits on top for --a-patch / --b-patch.
