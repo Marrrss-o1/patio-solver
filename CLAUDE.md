@@ -23,6 +23,8 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
   handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
+  backup.js              A copy of the reads (and the newest 150 hands, no raw events) in pokerpatio.com's IndexedDB,
+                         which survives removing the extension; a fresh install loads it (v1.8.5).
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
   offscreen.js/.html     Full-power mode: pool of solver-worker.js Web Workers (cores - 2). Each runs a Monte Carlo
                          share with `partial: true` (and, heads-up on the turn, its own turn solve for `turnMs`:
@@ -346,6 +348,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   read with clearly more hands than the rebuilt one (history beyond the stored log) is kept. The tracker takes its
   time from `now()` (`tracker.clock` if set); the rebuild replays each hand on its recorded times, so think times
   (`tt`, shows' `ms`) come out as played (they were about 0 in v1.8.1's rebuild).
+  Since v1.8.5 the panel also keeps a copy of the reads in the site's own storage (extension/backup.js: IndexedDB
+  "patio-solver" of pokerpatio.com, which Chrome keeps when the extension is removed), written at most every 15 s.
+  A fresh install (no reads in chrome.storage) loads it and says so on the panel, so Import is only needed for a new
+  computer or browser profile. A copy that couldn't be read isn't written over, nor one with far more history than
+  the reads replacing it (under half, unless "Reset reads" was pressed). `REINSTALL=1 npm run test:extension` wipes
+  the extension's storage after the replay and checks the reads come back.
+- Bet-size flag (v1.8.5): when hero bets or raises under 60% of the advised chips (the tracker's `sizeRatio`), the
+  stale advice says so ("Smaller than advised: you put in $22 of the advised $42") and the panel counts it for the
+  session. In the 31 Oct + 1 Nov logs hero's smaller bets cluster at a third of the pot and at the minimum bet, often
+  with strong hands (min-bets with 94-96% equity against advised 50-150% pot); in the simulator, 4 in 10 strong bets at
+  0.4x the advice cost about -87 ± 25 bb/100 (cliff bots, live, 1,000 deals).
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
@@ -441,6 +454,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   bets (one block: it folded 17% to hero's small bets, 35% to the others', read 0.31), so SIZE_K 8 was -19.5 ± 19.3.
   Real friends would give far too few answers to hero's bets per bucket in a session for a hero-only read.
   exploit.js `--xp elasticall` gives the same size answers to every bettor, which a read can learn.
+  The friends are not elastic against hero (all logs, reads replayed in order, first answers to hero's postflop
+  bets): under 45% pot they fold 36% heads-up (read 35%, n 39) and 46% multiway (44%, n 37); 45-85% pot 65% (55%,
+  n 17) and 86% (64%, n 14); 85%+ 56% (66%, n 9). So no hero-only size read was built.
+- Shown-hand strength (all live hands are shown at showdown, 127 of 127 in the logs, so a called river bet's shown
+  hand is a fair sample of the betting range): the shown hand's strength quantile in the predicted range on the full
+  board is 0.55 ± 0.05 after a river bet (n 34; 31 Oct 0.61, 1 Nov 0.40), 0.52 ± 0.06 after a river call (n 15),
+  0.53 ± 0.04 after a river check (n 53); 0.5 is on target. Script: rb-hero.js in
+  /mnt/project-files/patio-solver/scripts/ (reads-bench-lines.js with these two tables).
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,

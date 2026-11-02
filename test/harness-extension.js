@@ -32,6 +32,22 @@ const fs = require('fs');
     await page.locator('#patio-solver-host input[type=file]').setInputFiles(process.env.IMPORT.split(','));
     await page.waitForFunction(() => /Imported|Import failed/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 120000 });
   }
+  // REINSTALL=1: after the replay, wipe the extension's storage as removing it does, reload, and
+  // check the reads come back from the site's copy (backup.js; a save waits up to 15 s for its turn).
+  if (process.env.REINSTALL) {
+    await page.waitForTimeout(16000);
+    let [sw] = ctx.serviceWorkers();
+    if (!sw) sw = await ctx.waitForEvent('serviceworker');
+    await sw.evaluate(() => new Promise((res) => chrome.storage.local.clear(res)));
+    await page.reload();
+    await page.waitForTimeout(2500);
+    // The panel stays blank until it knows the table is private: send the recording's first message.
+    await page.evaluate(m => window.postMessage(Object.assign({ source: 'patio-solver-hook' }, m), location.origin), msgs[0]);
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; });
+    console.log('--- after wiping the extension storage and reloading ---');
+    console.log(/brought back/.test(after) ? 'RESTORED: ' + after.split('\n').find((l) => /brought back/.test(l)) : 'NOT RESTORED');
+  }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'ext_end.png') });
   const panel = await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; });
