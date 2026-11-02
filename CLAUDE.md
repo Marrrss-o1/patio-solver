@@ -411,18 +411,26 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     n 140), and two players who shoved 85-175bb in 5 of 19 and 6 of 92 hands got 1 call in about 37 answers. So the
     bots' static folding to big raises matches the logs. `run.js --adapt ALPHA` (test/sim/README.md) is a stress test
     for advice that wins only while big raises keep getting folded; every run's summary has `heroRaisesPerHand`.
+    Against bots that call hero's raises wider (ALPHA 1, live, 4-handed, 1,000 deals) main loses nothing (+34.5 ±
+    26.5, seed 823), and the preflop package (bigCliff, pfRaisedRead, pfBigRaise) on vs off gains more than against
+    static bots on the same deals (+106.0 ± 28.9 against +41.6 ± 25.8, seed 821): the wider calls pay hero's raises.
+    The logs hint that friends re-raise frequent openers more instead (+0.59 ± 0.40 in log-odds per log of the
+    opener's rate ratio, n 448; continue share +0.21 ± 0.23): `--adapt '{"alpha":0,"rr":0.6}'`.
   - Hero's big pots: on real hands the advised EV of hero's followed postflop decisions runs 9.9 ± 3.4 bb above what
     came back (clustered by hand, 272 decisions); flop bets 16.8 ± 5.9 (n 46), turn and river decisions against players
     who were passive on the flop 9.8 ± 2.7 (16.4 ± 4.6 in 15bb+ pots), against flop aggressors 1.9 ± 12.0. In the twin
     sim (the solver against friend bots, logs in the export format) the advice is about right overall (what came back
-    minus the advised EV -0.8 to +4 bb) and flop bets come back 2 to 10 bb above it. Shown hands: in hero's
+    minus the advised EV -1.2 to +4.0 bb over six runs) and flop bets come back 0 to 10 bb above it. On real hands
+    where hero followed every decision the gap is 7.8 ± 5.7 (n 133). At showdowns with every live hand shown (34
+    hands) the advice gave hero 0.49 equity after the flop and hero won 0.22 of those pots (-0.27 ± 0.07, clustered);
+    the twin sim -0.01 to -0.04 ± 0.04. Shown hands: in hero's
     pots with 15bb+ put in, friends' hands after a passive flop sit at 0.74 of the predicted range (n 23; 0.52 after
-    flop aggression, n 6), while every line is on target in pots without hero (0.51-0.54, n 26-49) and their fold,
+    flop aggression, n 6), while every line is on target in pots without hero (0.50-0.52, n 26-49) and their fold,
     raise and bet rates against hero are on target (fold 0.47 / 0.50, raise 0.084 / 0.083, n 109; bet when checked to
-    0.32 / 0.34, n 115). The bots show 0.56-0.60 there. Tried and dropped as bot settings to reproduce it: strong hands
+    0.32 / 0.34, n 115). The bots show 0.61 there (n 58-66; the friends' 0.74 and these count preflop all-ins too). Tried and dropped as bot settings to reproduce it: strong hands
     trapping hero on the flop and turn (up to 100%, from the raise threshold or the 0.75 percentile, with or without
-    draws betting in their place) 0.53-0.58, and hero's turn and river pots played straight (fewer bluffs and draw
-    calls, thinner value) 0.52; none moved the sim's big-pot results or EV gap, and the trapping versions made the bots
+    draws betting in their place) 0.57-0.61, and hero's turn and river pots played straight (fewer bluffs and draw
+    calls, thinner value) 0.56; none moved the sim's big-pot results or EV gap, and the trapping versions made the bots
     bet into hero less than the reads say, which the logs contradict. Real hero wins 20% of 100bb+ pots (mean -8.5 ±
     8.5 bb, n 41), the sim's 45-50%.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
