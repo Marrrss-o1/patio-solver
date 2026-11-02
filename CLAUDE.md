@@ -400,10 +400,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   called on each street (`sizes.faced`, x the pot before it), and `applyAction` reads a call with the player's fold
   rate at that size (`foldAtSize`) instead of their fold rate against a third of the pot, so a call of a pot-size bet
   keeps the top third or so of the range and a call of a min-bet most of it. Shown hands are always scored this way.
-  Logs (247 shows): x1.52 -> x1.57 of a random guess. Bots (twin sim, 5-handed, 714 shows): x2.04 -> x2.00, since the
-  bots call big bets more like the old read (their draws call up to a pot-size bet at 0.85). Simulator, live budget,
-  against v1.8.7: 4-handed -37.1 ± 16.9 (seed 801), heads-up -7.4 ± 21.2 (seed 804). Fits the friends, loses on the
-  bots: held for Marwin (2 Nov night rule: reads changes that fit the logs but lose or tie in sims don't merge).
+  Logs (247 shows): x1.52 -> x1.57 of a random guess (31 Oct +1.3 nats over 94 shows, 1 Nov -0.8 over 48, 2 Nov +7.1
+  over 105). Bots (twin sim, 5-handed, 714 shows): x2.04 -> x2.00, since the bots call big bets more like the old read
+  (their draws call up to a pot-size bet at 0.85). Simulator, live budget, against v1.8.7, 1,000 deals each: 4-handed
+  -37.1 ± 16.9 (seed 801) and +14.9 ± 16.9 (802), 5-handed -10.8 ± 17.0 (803), 6-handed +3.9 ± 13.5 (805), heads-up
+  -7.4 ± 21.2 (804); pooled -6.1 ± 7.4. Fits the friends, ties on the bots: held for Marwin (2 Nov night rule: reads
+  changes that fit the logs but lose or tie in sims don't merge).
 - Simulator validity (diagnosis thread, 2 Nov night; scripts in /mnt/project-files/patio-solver/scripts/
   2026-11-02-diagnose/):
   - Friends don't adapt to frequent big raisers preflop: continue log-odds against raises to 30bb+ move -0.07 ± 0.52
