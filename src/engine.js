@@ -4713,7 +4713,9 @@
       const allIn = h >= E - 1e-9 || o >= oMax - 1e-9;
       const potF = P0 + h + m * o;
       const n = allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF) };
-      if (m > 1) { n.m = m; n.kap = kap || kapFor(k); }
+      // cfg.measuredFlop === false (input.pfMeasuredFlop): the measured share only where the hand is
+      // all-in; leaves that go to a flop keep the interpolated kappa.
+      if (m > 1) { n.m = m; n.kap = kap && (allIn || cfg.measuredFlop !== false) ? kap : kapFor(k); }
       return n;
     }
     // q: the quantiles of the opponent's range in this part of the tree (the field's hand can
@@ -6170,7 +6172,7 @@
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi, callField: callCf, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
+        raises, noLimp: fieldOpen, multi, callField: callCf, measuredFlop: input.pfMeasuredFlop !== false, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
       });
