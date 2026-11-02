@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.6
+// @version      1.8.7
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -375,6 +375,16 @@ function ENGINE() {
       // went from x1.08 to x1.26 of a random guess (22 shows; all shows x1.58 -> x1.63, 31 Oct and
       // 1 Nov both up; action log-loss unchanged). Hero's own range (solid) keeps the old rule.
       bigBetMedium: { size: 0.9, floor: 1 },
+      // Bets on the turn (4) or river (5) by a player who only called on the street before (a lead
+      // into that street's bettor, or a bet once checked to): `odds` scales the odds of their bet rate
+      // on that street, `noise` their range noise on that bet, `bluff` the bluff share. Friends rarely
+      // bet after calling: 13% on the turn (87 chances) and 26% on the river (77), against 25% / 48%
+      // after a checked street and 43% / 55% after betting it (all logs, 369 hands). Every turn lead
+      // after a flop call in the new logs was shown (4 of 4: two pair twice, a turned top pair, a turned
+      // straight), all made by the turn card; read from the whole turn rate with half the range random,
+      // they looked like a third bluffs and draws. No random share and half the bluffs fit the shown
+      // turn bets best (x2.07 -> x3.30 of a guess, 8 shows; river x1.51 -> x1.54, 11 shows).
+      afterCall: { 4: { odds: 0.43, noise: 0, bluff: 0.5 }, 5: { odds: 0.48, noise: 0, bluff: 0.5 } },
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -848,6 +858,7 @@ function ENGINE() {
     const nz = prior.noise || { mu: 0.45, k: 3 };
     stats.rangeNoise = nz.mu;
     stats.bigBetMedium = prior.bigBetMedium || null;
+    stats.afterCall = prior.afterCall || null;
     const fn = fits.filter((f) => f.nl && f.nl.length === NOISES.length);
     if (fn.length) {
       const sum = NOISES.map((_, i) => fn.reduce((a, f) => a + f.nl[i], 0));
@@ -1430,7 +1441,11 @@ function ENGINE() {
     stats = streetStats(stats, st.street);
     if (opts && opts.cbet && action === 'bet') stats = Object.assign({}, stats, { betFreq: stats.cbet });
     if (opts && opts.cbet && action === 'check') stats = Object.assign({}, stats, { betFreq: stats.cbet });
-    const vr = valueShare(stats, size);
+    // A bet on the turn or river after only calling the street before (READ_PRIORS.home.afterCall).
+    const ac = opts && opts.afterCall && action === 'bet' && stats.afterCall ? stats.afterCall[st.street] : null;
+    if (ac && ac.odds != null) stats = Object.assign({}, stats, { betFreq: oddsScale(stats.betFreq, ac.odds) });
+    let vr = valueShare(stats, size);
+    if (ac && ac.bluff != null) vr = 1 - (1 - vr) * ac.bluff;
     // Big bets come from a narrower, more polarized range; small bets from a wider one
     // that includes more medium hands. Tiny bets and min-raises (under about a third of the pot)
     // are wider still: at the owner's table they came with K4s, K8o, Q9o and draws, not the nuts.
@@ -1485,6 +1500,7 @@ function ENGINE() {
     // logs (31 Oct + 1 Nov) 5 of 6 shown postflop raises of pot or more were top pair or better, both
     // flop ones (A3 on A-5-4, Q7 on Q-7-8 for 6.7x the pot); flop min-raises stay wide.
     if (action === 'raise' && (st.street >= 4 || (stats.flopBigRaise && size >= 1))) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
+    if (ac && ac.noise != null) eps *= ac.noise;
     if (eps > 0) {
       let sw = 0, sp = 0;
       for (let k = 0; k < NUM_COMBOS; k++) if (W[k] > 0) { sw += W[k]; sp += W[k] * P[k]; }
@@ -1526,12 +1542,16 @@ function ENGINE() {
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
 
     const streets = [['flop', 3], ['turn', 4], ['river', 5]];
+    let prevAct = null;
     for (const [name, len] of streets) {
       const st = strengths[len];
       const act = STREET_ACTION_MAP[actions[name]];
       if (!st || !act) continue;
       const cbet = name === 'flop' && (pfAggressor || (pfAggressor == null && PRE_RAISED.test(actions.pre || '')));
-      const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet });
+      // Only called on the street before (a call or a check-call), now bets.
+      const afterCall = len >= 4 && act === 'bet' && prevAct === 'call';
+      prevAct = act;
+      const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet, afterCall });
       if (sumWeights(next) > 1e-9) W = next;
       W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
       // Bet, then called a raise: keep the part of the betting range that continues.
@@ -5076,6 +5096,11 @@ function ENGINE() {
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
       if (input.bigBetMedium === false) { stats.bigBetMedium = null; if (statsHU) statsHU.bigBetMedium = null; }
+      // input.afterCall: false turns READ_PRIORS.home.afterCall off, an object replaces it (simulator).
+      if (input.afterCall != null) {
+        const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
+        stats.afterCall = ac; if (statsHU) statsHU.afterCall = ac;
+      }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
