@@ -1741,9 +1741,16 @@
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const floor = big * fade * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
       let cont = Math.max(base * (mdf / 0.5), floor);
-      if (BIG_INPOT && BIG_CLIFF) {
-        cont = clamp(cont * bigFadeRaw(kind.amount + (ctx.heroBet || 0), ctx.bigBlind), 0.03, 0.97);
-        return { cont, nut: 0.965, reraise: Math.min(cont, 0.2 * base) };
+      // Only players with little in the pot so far (opp.committed, chips in before this raise): in the logs, the first
+      // time a player already in faces a raise to 30bb+, those with under a tenth of the raise-to in continued 4 of 53
+      // times, those with a quarter or more 4 of 5. The fade is full below 5% of the raise-to and gone above 20%.
+      const raiseTo = kind.amount + (ctx.heroBet || 0);
+      if (BIG_INPOT && BIG_CLIFF && opp.committed != null && raiseTo > 30 * ctx.bigBlind) {
+        const w = clamp(1 - (opp.committed / raiseTo - 0.05) / 0.15, 0, 1);
+        if (w > 0) {
+          cont = clamp(cont * Math.pow(bigFadeRaw(raiseTo, ctx.bigBlind), w), 0.03, 0.97);
+          return { cont, nut: 0.965, reraise: Math.min(cont, 0.2 * base) };
+        }
       }
       return { cont: clamp(cont, 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
     }
@@ -4770,7 +4777,7 @@
           cont = r.cont; raise = r.raise;
         } else {
           const mdf = (potNow - facing) / potNow;
-          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead }, mdf, { amount: hIn });
+          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' }, committed: (cfg.heroBet || 0) + toCall + oIn }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead }, mdf, { amount: hIn });
           cont = rule.cont; raise = Math.min(rule.reraise, rule.cont);
         }
       }
@@ -5239,6 +5246,7 @@
         : currentAction === 'bet' || currentAction === 'betcall' || currentAction === 'raise' || currentAction === 'checkraise';
       return {
         name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
+        committed: o.committed != null ? +o.committed : null,
         // They bet or raised on some street after the flop: from here on their range is strong.
         aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
         // Whether the plans and solvers fold them at foldAfterAgg (see AGGRO_FOLD).

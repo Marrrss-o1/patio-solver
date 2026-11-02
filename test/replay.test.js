@@ -1969,13 +1969,21 @@ test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old s
   assert.ok(on[2].cont >= 0.25 * off[2].cont - 1e-9, 'the fade stops at a quarter of the floor');
 });
 
-test('pfBigInPot: players already in the pot fold to raises above 30bb without the floor (off by default)', () => {
-  const off = fourBetSpot({}), on = fourBetSpot({ pfBigInPot: true });
-  near(on[0].cont, off[0].cont); // to 26.5bb: the re-raise read, unchanged
-  for (let i = 1; i < on.length; i++) {
-    assert.ok(on[i].cont < off[i].cont - 0.05 && on[i].cont >= 0.03 - 1e-9, `${i}: ${on[i].cont} vs ${off[i].cont}`);
-    assert.ok(on[i].reraise <= on[i].cont + 1e-9);
-  }
+test('pfBigInPot: players with little in the pot fold to shoves above 30bb, committed ones keep the old rule (off by default)', () => {
+  const shove = (vIn, pot, toCall, extra) => {
+    const r = E.analyzeSync(Object.assign({
+      hero: [E.parseCard('Kh'), E.parseCard('Qh')], board: [], pot, toCall, stack: 148, bigBlind: 2, inPosition: false, tableStyle: 'typical',
+      heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroCommitted: 2, heroBet: 2,
+      opponents: [{ name: 'V', tally: {}, actions: { pre: vIn > 2 ? 'raise' : 'call' }, sizes: {}, pfAggressor: vIn > 2, position: 'late', committed: vIn, stack: 300 - vIn, bet: vIn, heroIP: false }],
+      iterations: 2000, mix: false, seed: 1,
+    }, extra));
+    return r.scenarios.find((x) => x.kind === 'allin').opp[0];
+  };
+  // A limper (1bb in) facing a shove to 75bb: the fade, at most a few percent left.
+  const off = shove(2, 50, 0, {}), on = shove(2, 50, 0, { pfBigInPot: true });
+  assert.ok(on.cont < off.cont - 0.05 && on.cont <= 0.06 && on.reraise <= on.cont + 1e-9, `limper ${on.cont} vs ${off.cont}`);
+  // An opener with 15bb in (a fifth of the raise-to) facing the same shove: unchanged.
+  near(shove(30, 33, 28, { pfBigInPot: true }).cont, shove(30, 33, 28, {}).cont);
 });
 
 test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead false: old rule)', () => {
