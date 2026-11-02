@@ -446,8 +446,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     0.44, n 371; to hero's 0.50 against 0.47, n 109). So the sim pays hero's big value bets more often than the
     friends do. Their big calls are as strong as the friends' against main's read (shown hands after calling 0.85 pot
     or more: friends 0.567 ± 0.052, n 33; v6 bots 0.558 ± 0.029, n 101; v7 0.526 ± 0.033, n 60). The leaks thread's v7
-    bots (test/sim/profiles-v7.json, bigCall 0.18, on branch claude/project-thread-4ko8nc) fold to big-pot bets at the
-    read, and their showdowns per hand drop from 0.87 to 0.60 (friends 0.54).
+    bots (test/sim/profiles-v7.json, bigCall 0.18, PR #83) fold to big-pot bets at the read, and their showdowns per
+    hand drop from 0.87 to 0.60 (friends 0.54).
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
