@@ -5113,7 +5113,8 @@
 
     if (toCall <= 0) {
       addScenario({ kind: 'check', label: 'Check', amount: 0 });
-      const fracs = street === 0 ? [0.75, 1, 1.5] : [0.33, 0.5, 0.75, 1, 1.5];
+      // input.pfBetFracs / pfRaiseFracs: other preflop sizes (pot fractions), for the simulator.
+      const fracs = street === 0 ? (Array.isArray(input.pfBetFracs) ? input.pfBetFracs.map(Number) : [0.75, 1, 1.5]) : [0.33, 0.5, 0.75, 1, 1.5];
       for (const f of fracs) {
         const amt = cap(Math.max(bigBlind, roundChips(f * pot, bigBlind)));
         addScenario({ kind: amt >= stack ? 'allin' : 'bet', label: amt >= stack ? 'All-in' : 'Bet', sizeLabel: fmtFrac(f), amount: amt });
@@ -5123,10 +5124,10 @@
       addScenario({ kind: 'fold', label: 'Fold', amount: 0 });
       addScenario({ kind: toCall >= stack ? 'allin' : 'call', label: toCall >= stack ? 'Call all-in' : 'Call', amount: cap(toCall) });
       if (stack > toCall) {
-        const fracs = street === 0 ? [0.6, 1, 1.6] : [0.6, 1];
+        const fracs = street === 0 ? (Array.isArray(input.pfRaiseFracs) ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) : [0.6, 1];
         for (const f of fracs) {
           const amt = cap(roundChips(toCall + f * (pot + toCall), bigBlind));
-          const label = street === 0 ? (f === 0.6 ? 'small raise' : f === 1 ? 'pot-size raise' : 'big raise') : (f === 1 ? 'pot-size raise' : 'raise');
+          const label = street === 0 ? (f <= 0.6 ? 'small raise' : f === 1 ? 'pot-size raise' : f <= 1.6 ? 'big raise' : 'very big raise') : (f === 1 ? 'pot-size raise' : 'raise');
           addScenario({ kind: amt >= stack ? 'allin' : 'raise', label: amt >= stack ? 'All-in' : 'Raise', sizeLabel: label, amount: amt });
         }
         if (shoveMakesSense) addScenario({ kind: 'allin', label: 'All-in', amount: stack });

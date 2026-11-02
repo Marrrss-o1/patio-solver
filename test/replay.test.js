@@ -1288,6 +1288,29 @@ test('kernels: river, preflop, turn and flop solves give bit-identical results w
   }
 });
 
+test('preflop sizes: pfRaiseFracs and pfBetFracs add sizes for the simulator, defaults unchanged', () => {
+  const spot = { hero: C('Ac Kc'), board: [], pot: 55, toCall: 10, stack: 1500, bigBlind: 10, inPosition: true, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }, { name: 'P', tally: {}, actions: { pre: 'pending' } }] };
+  const raises = (r) => r.scenarios.filter((s) => s.kind === 'raise' || s.kind === 'allin').map((s) => s.amount).sort((a, b) => a - b);
+  assert.deepStrictEqual(raises(E.analyzeSync(spot)), [50, 75, 115]);
+  const big = Object.assign({}, spot, { pfRaiseFracs: [0.6, 1, 1.6, 2.6] });
+  const r = E.analyzeSync(big);
+  assert.deepStrictEqual(raises(r), [50, 75, 115, 180]);
+  assert.ok(r.solver, 'the preflop solver ran with the extra size');
+  if (E.kernelsActive()) {
+    E.useKernels(false);
+    let noK;
+    try { noK = E.analyzeSync(big); } finally { E.useKernels(true); }
+    assert.strictEqual(JSON.stringify(noK.ranked), JSON.stringify(r.ranked));
+  }
+  // The big blind's option (nothing to call): opening-bet fractions of the pot.
+  const opt = { hero: C('Qh Qd'), board: [], pot: 40, toCall: 0, stack: 1500, bigBlind: 10, inPosition: false, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }] };
+  const bets = (x) => x.scenarios.filter((s) => s.kind === 'bet').map((s) => s.amount).sort((a, b) => a - b);
+  assert.deepStrictEqual(bets(E.analyzeSync(opt)), [30, 40, 60]);
+  assert.deepStrictEqual(bets(E.analyzeSync(Object.assign({}, opt, { pfBetFracs: [0.75, 1, 1.5, 2.5] }))), [30, 40, 60, 100]);
+});
+
 // ---------------------------------------------------------------------------
 // 9. Audit: chip accounting (pot odds, side pots, all-ins, blinds)
 // ---------------------------------------------------------------------------
