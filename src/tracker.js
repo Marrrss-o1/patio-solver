@@ -113,6 +113,12 @@
     const avg = (k) => Math.round((fits.reduce((a, f) => a + (f[k] || 0), 0) / fits.length) * 100) / 100;
     return { n: fits.length, hits, hitRate: Math.round((hits / fits.length) * 100) / 100, avgTop: avg('top'), avgLr: avg('lr') };
   }
+  // A player's bet sizes this hand, with its own copy of the sizes they called (`faced`).
+  function copySizes(s) {
+    const out = Object.assign({}, s);
+    if (s && s.faced) out.faced = Object.assign({}, s.faced);
+    return out;
+  }
   function sizeBucket(f) {
     return f < 0.45 ? 'small' : f < 0.85 ? 'medium' : 'large';
   }
@@ -421,6 +427,12 @@
         if (kind === 'bet' || kind === 'raise') {
           p.agg.push({ n: h.board.length, frac: Math.round(frac * 100) / 100 });
           p.sizes[key] = Math.round(frac * 100) / 100;
+        }
+        // The biggest bet they called on this street (x the pot before it), for their calling range.
+        if (kind === 'call' && facing > 0) {
+          const fz = Math.round(Math.min(3, facing / Math.max(1, potBefore - facing)) * 100) / 100;
+          const fc = p.sizes.faced || (p.sizes.faced = {});
+          if (!(fc[key] >= fz)) fc[key] = fz;
         }
         // C-bets: the preflop raiser's first flop decision, and replies to their flop bet.
         const cbetSpot = street === 3 && h.pfRaiser != null;
@@ -794,7 +806,7 @@
       if (actions.pre === 'pending' && !p.blindAllin) actions.pre = 'call';
       const show = {
         cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
-        actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
+        actions, sizes: copySizes(p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
       };
       // How well the range we would have put them on matches what they showed.
       // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.
@@ -913,7 +925,7 @@
         // A player all-in from posting a blind made no preflop choice: 'pending' reads as any two cards.
         if (street > 0 && actions.pre === 'pending' && !o.blindAllin) actions.pre = 'call';
         const cbetter = h.pfRaiser === o.id;
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
+        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: copySizes(o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
           // For side pots: chips already in the pot this hand, and chips behind.
           committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null,
           // Chips in on this street (blinds count), so the engine knows what each still owes.
@@ -929,7 +941,7 @@
           inPosition, tableStyle: tableStyle || 'typical',
           opponents,
           // Hero's own line this hand, so the river solver knows what hero's range looks like.
-          heroActions: lineOf(hero), heroSizes: Object.assign({}, hero.sizes),
+          heroActions: lineOf(hero), heroSizes: copySizes(hero.sizes),
           heroPfAggressor: h.pfRaiser === heroId, heroPosition: this.posGroup(heroId),
           heroCommitted: hero.total, heroBet: hero.stageBet,
           // Every action so far and the effective stack at the start of the hand (blueprint lookup).

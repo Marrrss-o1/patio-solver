@@ -233,7 +233,22 @@ test('showdown hand: bet sizes reach the solver input', () => {
   const x = replay(sd).turns[3];
   assert.strictEqual(x.input.pot, 420);
   assert.strictEqual(x.input.toCall, 60);
-  assert.deepStrictEqual(x.input.opponents[0].sizes, { turn: 1, river: 0.17 });
+  // faced: the biggest bet they called on each street (hero's half-pot c-bet).
+  assert.deepStrictEqual(x.input.opponents[0].sizes, { turn: 1, river: 0.17, faced: { flop: 0.5 } });
+});
+
+test('calling ranges: a call of a pot-size bet reads stronger than a call of a third of the pot', () => {
+  const board = ['Kh', '8d', '3c'].map(E.parseCard);
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
+  const stats = E.computeStats({}, 'typical');
+  const acts = { pre: 'call', flop: 'call' };
+  const meanHs = (W) => { let s = 0, w = 0; for (let k = 0; k < W.length; k++) if (W[k] > 0) { s += W[k] * strengths[3].hs[k]; w += W[k]; } return s / w; };
+  const small = E.buildRange(stats, acts, strengths, board, { faced: { flop: 0.33 } }, false, 'late');
+  const big = E.buildRange(stats, acts, strengths, board, { faced: { flop: 1 } }, false, 'late');
+  const none = E.buildRange(stats, acts, strengths, board, {}, false, 'late');
+  assert.ok(meanHs(big) > meanHs(small) + 0.02, meanHs(big) + ' vs ' + meanHs(small));
+  // Without a size the call reads as before (the fold rate against a third of the pot).
+  assert.ok(Math.abs(meanHs(none) - meanHs(small)) < 0.02, meanHs(none) + ' vs ' + meanHs(small));
 });
 
 test('showdown hand: hero c-bet is counted as hero being the preflop raiser', () => {
