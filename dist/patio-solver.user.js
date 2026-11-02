@@ -6972,7 +6972,7 @@ ENGINE();
       if (!adv) return;
       adv.did = kind + (added > 0 ? ' ' + r2(added) : '');
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
-      if (adv.kind) adv.followed = group(adv.kind) === group(kind) || (adv.kind === 'allin' && kind === 'call');
+      if (adv.kind) adv.followed = PatioTracker.followedAdvice(adv, kind);
       // How far hero's bet or raise was from the advised size (1 = as advised; a min-raise against
       // "raise to 7x" shows as about 0.3). `followed` only checks the kind of action.
       if (adv.amount > 0 && added > 0 && group(adv.kind) === 'aggr' && group(kind) === 'aggr') adv.sizeRatio = r2(added / adv.amount);
@@ -7258,6 +7258,14 @@ ENGINE();
 
     // A player's preflop line for the solver: like streetAction, but a re-raise once the pot already
     // had two raises is a '4bet', and three or more a '5bet'.
+    // Whether hero's action kind matches the advice: any bet or raise for an aggressive advice, and a call for
+    // "Call all-in" (an all-in advice that only matches the bet). A call against an all-in raise is not following.
+    static followedAdvice(adv, kind) {
+      const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
+      if (adv.kind === 'allin' && kind === 'call') return !(adv.amount > (adv.toCall || 0) + 1e-9);
+      return group(adv.kind) === group(kind);
+    }
+
     static preAction(p) {
       const a = PatioTracker.streetAction(p.seq.pre, 0);
       if ((a === '3bet' || a === 'raise') && p.preTop >= 3) return p.preTop >= 4 ? '5bet' : '4bet';

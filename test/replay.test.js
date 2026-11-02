@@ -112,6 +112,16 @@ test('hand log: every action with amount, pot, stack, advice match and result', 
   assert.strictEqual(e.heroNetBB, 5);
 });
 
+test('followed: a call matches "Call all-in" advice but not an all-in raise', () => {
+  const f = T.followedAdvice;
+  assert.strictEqual(f({ kind: 'allin', amount: 40, toCall: 40 }, 'call'), true);
+  assert.strictEqual(f({ kind: 'allin', amount: 300, toCall: 40 }, 'call'), false);
+  assert.strictEqual(f({ kind: 'allin', amount: 300, toCall: 40 }, 'raise'), true);
+  assert.strictEqual(f({ kind: 'raise', amount: 120, toCall: 40 }, 'allin'), true);
+  assert.strictEqual(f({ kind: 'call', amount: 40, toCall: 40 }, 'call'), true);
+  assert.strictEqual(f({ kind: 'check', amount: 0, toCall: 0 }, 'bet'), false);
+});
+
 test('real hand: solver returns a sane recommendation on the turn', () => {
   const x = replay(real).turns[2];
   const r = E.analyzeSync(Object.assign({}, x.input, { iterations: 6000 }));
