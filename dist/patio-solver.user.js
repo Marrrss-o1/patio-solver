@@ -5140,7 +5140,9 @@ function ENGINE() {
       addScenario({ kind: 'fold', label: 'Fold', amount: 0 });
       addScenario({ kind: toCall >= stack ? 'allin' : 'call', label: toCall >= stack ? 'Call all-in' : 'Call', amount: cap(toCall) });
       if (stack > toCall) {
-        const fracs = street === 0 ? (Array.isArray(input.pfRaiseFracs) ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) : [0.6, 1];
+        // input.pfRaiseHUOnly: the extra sizes only with one opponent left (the field solver's hand doesn't narrow with size).
+        const pfExtra = Array.isArray(input.pfRaiseFracs) && (input.pfRaiseHUOnly !== true || opps.length === 1);
+        const fracs = street === 0 ? (pfExtra ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) : [0.6, 1];
         for (const f of fracs) {
           const amt = cap(roundChips(toCall + f * (pot + toCall), bigBlind));
           // input.pfRaiseCapBB: sizes beyond the usual three only when the raise-to stays at or under this many bb.

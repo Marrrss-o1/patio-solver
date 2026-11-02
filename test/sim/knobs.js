@@ -20,7 +20,7 @@ const KNOBS = {
   // Hero's raise sizes after the flop, x (pot + call), added to the call.
   raiseSizes: { def: [0.6, 1], edits: [[' : [0.6, 1];', (v) => ` : ${list(v)};`]] },
   // Hero's preflop raise sizes facing a bet (limps, opens, 3-bets), same units.
-  preRaiseSizes: { def: [0.6, 1, 1.6], edits: [['input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) :', (v) => `input.pfRaiseFracs.map(Number) : ${list(v)}) :`]] },
+  preRaiseSizes: { def: [0.6, 1, 1.6], edits: [['(pfExtra ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) :', (v) => `(pfExtra ? input.pfRaiseFracs.map(Number) : ${list(v)}) :`]] },
   // River solver: hero's bet sizes x pot (at most 3: a node has at most 4 actions).
   riverSizes: { def: [0.33, 0.66, 1], edits: [['const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];', (v) => { if (v.length > 3) throw new Error('riverSizes: at most 3'); return `const fracs = player === 0 ? ${list(v)} : [oppBetFrac];`; }]] },
   // Shove threshold preflop: all-in is an option at [stack <= v[0] big blinds] or [stack <= v[1] x (pot + call)].
