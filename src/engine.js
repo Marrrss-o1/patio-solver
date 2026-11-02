@@ -1427,7 +1427,9 @@
     // A bet on the turn or river after only calling the street before (READ_PRIORS.home.afterCall).
     const ac = opts && opts.afterCall && action === 'bet' && stats.afterCall ? stats.afterCall[st.street] : null;
     if (ac && ac.odds != null) stats = Object.assign({}, stats, { betFreq: oddsScale(stats.betFreq, ac.odds) });
-    const vr = valueShare(stats, size);
+    let vr = valueShare(stats, size);
+    // `bluff` (simulator option, not in the prior): scales the bluff share of that bet.
+    if (ac && ac.bluff != null) vr = 1 - (1 - vr) * ac.bluff;
     // Big bets come from a narrower, more polarized range; small bets from a wider one
     // that includes more medium hands. Tiny bets and min-raises (under about a third of the pot)
     // are wider still: at the owner's table they came with K4s, K8o, Q9o and draws, not the nuts.
