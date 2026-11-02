@@ -1875,8 +1875,9 @@
   const OVERCALL_FOLD = 1.3;
   // Extra strength tilt on opponents' ranges in hero's pots after the flop, ramped in from `from` to `to` bb of pot
   // (createAnalysis, input.heroPotTilt). With `learn`, `tilt` is the prior of a tilt learned from the table's own
-  // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts.
-  const HERO_POT_TILT = { tilt: 0.3, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10 };
+  // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts, never below `min`: a learned tilt
+  // under 0 (hero's pots weaker than the rest) came only from the bots' noise and cost there (about -8 ± 6 bb/100).
+  const HERO_POT_TILT = { tilt: 0.3, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0 };
   // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
   // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
   // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
@@ -1897,7 +1898,7 @@
     };
     const base = hps && ok(hps.ho) && hps.hoN > 0 ? argmax((t) => at(hps.ho, t) - cfg.kBase * t * t, -0.5, 0.5) : 0;
     if (!(hps && ok(hps.hi) && hps.hiN > 0)) return { tilt: cfg.tilt, base, n: 0 };
-    const d = argmax((x) => at(hps.hi, base + x) - cfg.k * (x - cfg.tilt) * (x - cfg.tilt), -0.3, 0.75);
+    const d = argmax((x) => at(hps.hi, base + x) - cfg.k * (x - cfg.tilt) * (x - cfg.tilt), Number.isFinite(cfg.min) ? cfg.min : -0.3, 0.75);
     return { tilt: Math.round(d * 1000) / 1000, base: Math.round(base * 1000) / 1000, n: hps.hiN };
   }
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;

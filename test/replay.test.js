@@ -1966,6 +1966,13 @@ test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of th
   // Ranges off everywhere by the same amount: not a hero-pot effect.
   const offAll = tilt({ hi: curve(60, -0.15), hiN: 60, ho: curve(60, -0.15), hoN: 60 });
   assert.ok(Math.abs(offAll) < 0.06, `off everywhere ${offAll}`);
+  // Weaker in hero's pots than elsewhere: held at 0 by default (min), learned below 0 only with a lower min.
+  const weaker = { hi: curve(60, -0.2), hiN: 60, ho: curve(60, 0), hoN: 60 };
+  assert.strictEqual(tilt(weaker), 0);
+  const below = E.analyzeSync({ hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h'].map(E.parseCard), pot: 60,
+    toCall: 0, stack: 300, bigBlind: 2, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: '' }, bet: 0 }], iterations: 500, mix: false,
+    seed: 1, heroPotTilt: { min: -0.3 }, heroPotShows: weaker }).heroPot.tilt;
+  assert.ok(below < -0.1, `below 0 with min -0.3: ${below}`);
   const few = tilt({ hi: curve(4, 0), hiN: 4, ho: curve(60, 0), hoN: 60 });
   assert.ok(few >= 0.12 && few < 0.29, `four shows ${few}`); // a few shows move it part of the way
   assert.strictEqual(E.analyzeSync(Object.assign({}, { hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard), pot: 60, toCall: 0,
