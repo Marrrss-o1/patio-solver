@@ -1680,11 +1680,18 @@
   // size-blind above 8bb, so a raise to 100bb looked as often called as one to 20bb and big hands raised far too big.
   // Above 30bb it now fades as (30bb / size)^2.5, to no less than a quarter (so junk shoves don't start to look good on
   // a few dozen logged folds; input.bigCliffFloor sets it). input.bigCliff === false keeps the old floor.
-  let BIG_CLIFF = true, BIG_FLOOR = 0.25;
+  let BIG_CLIFF = true, BIG_FLOOR = 0.25, BIG_INPOT = false;
   function bigFade(chips, bigBlind) {
     if (!BIG_CLIFF) return 1;
     const L = chips / Math.max(1e-9, bigBlind);
     return L <= 30 ? 1 : Math.max(BIG_FLOOR, Math.pow(30 / L, 2.5));
+  }
+  // The same fade without the floor, for players already in the pot (input.pfBigInPot): in the logs 0 of 24 limpers and
+  // raisers continued against a raise to 35bb or more, while the rule below (base x mdf, or the callBig floor) kept them
+  // calling 14-20% of the time at 100bb.
+  function bigFadeRaw(chips, bigBlind) {
+    const L = chips / Math.max(1e-9, bigBlind);
+    return L <= 30 ? 1 : Math.pow(30 / L, 2.5);
   }
 
   // A player's learned response to an open raise to `toBB` big blinds (stats.vsOpen, when the
@@ -1733,7 +1740,12 @@
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const floor = big * fade * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
-      return { cont: clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
+      let cont = Math.max(base * (mdf / 0.5), floor);
+      if (BIG_INPOT && BIG_CLIFF) {
+        cont = clamp(cont * bigFadeRaw(kind.amount + (ctx.heroBet || 0), ctx.bigBlind), 0.03, 0.97);
+        return { cont, nut: 0.965, reraise: Math.min(cont, 0.2 * base) };
+      }
+      return { cont: clamp(cont, 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
     let fold = foldAtSize(s, f, ctx.street);
@@ -5156,6 +5168,7 @@
   function createAnalysis(input) {
     BIG_CLIFF = input.bigCliff !== false;
     BIG_FLOOR = input.bigCliffFloor != null ? clamp(+input.bigCliffFloor, 0, 1) : 0.25;
+    BIG_INPOT = input.pfBigInPot === true;
     const hero = input.hero.slice();
     const board = input.board.slice();
     const street = board.length;
