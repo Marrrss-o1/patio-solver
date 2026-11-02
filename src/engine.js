@@ -6159,7 +6159,10 @@
       // for every size (the pot-size raise's), a shove into four players kept 1 - prod(fold) near
       // 1 and the field barely narrowed, so it called with too weak a hand.
       const bySize = field && input.pfFieldBySize === true;
-      const fieldWOf = (sc) => (sc === mid ? oppCw : fieldMax(oppCws, sc.opp.map((r) => r.cont)));
+      // input.pfFieldRange === false keeps the pot-size raise's field hand for every size (and the call),
+      // with the measured shares (kapBy, kapCall) still on.
+      const fieldRange = input.pfFieldRange !== false;
+      const fieldWOf = (sc) => (sc === mid || !fieldRange ? oppCw : fieldMax(oppCws, sc.opp.map((r) => r.cont)));
       const rootResp = (amt) => {
         const sc = raisesSc.find((s) => Math.abs(capE(s.amount) - amt) < 1e-9);
         let fold = 1, noRaise = 1;
@@ -6194,7 +6197,7 @@
       // measured the same way. Before, it was the field that calls a pot-size raise, with kappa for K players.
       const pasSc = scenarios.find((s) => s.kind !== 'fold' && s.amount <= toCall + 1e-9);
       const callCf = callField && multi && multi.kapCall
-        ? { w: fieldMax(oppCws, opps.map((o, i) => (o.pending && pasSc ? pasSc.opp[i].cont : 1))), kap: multi.kapCall } : null;
+        ? { w: fieldRange ? fieldMax(oppCws, opps.map((o, i) => (o.pending && pasSc ? pasSc.opp[i].cont : 1))) : oppCw, kap: multi.kapCall } : null;
       const pf = preflopSolve({
         heroW: heroCw, oppW: oppCw, heroClass: hc, pot: potWin, toCall, stack: E, bigBlind, heroIP: inPosition,
         rootActs: raisesSc.map((s) => (bySize ? { amount: capE(s.amount), fieldW: fieldWOf(s) } : { amount: capE(s.amount) })),
