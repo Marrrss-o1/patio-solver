@@ -396,6 +396,35 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   under 0.5 (`input.mwRaiseEq`, kept as a simulator option): 4-handed +2.6 ± 8.2 and -0.1 ± 7.2, 5-handed -3.1 ± 8.6
   (4-5% of hands change). The exploit.js spot table had multiway raises at about -30 bb a hand against -8 for calls,
   but that compares hands, not choices.
+- Calling ranges by size (`input.callSizeRange`, false turns it off): the tracker records the biggest bet each player
+  called on each street (`sizes.faced`, x the pot before it), and `applyAction` reads a call with the player's fold
+  rate at that size (`foldAtSize`) instead of their fold rate against a third of the pot, so a call of a pot-size bet
+  keeps the top third or so of the range and a call of a min-bet most of it. Shown hands are always scored this way.
+  Logs (247 shows): x1.52 -> x1.57 of a random guess. Bots (twin sim, 5-handed, 714 shows): x2.04 -> x2.00, since the
+  bots call big bets more like the old read (their draws call up to a pot-size bet at 0.85). Simulator, live budget,
+  against v1.8.7: 4-handed -37.1 ± 16.9 (seed 801), heads-up -7.4 ± 21.2 (seed 804). Fits the friends, loses on the
+  bots: held for Marwin (2 Nov night rule: reads changes that fit the logs but lose or tie in sims don't merge).
+- Simulator validity (diagnosis thread, 2 Nov night; scripts in /mnt/project-files/patio-solver/scripts/
+  2026-11-02-diagnose/):
+  - Friends don't adapt to frequent big raisers preflop: continue log-odds against raises to 30bb+ move -0.07 ± 0.52
+    per log of the raiser's rate against the table's (n 95; first time facing 8bb+ with little in the pot -0.12 ± 0.48,
+    n 140), and two players who shoved 85-175bb in 5 of 19 and 6 of 92 hands got 1 call in about 37 answers. So the
+    bots' static folding to big raises matches the logs. `run.js --adapt ALPHA` (test/sim/README.md) is a stress test
+    for advice that wins only while big raises keep getting folded; every run's summary has `heroRaisesPerHand`.
+  - Hero's big pots: on real hands the advised EV of hero's followed postflop decisions runs 9.9 ± 3.4 bb above what
+    came back (clustered by hand, 272 decisions); flop bets 16.8 ± 5.9 (n 46), turn and river decisions against players
+    who were passive on the flop 9.8 ± 2.7 (16.4 ± 4.6 in 15bb+ pots), against flop aggressors 1.9 ± 12.0. In the twin
+    sim (the solver against friend bots, logs in the export format) the advice is about right overall (what came back
+    minus the advised EV -0.8 to +4 bb) and flop bets come back 2 to 10 bb above it. Shown hands: in hero's
+    pots with 15bb+ put in, friends' hands after a passive flop sit at 0.74 of the predicted range (n 23; 0.52 after
+    flop aggression, n 6), while every line is on target in pots without hero (0.51-0.54, n 26-49) and their fold,
+    raise and bet rates against hero are on target (fold 0.47 / 0.50, raise 0.084 / 0.083, n 109; bet when checked to
+    0.32 / 0.34, n 115). The bots show 0.56-0.60 there. Tried and dropped as bot settings to reproduce it: strong hands
+    trapping hero on the flop and turn (up to 100%, from the raise threshold or the 0.75 percentile, with or without
+    draws betting in their place) 0.53-0.58, and hero's turn and river pots played straight (fewer bluffs and draw
+    calls, thinner value) 0.52; none moved the sim's big-pot results or EV gap, and the trapping versions made the bots
+    bet into hero less than the reads say, which the logs contradict. Real hero wins 20% of 100bb+ pots (mean -8.5 ±
+    8.5 bb, n 41), the sim's 45-50%.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
