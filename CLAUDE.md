@@ -417,7 +417,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     26.5, seed 823), and the preflop package (bigCliff, pfRaisedRead, pfBigRaise) on vs off gains more than against
     static bots on the same deals (+106.0 ± 28.9 against +41.6 ± 25.8, seed 821): the wider calls pay hero's raises.
     The logs hint that friends re-raise frequent openers more instead (+0.59 ± 0.40 in log-odds per log of the
-    opener's rate ratio, n 448; continue share +0.21 ± 0.23): `--adapt '{"alpha":0,"rr":0.6}'`.
+    opener's rate ratio, n 448; continue share +0.21 ± 0.23): `--adapt '{"alpha":0,"rr":0.6}'`. Against those bots
+    the package gains +74.5 ± 25.8 and +31.6 ± 27.3 (4-handed, seeds 821/825) and +116.2 ± 23.9 (5-handed, 826),
+    against +41.6 ± 25.8, +40.8 ± 25.2 and +106.6 ± 23.5 on static bots on the same deals (change +11 ± 13 pooled);
+    rr 1.2: +109.6 ± 28.3 (seed 821). Their extra re-raises are weaker hands that fold to or lose against hero's
+    4-bets (hero's raises to 8-30bb per hand 0.042 -> 0.062 at rr 1.2), so these bots get weaker, not harder.
   - Hero's big pots: on real hands the advised EV of hero's followed postflop decisions runs 9.9 ± 3.4 bb above what
     came back (clustered by hand, 272 decisions); flop bets 16.8 ± 5.9 (n 46), turn and river decisions against players
     who were passive on the flop 9.8 ± 2.7 (16.4 ± 4.6 in 15bb+ pots), against flop aggressors 1.9 ± 12.0. In the twin
@@ -433,8 +437,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     trapping hero on the flop and turn (up to 100%, from the raise threshold or the 0.75 percentile, with or without
     draws betting in their place) 0.57-0.61, and hero's turn and river pots played straight (fewer bluffs and draw
     calls, thinner value) 0.56; none moved the sim's big-pot results or EV gap, and the trapping versions made the bots
-    bet into hero less than the reads say, which the logs contradict. Real hero wins 20% of 100bb+ pots (mean -8.5 ±
-    8.5 bb, n 41), the sim's 45-50%.
+    bet into hero less than the reads say, which the logs contradict (patch: heroTrap-bots.patch in the scripts
+    folder). The leaks thread's 14 settings (weak hands folding more to hero, sharper calls, no bluffs or draw calls in
+    hero's pots; /mnt/project-files/patio-solver/sims/2026-11-02-commit/RESULTS.md) reached 0.51-0.59. Real hero wins
+    20% of 100bb+ pots (mean -8.5 ± 8.5 bb, n 41), the sim's 45-50%.
+  - Folds to bets in 15bb+ pots: the bots fold 5-10 points less than their read (v6 bots: 0.37 against 0.46 to each
+    other's bets, n 1,102; friend bots to hero's bets 0.44-0.47 against 0.51-0.53), the friends at it (0.43 against
+    0.44, n 371; to hero's 0.50 against 0.47, n 109). So the sim pays hero's big value bets more often, and with weaker
+    hands, than the friends do.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
