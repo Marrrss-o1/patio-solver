@@ -539,7 +539,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   live: v6 6-handed -20.2 ± 18.9, -9.7 ± 18.9, -2.5 ± 15.8, 5-handed +2.4 ± 19.2, -4.3 ± 19.5, -22.2 ± 19.1,
   4-handed +0.4 ± 17.0, -21.2 ± 19.0, +3.3 ± 21.0, 3-handed +3.7 ± 21.8; v7 6-handed -2.4 ± 15.7, 5-handed
   +7.5 ± 14.3, 4-handed +3.0 ± 20.8 (pooled -4 ± 5). With the floor at 0 (`min`) and 1,200 warm-up hands (v7):
-  6-handed +0.2 ± 10.7, 5-handed -25.2 ± 14.5 and +14.2 ± 15.3, 4-handed -6.9 ± 18.6 (pooled -4 ± 7). A sim block
+  6-handed +0.2 ± 10.7, 5-handed -25.2 ± 14.5 and +14.2 ± 15.3, 4-handed -6.9 ± 18.6; with the floor and the usual
+  300, 5-handed -21.6 ± 15.9 (all 18 runs pooled -5 ± 4). A sim block
   sees only 7-33 tagged shows in hero's pots, so the learned tilt sits at 0 or 0.15 (TILTS nodes; the curve is
   interpolated linearly) about half the time each, never at the friends' 0.3. On the logs it learns 0.3.
   On the 2 Nov hand-log export (180 hands of 1-2 Nov) the fixed tilt changes 26 of 361 decisions, all postflop in
