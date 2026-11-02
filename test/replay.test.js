@@ -229,6 +229,20 @@ test('showdown hand: revealed cards are logged with their bets', () => {
   assert.deepStrictEqual(shows[0].agg, [{ n: 4, frac: 1 }, { n: 5, frac: 0.17 }]);
 });
 
+test('showdown hand: the show records whether hero was in and what they put in (heroPotShows)', () => {
+  const t = new T({ players: {} });
+  t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical', t.poolTally());
+  t.fitVersion = E.FIT_VERSION;
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const sh = t.db.players.V.tally.shows[0];
+  assert.deepStrictEqual(sh.hp, { in: true, put: 24 }); // check-called the flop, 24bb in, hero to showdown
+  const hps = t.heroPotShows();
+  assert.strictEqual(hps.hiN, 1); assert.strictEqual(hps.hoN, 0);
+  assert.deepStrictEqual(hps.hi, sh.fit.tl);
+  sh.actions.flop = 'bet'; // flop aggression: not counted
+  assert.strictEqual(t.heroPotShows().hiN, 0);
+});
+
 test('showdown hand: bet sizes reach the solver input', () => {
   const x = replay(sd).turns[3];
   assert.strictEqual(x.input.pot, 420);
@@ -1930,6 +1944,33 @@ test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10b
   assert.ok(on < off - 0.05 && more < on - 0.02, `30bb pot: on ${on} off ${off} 0.5 ${more}`);
   // They bet the flop: no tilt (those lines are on target in the logs).
   near(spot(60, {}, 'bet'), spot(60, { heroPotTilt: false }, 'bet'));
+});
+
+test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {
+  const run = (hps) => E.analyzeSync({
+    hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot: 60, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: '' }, heroSizes: {},
+    heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' },
+      sizes: {}, position: 'blinds', committed: 30, stack: 270, bet: 0, heroIP: true }],
+    iterations: 2000, mix: false, seed: 1, heroPotShows: hps,
+  });
+  // n shows whose log-likelihood peaks at tilt `peak` (about the curvature of the logs' shows).
+  const curve = (n, peak) => E.TILTS.map((t) => -2.5 * n * (t - peak) * (t - peak));
+  const tilt = (hps) => run(hps).heroPot.tilt;
+  assert.strictEqual(run(undefined).heroPot.tilt, 0.3); // no shows from the tracker: the prior
+  assert.strictEqual(tilt({ hi: null, hiN: 0, ho: curve(30, 0), hoN: 30 }), 0.3);
+  const calibrated = tilt({ hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 });
+  assert.ok(calibrated < 0.06, `calibrated table ${calibrated}`); // the bots: learns about 0
+  const trap = tilt({ hi: curve(60, 0.3), hiN: 60, ho: curve(60, 0), hoN: 60 });
+  assert.ok(Math.abs(trap - 0.3) < 0.03, `trapping table ${trap}`);
+  // Ranges off everywhere by the same amount: not a hero-pot effect.
+  const offAll = tilt({ hi: curve(60, -0.15), hiN: 60, ho: curve(60, -0.15), hoN: 60 });
+  assert.ok(Math.abs(offAll) < 0.06, `off everywhere ${offAll}`);
+  const few = tilt({ hi: curve(4, 0), hiN: 4, ho: curve(60, 0), hoN: 60 });
+  assert.ok(few >= 0.12 && few < 0.29, `four shows ${few}`); // a few shows move it part of the way
+  assert.strictEqual(E.analyzeSync(Object.assign({}, { hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard), pot: 60, toCall: 0,
+    stack: 300, bigBlind: 2, inPosition: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' }, bet: 0 }], iterations: 500, mix: false, seed: 1,
+    heroPotTilt: 0.2, heroPotShows: { hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 } })).heroPot.tilt, 0.2); // a number: fixed
 });
 
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
