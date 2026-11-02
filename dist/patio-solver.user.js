@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.5
+// @version      1.8.6
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -5140,15 +5140,17 @@ function ENGINE() {
       addScenario({ kind: 'fold', label: 'Fold', amount: 0 });
       addScenario({ kind: toCall >= stack ? 'allin' : 'call', label: toCall >= stack ? 'Call all-in' : 'Call', amount: cap(toCall) });
       if (stack > toCall) {
-        // input.pfRaiseHUOnly: the extra sizes only with one opponent left (the field solver's hand doesn't narrow with size).
-        // input.pfRaiseNoOpen: nor in an unopened pot with two or more players still to act (opens from early seats and the button).
-        const pfOpen = opps.length >= 2 && opps.every((o) => o.pending) && toCall <= bigBlind + 1e-9;
-        const pfExtra = Array.isArray(input.pfRaiseFracs) && (input.pfRaiseHUOnly !== true || opps.length === 1) && !(input.pfRaiseNoOpen === true && pfOpen);
-        const fracs = street === 0 ? (pfExtra ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) : [0.6, 1];
+        // Preflop raises: toCall + f x (pot + toCall). Since v1.8.6 a bigger 2.6 size (input.pfBigRaise: false drops it) with
+        // one opponent left (input.pfRaiseHUOnly: false offers it multiway too, where the field solver's hand doesn't get
+        // stronger as the raise grows), and only while the raise-to stays at or under input.pfRaiseCapBB (30bb), where
+        // friends stop calling raises. input.pfRaiseFracs replaces the list (simulator).
+        const pfFracs = Array.isArray(input.pfRaiseFracs) ? input.pfRaiseFracs.map(Number) : input.pfBigRaise === false ? [0.6, 1, 1.6] : [0.6, 1, 1.6, 2.6];
+        const pfExtra = input.pfRaiseHUOnly === false || opps.length === 1;
+        const pfCapBB = input.pfRaiseCapBB != null ? +input.pfRaiseCapBB : 30;
+        const fracs = street === 0 ? (pfExtra ? pfFracs : [0.6, 1, 1.6]) : [0.6, 1];
         for (const f of fracs) {
           const amt = cap(roundChips(toCall + f * (pot + toCall), bigBlind));
-          // input.pfRaiseCapBB: sizes beyond the usual three only when the raise-to stays at or under this many bb.
-          if (street === 0 && input.pfRaiseCapBB != null && f !== 0.6 && f !== 1 && f !== 1.6 && (+input.heroBet || 0) + amt > +input.pfRaiseCapBB * bigBlind + 1e-9) continue;
+          if (street === 0 && f !== 0.6 && f !== 1 && f !== 1.6 && (+input.heroBet || 0) + amt > pfCapBB * bigBlind + 1e-9) continue;
           const label = street === 0 ? (f <= 0.6 ? 'small raise' : f === 1 ? 'pot-size raise' : f <= 1.6 ? 'big raise' : 'very big raise') : (f === 1 ? 'pot-size raise' : 'raise');
           addScenario({ kind: amt >= stack ? 'allin' : 'raise', label: amt >= stack ? 'All-in' : 'Raise', sizeLabel: label, amount: amt });
         }

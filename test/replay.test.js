@@ -1298,31 +1298,32 @@ test('kernels: river, preflop, turn and flop solves give bit-identical results w
   }
 });
 
-test('preflop sizes: pfRaiseFracs and pfBetFracs add sizes for the simulator, defaults unchanged', () => {
-  const spot = { hero: C('Ac Kc'), board: [], pot: 55, toCall: 10, stack: 1500, bigBlind: 10, inPosition: true, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
-    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }, { name: 'P', tally: {}, actions: { pre: 'pending' } }] };
+test('preflop sizes: a 2.6x raise with one opponent left, up to a 30bb raise-to (v1.8.6)', () => {
   const raises = (r) => r.scenarios.filter((s) => s.kind === 'raise' || s.kind === 'allin').map((s) => s.amount).sort((a, b) => a - b);
-  assert.deepStrictEqual(raises(E.analyzeSync(spot)), [50, 75, 115]);
-  const big = Object.assign({}, spot, { pfRaiseFracs: [0.6, 1, 1.6, 2.6] });
-  const r = E.analyzeSync(big);
-  assert.deepStrictEqual(raises(r), [50, 75, 115, 180]);
-  // pfRaiseCapBB: the extra size only while the raise-to stays under the cap (180 chips = 18bb here).
-  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseCapBB: 30 }))), [50, 75, 115, 180]);
-  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseCapBB: 15 }))), [50, 75, 115]);
-  // pfRaiseHUOnly: three opponents here, so only the usual sizes.
-  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseHUOnly: true }))), [50, 75, 115]);
-  // pfRaiseNoOpen: limpers in front, so the extra size stays; an open with three players behind gets none.
-  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseNoOpen: true }))), [50, 75, 115, 180]);
-  const open3 = Object.assign({}, big, { pot: 15, toCall: 10, inPosition: false, pfRaiseNoOpen: true, opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) });
-  assert.deepStrictEqual(raises(E.analyzeSync(open3)), [25, 35, 50]);
-  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, open3, { pfRaiseNoOpen: false }))), [25, 35, 50, 75]);
-  assert.ok(r.solver, 'the preflop solver ran with the extra size');
+  // Heads-up (small blind against the big blind, blinds 5/10): 2.5bb, 3.5bb, 5bb and the new 7.5bb.
+  const hu = { hero: C('Ac Kc'), board: [], pot: 15, toCall: 5, stack: 1500, bigBlind: 10, heroBet: 5, inPosition: false, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] };
+  const r = E.analyzeSync(hu);
+  assert.deepStrictEqual(raises(r), [15, 25, 35, 55]);
+  assert.ok(r.solver && r.solver.kind === 'preflop', 'the preflop solver ran with the extra size');
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, hu, { pfBigRaise: false }))), [15, 25, 35]);
   if (E.kernelsActive()) {
     E.useKernels(false);
     let noK;
-    try { noK = E.analyzeSync(big); } finally { E.useKernels(true); }
+    try { noK = E.analyzeSync(hu); } finally { E.useKernels(true); }
     assert.strictEqual(JSON.stringify(noK.ranked), JSON.stringify(r.ranked));
   }
+  // Facing a 4-bet heads-up the 2.6x size would go past 30bb, so only the usual sizes.
+  const deep = Object.assign({}, hu, { pot: 360, toCall: 150, heroBet: 100, opponents: [{ name: 'V', tally: {}, actions: { pre: '4bet' }, pfAggressor: true }] });
+  assert.strictEqual(raises(E.analyzeSync(deep)).length, raises(E.analyzeSync(Object.assign({}, deep, { pfBigRaise: false }))).length);
+  // Multiway (two limpers and a player behind): the usual three sizes; pfRaiseHUOnly: false adds the 2.6x one.
+  const spot = { hero: C('Ac Kc'), board: [], pot: 55, toCall: 10, stack: 1500, bigBlind: 10, inPosition: true, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }, { name: 'P', tally: {}, actions: { pre: 'pending' } }] };
+  assert.deepStrictEqual(raises(E.analyzeSync(spot)), [50, 75, 115]);
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, spot, { pfRaiseHUOnly: false }))), [50, 75, 115, 180]);
+  // The cap (180 chips = 18bb here) and a list of sizes for the simulator.
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, spot, { pfRaiseHUOnly: false, pfRaiseCapBB: 15 }))), [50, 75, 115]);
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, spot, { pfRaiseFracs: [0.6, 1, 1.6, 2.6, 4], pfRaiseHUOnly: false, pfRaiseCapBB: 100 }))), [50, 75, 115, 180, 270]);
   // The big blind's option (nothing to call): opening-bet fractions of the pot.
   const opt = { hero: C('Qh Qd'), board: [], pot: 40, toCall: 0, stack: 1500, bigBlind: 10, inPosition: false, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
     opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }] };
