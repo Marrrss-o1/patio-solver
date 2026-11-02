@@ -721,6 +721,26 @@ test('bet size: a solid player\'s big bet reads polarized, a friend\'s pot-size 
   assert.ok(a / t < avg('home', 1.2) - 0.02, `off ${a / t} vs on ${avg('home', 1.2)}`);
 });
 
+test('a turn bet after calling the flop is read stronger (READ_PRIORS.home.afterCall); off without it', () => {
+  // leballs' line on 2 Nov: called a flop bet and hero's raise on Qs Kh 2s, then led 55% pot on the Td (he had J9).
+  const board = C('Qs Kh 2s Td');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board.slice(0, 3)), 4: E.boardStrength(board) };
+  const strong = (stats, actions) => {
+    const W = E.buildRange(stats, actions, strengths, board.concat(C('Kc 3h')), { turn: 0.55 });
+    let a = 0, t = 0;
+    for (let k = 0; k < W.length; k++) { t += W[k]; if (strengths[4].hs[k] >= 0.9) a += W[k]; }
+    return a / t;
+  };
+  const on = E.computeStats({}, 'home'), off = E.computeStats({}, 'home');
+  off.afterCall = null;
+  const lead = { pre: 'call', flop: 'checkcall', turn: 'bet' };
+  assert.ok(strong(on, lead) > strong(off, lead) + 0.05, `two pair or better ${strong(on, lead)} vs ${strong(off, lead)}`);
+  // A bet after betting the flop, or after a checked flop, is read as before.
+  for (const flop of ['bet', 'check']) near(strong(on, { pre: 'call', flop, turn: 'bet' }), strong(off, { pre: 'call', flop, turn: 'bet' }));
+  // Hero's own range (solid) has no afterCall.
+  assert.strictEqual(E.computeStats({}, 'solid').afterCall, null);
+});
+
 test('confidence: thin reads lean toward balanced folding, big samples follow the read', () => {
   const never = (n) => E.computeStats(Object.assign(T.blankTally(), { pfFold: n, pfCall: n, check: n, bet: n, call: 2 * n, fold: 0 }), 'typical');
   assert.ok(never(2).exploitWeight < never(60).exploitWeight);
