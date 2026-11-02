@@ -13,8 +13,16 @@
 //   --bot-params JSON  overrides for every friend profile's bot parameters (friends, home:<id>), e.g.
 //                      '{"sizeTell":-0.6}' (bigger bets with weaker hands, as in the logs; see bots.js)
 //   --bb CHIPS         big blind in chips (default 2, like the real lobby; small blind is half)
+//   --adapt ALPHA      friend bots call hero's preflop raises wider the more often hero makes that kind of raise
+//                      (opens, re-raises, raises to 8-30bb, to 30bb+): continue log-odds + ALPHA x ln(hero's rate /
+//                      the logs' rate), from decayed counts (--adapt-k 40 pseudo-hands at the logs' rates, --adapt-decay
+//                      0.99 per hand). A stress test, off by default (the logs show no such adapting; bots.js heroModel).
+//                      JSON {"alpha":0,"rr":0.6} moves the re-raise share instead (opens and re-raises under 8bb), as the
+//                      logs hint against frequent openers (+0.59 ± 0.40, continue share unchanged).
+//                      --a-adapt / --b-adapt set it for one variant only (a number, or JSON {alpha, rr, k, decay}), so one
+//                      run can pair the same solver against static and adapting bots on the same deals.
 // What is measured
-//   --agent X          solver (default) | baseline | bot:<spec>
+//   --agent X          solver (default) | baseline | bot:<spec> (a bot spec, or bot:{...} home-bot parameters)
 //   --a-opts JSON      extra analyzeSync input for A, e.g. '{"preflopSolver":false}'
 //   --b-opts JSON      ... for B; giving any --b-* option turns on the paired A/B run
 //   --a-ref REF        git ref whose src/ A runs (default: the working tree); --b-ref likewise
@@ -111,16 +119,25 @@ function buildConfig(args) {
   const env = envSolverOpts();
   const parse = (s) => (s ? JSON.parse(s) : {});
   const bp = (k) => (args[k] === true ? '' : args[k] != null ? String(args[k]) : undefined);
+  // Bots adapting to this variant's hero (--adapt, --a-adapt, --b-adapt): null when off.
+  const adaptOf = (x) => {
+    const sv = args[x + '-adapt'] != null ? args[x + '-adapt'] : args.adapt;
+    if (sv == null || sv === true) return null;
+    const o = /^\s*\{/.test(String(sv)) ? JSON.parse(sv) : { alpha: +sv };
+    if (!(+o.alpha) && !(+o.rr)) return null;
+    return { alpha: +o.alpha || 0, rr: +o.rr || 0, k: o.k != null ? +o.k : args['adapt-k'] != null ? +args['adapt-k'] : 40,
+      decay: o.decay != null ? +o.decay : args['adapt-decay'] != null ? +args['adapt-decay'] : 0.99 };
+  };
   // A variant's src/: a git ref's (or the working tree's), with knobs.js edits on top for --a-patch / --b-patch.
   const variant = (name, x, agent) => {
     const patch = parse(args[x + '-patch']);
     const p = Object.keys(patch).length ? patch : null;
     return { name, agent, src: patchedSrc(srcForRef(args[x + '-ref']), p, path.join(ROOT, 'test', 'out', 'tune')),
       ref: (args[x + '-ref'] || 'working tree') + (p ? ' + ' + JSON.stringify(p) : ''), commit: commitOf(args[x + '-ref']) + (p ? ' ' + JSON.stringify(p) : ''),
-      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp'), cold: !!args[x + '-cold'] };
+      solver: Object.assign({}, env, parse(args[x + '-opts'])), bp: bp(x + '-bp'), cold: !!args[x + '-cold'], adapt: adaptOf(x) };
   };
   const variants = [variant('A', 'a', String(args.agent || 'solver'))];
-  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch'] || args['b-cold']) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
+  if (args['b-opts'] || args['b-ref'] || args['b-agent'] || args['b-bp'] != null || args['b-patch'] || args['b-cold'] || args['b-adapt'] != null) variants.push(variant('B', 'b', String(args['b-agent'] || args.agent || 'solver')));
   // Solver opponents: src/ for each solver@ref named in --bots.
   const solverBots = {};
   for (const t of botsSpec.split(',')) {
@@ -164,7 +181,7 @@ function makeHero(variant, cfg) {
   if (variant.agent === 'solver') return solverAgent({ src: variant.src, solver: variant.solver, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: variant.bp });
   if (variant.agent === 'baseline') return bots.baseline();
   const m = /^bot:(.+)$/.exec(variant.agent);
-  if (m) return bots.makeBot(m[1], cfg.profiles);
+  if (m) return bots.makeBot(/^\s*\{/.test(m[1]) ? JSON.parse(m[1]) : m[1], cfg.profiles);
   throw new Error('unknown agent ' + variant.agent);
 }
 
@@ -174,9 +191,14 @@ function playBlock(cfg, block) {
   const specs = lineup(cfg, block);
   const isSolver = (s) => !!(cfg.solverBots && cfg.solverBots[s]);
   const shared = specs.map((s) => (isSolver(s) ? null : bots.makeBot(s, cfg.profiles)));
+  // Bots that adapt to hero (--adapt) remember this variant's hero, so they are this variant's own (from the block's
+  // start, at the logs' rates); every variant also counts its hero's preflop raises for the summary.
+  const models = cfg.variants.map((v) => (v.adapt ? bots.heroModel(v.adapt) : null));
+  const counts = cfg.variants.map(() => bots.heroModel({}));
   // Solver opponents keep reads (of hero too), so each variant gets its own copy; they watch the table from their seat.
-  const botSets = cfg.variants.map(() => specs.map((s, j) => (isSolver(s)
-    ? solverAgent({ src: cfg.solverBots[s].src, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: '' }) : shared[j])));
+  const botSets = cfg.variants.map((v, vi) => specs.map((s, j) => (isSolver(s)
+    ? solverAgent({ src: cfg.solverBots[s].src, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: '' })
+    : models[vi] ? bots.makeBot(s, cfg.profiles, { model: models[vi], heroSeat: 0 }) : shared[j])));
   const watchersOf = (set) => set.map((b, j) => (b.onEvent ? { seat: j + 1, onEvent: (ev, data, snapFn) => b.onEvent(ev, data, snapFn) } : null)).filter(Boolean);
   const heroes = cfg.variants.map((v) => makeHero(v, cfg));
   const stacks = new Array(n).fill(cfg.stack);
@@ -222,7 +244,9 @@ function playBlock(cfg, block) {
         const diag = cfg.diag ? [] : null;
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
-          aivat: cfg.aivat, parts: cfg.parts, flopinfo: cfg.flopinfo, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
+          aivat: cfg.aivat, parts: cfg.parts, flopinfo: cfg.flopinfo, log: true, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
+        bots.observeHero(counts[vi], res.entry);
+        if (models[vi]) bots.observeHero(models[vi], res.entry);
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;
         r.chance += res.chance / rots / cfg.bb; r.action += res.action / rots / cfg.bb;
         // Per rotation: hero's hand (preflop-order rank), position (0 = button, 1 = next seat, ...), corrected result.
@@ -240,7 +264,9 @@ function playBlock(cfg, block) {
   const hs = heroes.map((h) => (h.stats ? h.stats : null));
   // Solver opponents' own counts, per variant: decisions and fallbacks to the simple player.
   const os = botSets.map((set) => set.filter((b) => b.stats).reduce((a, b) => ({ decisions: a.decisions + b.stats.decisions, errors: a.errors + b.stats.errors }), { decisions: 0, errors: 0 }));
-  return { block, lineup: specs, deals: out, stats: hs, oppStats: os };
+  // Hero's preflop raises by class (bots.js raiseClass) and hands played, per variant.
+  const heroRaises = counts.map((m) => Object.assign({ hands: m.handsTot }, m.tot));
+  return { block, lineup: specs, deals: out, stats: hs, oppStats: os, heroRaises };
 }
 
 function meanSe(xs) {
@@ -262,12 +288,20 @@ function summarize(cfg, results, sec) {
     const st = results.map((b) => b.stats[cfg.variants.indexOf(v)]).filter(Boolean);
     const dec = st.reduce((a, s) => a + s.decisions, 0), ms = st.reduce((a, s) => a + s.ms, 0);
     const solved = {}; for (const s of st) for (const [k, c] of Object.entries(s.solved || {})) solved[k] = (solved[k] || 0) + c;
+    const vi = cfg.variants.indexOf(v);
+    // Hero's preflop raises per hand played (opens, re-raises under 8bb, to 8-30bb, to 30bb+); the logs' table rates are
+    // 0.116 / 0.030 / 0.035 / 0.024 (bots.js ADAPT_REF), Marwin's own about 0.057 to 8bb+ and 0.013 to 30bb+.
+    const hr = results.map((b) => (b.heroRaises || [])[vi]).filter(Boolean);
+    const hands = hr.reduce((a, x) => a + x.hands, 0);
+    const perHand = hands ? Object.fromEntries(Object.keys(bots.ADAPT_REF).map((c) => [c, Math.round(hr.reduce((a, x) => a + (x[c] || 0), 0) / hands * 10000) / 10000])) : null;
     sum.variants[v.name] = { agent: v.agent, ref: v.ref, solver: v.solver,
       bb100: r1(raw.mean * 100), se100: r1(raw.se * 100), aivatBB100: r1(adj.mean * 100), aivatSE100: r1(adj.se * 100),
       seRatio: adj.se > 0 ? Math.round((raw.se / adj.se) * 100) / 100 : null,
       decisions: dec, msPerDecision: dec ? Math.round(ms / dec) : 0, errors: st.reduce((a, s) => a + s.errors, 0), solved };
+    if (v.adapt) sum.variants[v.name].adapt = v.adapt;
+    if (perHand) sum.variants[v.name].heroRaisesPerHand = perHand;
     if (cfg.solverBots && Object.keys(cfg.solverBots).length) {
-      const vi = cfg.variants.indexOf(v), o = results.map((b) => (b.oppStats || [])[vi]).filter(Boolean);
+      const o = results.map((b) => (b.oppStats || [])[vi]).filter(Boolean);
       sum.variants[v.name].solverOpponents = { decisions: o.reduce((a, x) => a + x.decisions, 0), errors: o.reduce((a, x) => a + x.errors, 0) };
     }
   }
@@ -285,7 +319,7 @@ function summarize(cfg, results, sec) {
 const SIM_VERSION = 2;
 function blockKey(cfg) {
   const crypto = require('crypto');
-  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp].concat(x.cold ? ['cold'] : []));
+  const v = cfg.variants.map((x) => [x.agent, x.agent === 'solver' ? x.commit : null, x.solver, x.bp].concat(x.cold ? ['cold'] : [], x.adapt ? [{ adapt: x.adapt }] : []));
   const k = [SIM_VERSION, cfg.n, cfg.bots, Object.values(cfg.solverBots || {}).map((x) => x.commit), cfg.bb, cfg.stack, cfg.seed, cfg.dup, cfg.aivat, cfg.warm, cfg.block, cfg.iters, cfg.riverIters, v, cfg.profiles];
   // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
   if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });

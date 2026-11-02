@@ -1037,6 +1037,7 @@
     const hole = show.cards.map(parseCard), board = show.board.map(parseCard);
     if (hole.length !== 2 || hole.some((x) => x < 0) || board.some((x) => x < 0) || board.length < 3) return null;
     if (foldedShow(show)) return null;
+    CALL_SIZE = true;
     const stats = computeStats(tally, tableStyle, pool);
     const strengths = { 0: boardStrength([]) };
     for (const n of [3, 4, 5]) if (board.length >= n) strengths[n] = boardStrength(board.slice(0, n));
@@ -1460,7 +1461,11 @@
       const callScore = new Float64Array(NUM_COMBOS);
       for (let k = 0; k < NUM_COMBOS; k++) callScore[k] = st.hs[k] < 0 ? -1 : Math.min(1, st.hs[k] + DRAW_CALL * st.pot[k]);
       const q = rangeQuantiles(W, callScore);
-      const ftb = stats.foldToBet, rf = stats.raiseFreq;
+      // The share that folds is their fold rate at the size they called, not against a third of the pot:
+      // a pot-size bet is called by the top third or so of the range, a min-bet by most of it.
+      // Shown hands after calling a bet of 0.85 pot or more sat at 0.57 of the old range (n 33), now 0.52.
+      const ftb = CALL_SIZE && size > 0 ? foldAtSize(Object.assign({}, stats, { foldShift: 0 }), size, st.street) : stats.foldToBet;
+      const rf = stats.raiseFreq;
       P = new Float64Array(NUM_COMBOS);
       for (let k = 0; k < NUM_COMBOS; k++) {
         if (!(W[k] > 0)) continue;
@@ -1535,7 +1540,9 @@
       // Only called on the street before (a call or a check-call), now bets.
       const afterCall = len >= 4 && act === 'bet' && prevAct === 'call';
       prevAct = act;
-      const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet, afterCall });
+      // Calls take the size they called (tracker `sizes.faced`), bets and raises their own size.
+      const size = act === 'call' ? sizes && sizes.faced && sizes.faced[name] : sizes && sizes[name];
+      const next = applyAction(W, st, act, stats, size, { cbet, afterCall });
       if (sumWeights(next) > 1e-9) W = next;
       W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
       // Bet, then called a raise: keep the part of the betting range that continues.
@@ -1681,6 +1688,9 @@
   // Above 30bb it now fades as (30bb / size)^2.5, to no less than a quarter (so junk shoves don't start to look good on
   // a few dozen logged folds; input.bigCliffFloor sets it). input.bigCliff === false keeps the old floor.
   let BIG_CLIFF = true, BIG_FLOOR = 0.25;
+  // Calling ranges read at the size called (input.callSizeRange; false reads every call as one of a
+  // third of the pot, as before v1.8.8). Shown hands are always scored with it.
+  let CALL_SIZE = true;
   function bigFade(chips, bigBlind) {
     if (!BIG_CLIFF) return 1;
     const L = chips / Math.max(1e-9, bigBlind);
@@ -5025,6 +5035,7 @@
    */
   function createAnalysis(input) {
     BIG_CLIFF = input.bigCliff !== false;
+    CALL_SIZE = input.callSizeRange !== false;
     BIG_FLOOR = input.bigCliffFloor != null ? clamp(+input.bigCliffFloor, 0, 1) : 0.25;
     const hero = input.hero.slice();
     const board = input.board.slice();
