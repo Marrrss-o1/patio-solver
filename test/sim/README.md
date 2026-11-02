@@ -124,6 +124,19 @@ bots, seed and block size), so a third arm can be added later without replaying 
   against its own copy, since the copies learn from hero's play. With solver opponents the warm-up puts the solver
   (variant A's code) in hero's seat too, so the copies' reads of hero come from solver-like play; with a simple
   player there instead, self-play came out about +70 bb/100 for hero, because the copies read hero wrong.
+* `--adapt ALPHA` (stress test, off by default): the friend bots remember how often hero makes each kind of preflop
+  raise (opens, re-raises under 8bb, raises to 8-30bb, raises to 30bb+; decayed counts per hand, 0.99, starting from
+  the logs' table rates 0.116 / 0.030 / 0.035 / 0.024 per hand with 40 pseudo-hands) and add ALPHA x ln(hero's rate /
+  the table's) to their continue log-odds against hero's raise of that kind (at most ±2). Against a hero who shoves
+  12x as often as the table, a bot's continue share against a 90bb shove goes from 2% to 13% at ALPHA 1 (a bot hero
+  shoving 29% of hands, 4-handed, 400 deals: -57 ± 37 against static bots, -157 ± 43 against adapting ones). The friends don't do this in the logs: against raisers who raise to
+  30bb+ more often than the table, continue log-odds move -0.07 ± 0.52 per log of the rate ratio (n 95), and two
+  players who shoved 85-175bb in 5 of 19 and 6 of 92 hands got 1 call in about 37 answers. So the default bots stay
+  static, and `--adapt` checks whether a change wins only because big raises keep getting folded. `--a-adapt` /
+  `--b-adapt` set it for one variant (a number or JSON {alpha, k, decay}): `--b-adapt 1` with no other B option plays
+  the same solver against static (A) and adapting (B) bots on the same deals. Each variant's adapting bots are its
+  own and start every block fresh. The summary's `heroRaisesPerHand` (every run) gives hero's raise rates by kind
+  against those table rates (Marwin's own: about 0.057 per hand to 8bb+, 0.013 to 30bb+).
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 
