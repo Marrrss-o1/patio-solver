@@ -16,11 +16,11 @@ const KNOBS = {
   // Safety margin: how much of the worst opponent variant is blended into each option's EV (0.35 x (1 - trust)).
   robust: { def: 0.35, edits: [['const robustWeight = lookahead ? 0.35 *', (v) => `const robustWeight = lookahead ? ${num(v)} *`]] },
   // Hero's bet sizes on the flop and turn (and the river when the river solver doesn't run), x pot.
-  betSizes: { def: [0.33, 0.5, 0.75, 1, 1.5], edits: [['const fracs = street === 0 ? [0.75, 1, 1.5] : [0.33, 0.5, 0.75, 1, 1.5];', (v) => `const fracs = street === 0 ? [0.75, 1, 1.5] : ${list(v)};`]] },
+  betSizes: { def: [0.33, 0.5, 0.75, 1, 1.5], edits: [[' : [0.75, 1, 1.5]) : [0.33, 0.5, 0.75, 1, 1.5];', (v) => ` : [0.75, 1, 1.5]) : ${list(v)};`]] },
   // Hero's raise sizes after the flop, x (pot + call), added to the call.
   raiseSizes: { def: [0.6, 1], edits: [[' : [0.6, 1];', (v) => ` : ${list(v)};`]] },
   // Hero's preflop raise sizes facing a bet (limps, opens, 3-bets), same units.
-  preRaiseSizes: { def: [0.6, 1, 1.6], edits: [['const fracs = street === 0 ? [0.6, 1, 1.6] :', (v) => `const fracs = street === 0 ? ${list(v)} :`]] },
+  preRaiseSizes: { def: [0.6, 1, 1.6], edits: [['input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) :', (v) => `input.pfRaiseFracs.map(Number) : ${list(v)}) :`]] },
   // River solver: hero's bet sizes x pot (at most 3: a node has at most 4 actions).
   riverSizes: { def: [0.33, 0.66, 1], edits: [['const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];', (v) => { if (v.length > 3) throw new Error('riverSizes: at most 3'); return `const fracs = player === 0 ? ${list(v)} : [oppBetFrac];`; }]] },
   // Shove threshold preflop: all-in is an option at [stack <= v[0] big blinds] or [stack <= v[1] x (pot + call)].
