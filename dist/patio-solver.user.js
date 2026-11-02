@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.4
+// @version      1.8.5
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -7711,7 +7711,7 @@ function slim(r) {
       var b = advice.result.best;
       mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + esc(actionText(b, advice.ctx.heroStageBet, advice.result.toCall)) + '</span>' +
         (advice.result.close && fresh ? '<span class="badge">close</span>' : '') +
-        '<span class="ev">' + (advice.stale ? 'last turn' : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>' + logBadge;
+        '<span class="ev' + (advice.stale && sizing.note ? ' neg' : '') + '">' + (advice.stale ? (sizing.note ? 'bet under the advice' : 'last turn') : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>' + logBadge;
     } else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>' + logBadge;
 
     body.style.display = ui.expanded ? '' : 'none';
@@ -7725,6 +7725,7 @@ function slim(r) {
     }
     if (advice) {
       var r = advice.result, c = advice.ctx, best = r.best, kv = [];
+      if (advice.stale && sizing.note) html += '<div class="status neg">' + esc(sizing.note) + '</div>';
       if (r.hero) kv.push(['Your hand', esc(r.hero.made + (r.hero.draws && r.hero.draws.length ? ' + ' + r.hero.draws.map(function (d) { return d.name.toLowerCase(); }).join(', ') : '') + (r.street === 0 && r.hero.topPercent != null ? ' (top ' + Math.max(1, Math.round(r.hero.topPercent)) + '%)' : ''))]);
       if (r.mix) kv.push(['Close spot, mix it', esc(r.mix.map(function (m) { return m.label + ' ' + pct(m.freq); }).join(' · '))]);
       if (r.equity) kv.push(['Equity vs their ranges', pct(r.equity.share)]);
@@ -7757,10 +7758,27 @@ function slim(r) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
     }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
+    if (sizing.small) html += '<div class="muted">Bets this session under ' + Math.round(SMALL_SIZE * 100) + '% of the advised size: ' + sizing.small + ' of ' + sizing.n + '.</div>';
     if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log to keep them: this phone keeps the newest 150 hands, with raw events for 60.</div>';
     if (saveError) html += '<div class="status neg">Couldn\'t save reads: ' + esc(saveError) + '. The page\'s storage may be full; export the hand log.</div>';
     body.innerHTML = html;
     place();
+  }
+
+  // Bets and raises well under the advised size (the tracker's sizeRatio), as on the computer's panel.
+  var SMALL_SIZE = 0.6, sizing = { n: 0, small: 0, note: null }, sizeSeen = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+  function checkSize() {
+    var h = tracker.hand;
+    if (!h || !h.advice || !sizeSeen) return;
+    h.advice.forEach(function (a) {
+      if (a.sizeRatio == null || sizeSeen.has(a)) return;
+      sizeSeen.add(a);
+      sizing.n++;
+      if (a.sizeRatio < SMALL_SIZE && a.amount > 0) {
+        sizing.small++;
+        sizing.note = 'Smaller than advised: you put in ' + money(a.amount * a.sizeRatio) + ' of the advised ' + money(a.amount) + '.';
+      } else sizing.note = null;
+    });
   }
 
   // ---------- solver ----------
@@ -7769,6 +7787,7 @@ function slim(r) {
     if (built.error) { status = built.error; render(); return; }
     var id = ++reqId;
     thinking = true;
+    sizing.note = null;
     if (advice) advice.stale = true;
     render();
     analyze(built.input).then(function (res) {
@@ -7783,13 +7802,13 @@ function slim(r) {
 
   tracker.on(function (type, p) {
     if (type === 'save') save(DB_KEY, tracker.db);
-    else if (type === 'hand') { advice = null; thinking = false; reqId++; status = 'New hand. Waiting for your turn…'; render(); }
+    else if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }
     else if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }
     else if (type === 'turn') {
       if (p.isHero) requestAdvice();
       else if (advice && !advice.stale) { advice.stale = true; render(); }
     } else if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
-    else if (type === 'action' || type === 'street' || type === 'cards') { if (ui.expanded) render(); }
+    else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
   });
 
   // ---------- reading the game ----------

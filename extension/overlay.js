@@ -50,16 +50,42 @@
   const UI_KEY = 'patioSolverUi';
   // Reads under DB_KEY, each hand of the log under its own key (handlog.js).
   const handLog = PatioHandLog.create(local, DB_KEY);
-  const saveDb = () => (tracker ? handLog.save(tracker.db).then(noteSaved) : null);
+  // A copy of the reads in the site's own storage, which survives removing the extension (backup.js).
+  const backup = PatioBackup.create(TEST && TEST.backupArea ? TEST.backupArea : PatioBackup.idbArea('patio-solver', 'kv'), TEST && TEST.backupOpts);
+  const saveDb = () => {
+    if (!tracker) return null;
+    backup.save(tracker.db).catch(() => null);
+    return handLog.save(tracker.db).then(noteSaved);
+  };
 
   let tracker = null;
   let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true };
   let status = 'Connecting to the table…';
-  let importNote = '', importing = false;
+  let importNote = '', importing = false, restored = false;
   let advice = null; // { result, ctx, forHandStreet, stale }
   let thinking = false;
   let blocked = false;
   let reqId = 0;
+
+  // Bets and raises well under the advised size (the tracker's sizeRatio: chips hero put in over
+  // the advised chips). In the simulator, betting 0.4x the advice with 4 in 10 strong hands, as on
+  // 1 Nov, cost about 87 bb/100. Shown under the advice it answered, and counted for the session.
+  const SMALL_SIZE = 0.6;
+  const sizing = { n: 0, small: 0, note: null };
+  const sizeSeen = new WeakSet();
+  function checkSize() {
+    const h = tracker && tracker.hand;
+    if (!h || !h.advice) return;
+    for (const a of h.advice) {
+      if (a.sizeRatio == null || sizeSeen.has(a)) continue;
+      sizeSeen.add(a);
+      sizing.n++;
+      if (a.sizeRatio < SMALL_SIZE && a.amount > 0) {
+        sizing.small++;
+        sizing.note = `Smaller than advised: you put in ${money(a.amount * a.sizeRatio)} of the advised ${money(a.amount)}.`;
+      } else sizing.note = null;
+    }
+  }
 
   // ---------- formatting ----------
   const money = (x) => '$' + Math.round(x).toLocaleString('en-US');
@@ -206,6 +232,7 @@
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
       // The reads start over; the hand log stays.
       tracker.db = { players: {}, history: tracker.db.history || [] };
+      backup.reset();
       saveDb();
       a.dataset.confirm = ''; a.textContent = 'Reset reads';
       render();
@@ -331,6 +358,7 @@
         <div class="act">${esc(actionText(best, c.heroStageBet, r.toCall))}${r.close ? '<span class="badge">close</span>' : ''}</div>
         <div class="sub">${best.sizeLabel && best.sizeLabel !== 'raise' ? esc(best.sizeLabel) + ' · ' : ''}${evLine}${advice.stale ? ' · last turn' : ''}</div>
         ${r.mix ? `<div class="sub">Close spot, so mix it up: ${r.mix.map((m) => esc(m.label) + ' ' + pct(m.freq)).join(' · ')}. This time: ${esc(best.label)}.</div>` : ''}
+        ${advice.stale && sizing.note ? `<div class="sub neg">${esc(sizing.note)}</div>` : ''}
       </div>`;
       const kv = [];
       if (r.hero) kv.push(['Your hand', esc(r.hero.made + (r.hero.draws && r.hero.draws.length ? ' + ' + r.hero.draws.map((d) => d.name.toLowerCase()).join(', ') : '') + (r.street === 0 && r.hero.topPercent != null ? ` (top ${Math.max(1, Math.round(r.hero.topPercent))}%)` : ''))]);
@@ -366,6 +394,7 @@
     }
     const n = tracker ? Object.keys(tracker.db.players).length : 0;
     html += `<div class="muted">Tracking ${n} player${n === 1 ? '' : 's'}. Reads sharpen as hands pile up.</div>`;
+    if (sizing.small) html += `<div class="muted">Bets this session under ${Math.round(SMALL_SIZE * 100)}% of the advised size: ${sizing.small} of ${sizing.n}.</div>`;
     if (saveError) html += `<div class="status neg">Couldn't save reads and the hand log: ${esc(saveError)}</div>`;
     if (importNote) html += `<div class="status${/failed/.test(importNote) ? ' neg' : ''}">${esc(importNote)}</div>`;
     body.innerHTML = html;
@@ -386,6 +415,7 @@
     if (built.error) { status = built.error; render(); return; }
     const id = ++reqId;
     thinking = true;
+    sizing.note = null;
     if (advice) advice.stale = true;
     render();
     const input = timeLeftMs > 0 ? Object.assign({}, built.input, { timeLeftMs }) : built.input;
@@ -404,15 +434,26 @@
     if (saved) ui = Object.assign(ui, saved);
     const loaded = await handLog.load(PatioTracker.MAX_HISTORY, PatioTracker.RAW_KEEP);
     if (loaded.error) noteSaved({ ok: false, error: loaded.error });
+    // A fresh install (no reads stored): the reads come back from the site's copy, if there is one.
+    const copy = await backup.load().catch(() => null);
+    if (!loaded.error && copy && !Object.keys(loaded.db.players || {}).length && Object.keys(copy.reads.players).length) {
+      const history = loaded.db.history && loaded.db.history.length ? loaded.db.history : copy.history;
+      loaded.db = Object.assign({}, copy.reads, { history });
+      const np = Object.keys(copy.reads.players).length;
+      importNote = `Reads brought back from this site's backup (${np} player${np === 1 ? '' : 's'}, ${history.length} hand${history.length === 1 ? '' : 's'} of log${copy.savedAt ? ', saved ' + new Date(copy.savedAt).toLocaleString() : ''}).`;
+      restored = true;
+    }
     tracker = new PatioTracker(loaded.db);
     tracker.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally());
     tracker.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => tracker.poolTally());
     tracker.fitVersion = PokerEngine.FIT_VERSION;
+    if (restored) saveDb();
     tracker.on((type) => {
       if (type === 'save') saveDb();
-      if (type === 'hand') { advice = null; thinking = false; reqId++; status = 'New hand. Waiting for your turn…'; render(); }
+      if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }
       if (type === 'turn') { /* handled below with payload */ }
       if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }
+      if (type === 'action') checkSize();
       if (type === 'action' || type === 'street' || type === 'cards') render();
     });
     tracker.on((type, p) => {
