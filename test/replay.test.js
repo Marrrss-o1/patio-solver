@@ -887,7 +887,7 @@ test('river solver: a player who bet earlier and then checks folds like anyone e
   // street and then check fold more than their read, not less, so the old fold-after-aggression scale
   // ('all') no longer applies once they checked on this street.
   const betEV = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet').map((s) => s.ev));
-  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3,
+  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3, heroPotTilt: false,
     opponents: [Object.assign({ name: 'V', tally: {}, pfAggressor: true }, opp)], heroActions }, extra));
   const gaveUp = (extra) => spot({ actions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, sizes: { flop: 0.5 } },
     { pre: 'call', flop: 'call', turn: 'check' }, Object.assign({ inPosition: true }, extra));
@@ -1991,6 +1991,19 @@ test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / f
   assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
   assert.ok(off[0].reraise < 0.2);
   near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
+});
+
+test('heroPotTilt: opponents read stronger in hero\'s pots from 10bb, full tilt from 25bb (false: off)', () => {
+  const spot = (pot, extra) => E.analyzeSync(Object.assign({
+    hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: '' }, heroSizes: {}, heroPosition: 'late',
+    heroPfAggressor: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' }, sizes: {},
+      position: 'blinds', committed: pot / 2, stack: 300 - pot / 2, bet: 0, heroIP: true }],
+    iterations: 4000, mix: false, seed: 1,
+  }, extra)).equity.share;
+  near(spot(16, {}), spot(16, { heroPotTilt: false })); // 8bb: below the ramp
+  const on = spot(60, {}), off = spot(60, { heroPotTilt: false }), more = spot(60, { heroPotTilt: 0.3 });
+  assert.ok(on < off - 0.04 && more < on - 0.02, `30bb pot: on ${on} off ${off} 0.3 ${more}`);
 });
 
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }

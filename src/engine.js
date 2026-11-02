@@ -1554,7 +1554,7 @@
     const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
     // Without a learned tilt for betting lines, only a weaker-than-expected average is used:
     // showdowns after bets are the ones that got called, so they look stronger than the bets were.
-    const bias = learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0;
+    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + (stats.tiltHero || 0);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -1892,6 +1892,9 @@
   const LINE_SOFT = 0.5;
   // Fold odds of players still to act once someone has called (see sc.oppAfter).
   const OVERCALL_FOLD = 1.3;
+  // Extra strength tilt on opponents' ranges in hero's pots after the flop, ramped in from `from` to `to` bb of pot
+  // (createAnalysis, input.heroPotTilt).
+  const HERO_POT_TILT = { tilt: 0.2, from: 10, to: 25 };
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
@@ -5216,6 +5219,17 @@
     // weak turn call against 14) for no gain: 'none' vs 'all' -0.1 +- 23.4, 'unacted' vs 'all' +9.9 +- 17.7
     // (live budget, 4-handed, 1,000 deals); sticky exploiter +12.0 +- 31.9 and +19.5 +- 15.0 (600 deals).
     const AGGRO_FOLD = input.aggroFold || 'unacted';
+    // Hero's pots read stronger (heroPotTilt): in the logs, friends' shown hands in hero's postflop pots sit high in
+    // the range their actions predict (strength quantile about 0.7 once 15bb+ is in), while their showdowns with
+    // each other are on target at every pot size, and their fold rates against bets in hero's pots are on target too
+    // (predicted 0.47, actual 0.50). So the continuing part of the range is stronger, not smaller: every opponent's
+    // range gets an extra strength tilt (buildRange's bias, exp(8 x tilt x (q - 0.5))), ramped in from a pot of
+    // `from` bb to `to` bb after the flop. input.heroPotTilt: false turns it off, a number sets the tilt, an object
+    // replaces { tilt, from, to }.
+    const hpt = input.heroPotTilt === false ? null : Object.assign({}, HERO_POT_TILT,
+      typeof input.heroPotTilt === 'number' ? { tilt: input.heroPotTilt } : typeof input.heroPotTilt === 'object' && input.heroPotTilt ? input.heroPotTilt : {});
+    const heroPotTilt = hpt && street > 0 && hpt.tilt
+      ? hpt.tilt * clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5235,6 +5249,7 @@
         const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
         stats.afterCall = ac; if (statsHU) statsHU.afterCall = ac;
       }
+      if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
