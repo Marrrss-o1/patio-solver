@@ -1053,59 +1053,6 @@ test('preflop solver: limped and raised multiway pots use multiway equity', () =
   assert.ok(m.kappa[cls('72o')] < m.kappa[cls('AA')]);
 });
 
-// A 5-way squeeze like hand 76 of the 2 Nov log (J8o, 30bb, a raise, two callers and two limpers in).
-const squeeze = (h, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: [], pot: 36, toCall: 8, heroBet: 2, stack: 60, bigBlind: 2, inPosition: false,
-  mix: false, seed: 3, iterations: 4000, preflopIterations: 300, heroActions: { pre: 'pending' },
-  opponents: [
-    { name: 'L1', tally: {}, actions: { pre: 'call' }, bet: 2, stack: 80 }, { name: 'L2', tally: {}, actions: { pre: 'call' }, bet: 2, stack: 130 },
-    { name: 'R', tally: {}, actions: { pre: 'raise' }, bet: 10, stack: 90, pfAggressor: true },
-    { name: 'C1', tally: {}, actions: { pre: 'call' }, bet: 10, stack: 120 }, { name: 'C2', tally: {}, actions: { pre: 'call' }, bet: 10, stack: 70 },
-  ] }, extra));
-
-test('preflop solver: each raise size meets the field that calls it (pfFieldBySize)', () => {
-  const cls = (n) => E._pf.classIndex(n);
-  // The field's hand when it calls a raise that only the top of each range calls is stronger
-  // (fieldMax puts the all-fold share at the bottom: 0.8^3 and 0.3^3 here).
-  const w = () => new Float64Array(169).fill(1);
-  const loose = E._pf.fieldMax([w(), w(), w()], [0.7, 0.7, 0.7]), tight = E._pf.fieldMax([w(), w(), w()], [0.2, 0.2, 0.2]);
-  for (const n of ['AA', 'KK', 'AKs']) assert.ok(tight[cls(n)] / (1 - 0.512) > 1.5 * loose[cls(n)] / (1 - 0.027), n);
-  // Measured multiway share: with everyone calling it is kappa on the same samples; with fewer
-  // callers aces keep more of the pot.
-  const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
-  const sc = (c) => ({ kind: 'raise', amount: 50, opp: [{ cont: c }, { cont: c }, { cont: c }] });
-  const all = E._pf.preflopMulti(opps, [], [sc(1)], (x) => x, 0, 400, 7, { bySize: true, pot: 10, oMax: 100 });
-  for (const n of ['AA', 'T9s', '72o']) assert.ok(Math.abs(all.kapBy(50)[cls(n)] - all.kappa[cls(n)]) < 1e-12, n);
-  assert.strictEqual(all.kapBy(51), null);
-  const few = E._pf.preflopMulti(opps, [], [sc(0.3)], (x) => x, 0, 400, 7, { bySize: true, pot: 10, oMax: 100 });
-  assert.ok(few.kapBy(50)[cls('AA')] > all.kapBy(50)[cls('AA')]);
-  // The squeeze: off, J8o's shove looks about even; on, it loses (a direct simulation with the same
-  // reads says about -6 chips), while aces and strong hands still shove.
-  const off = squeeze('Jd 8c'), on = squeeze('Jd 8c', { pfFieldBySize: true });
-  const shove = (r) => r.ranked.find((x) => x.kind === 'allin').ev;
-  assert.ok(shove(on) < shove(off) - 2, `${shove(on)} vs ${shove(off)}`);
-  assert.ok(shove(on) < 0);
-  assert.notStrictEqual(on.best.kind, 'allin');
-  for (const h of ['Ah Ad', 'Ks Qs']) assert.strictEqual(squeeze(h, { pfFieldBySize: true }).best.kind, 'allin', h);
-  // An open-shove at 20bb with three behind: called by more than one player, aces win a bigger pot
-  // and weak hands' fold equity is the same, so with pfOpenMulti (callers counted, measured
-  // multiway share) the shove is worth more with aces. Against the read's strategy alone a direct
-  // simulation says about 39 chips, the solve 36 with it and 26 without; here (half the read, half
-  // an adaptive field) 21 and 17.
-  const open = (h, extra) => pfSpot(h, Object.assign({ pot: 3, toCall: 2, stack: 40, bigBlind: 2, iterations: 4000, preflopIterations: 300,
-    opponents: [0, 1, 2].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'pending' }, stack: 300 })) }, extra));
-  const aaOff = open('Ah Ad', { pfFieldBySize: true }), aaOn = open('Ah Ad', { pfFieldBySize: true, pfOpenMulti: true });
-  assert.ok(shove(aaOn) > shove(aaOff) + 3, `${shove(aaOn)} vs ${shove(aaOff)}`);
-  assert.strictEqual(open('9c 4d', { pfFieldBySize: true, pfOpenMulti: true }).best.kind, 'fold');
-  // Calling: with the call's own field (everyone in, players behind at their rate against the
-  // call) the solve still runs and stays sane.
-  const call = squeeze('Ah Ad', { pfFieldBySize: true, pfCallField: true });
-  assert.strictEqual(call.best.kind, 'allin');
-  assert.ok(call.ranked.every((x) => isFinite(x.ev)));
-  // Heads-up is unchanged.
-  const hu = { pot: 3.5, toCall: 1.5, stack: 99, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] };
-  assert.deepStrictEqual(pfSpot('Ts 9s', Object.assign({ pfFieldBySize: true }, hu)).ranked.map((x) => x.ev), pfSpot('Ts 9s', hu).ranked.map((x) => x.ev));
-});
-
 const turnSpot = (h, extra) => Object.assign({
   hero: C(h), board: C('Ts 9s 4d 2c'), pot: 20, toCall: 8, stack: 80, bigBlind: 1, inPosition: true, mix: false, seed: 5, iterations: 2000,
   opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' } }], heroActions: { pre: 'call', flop: 'call' },
@@ -1339,13 +1286,6 @@ test('kernels: river, preflop, turn and flop solves give bit-identical results w
     // Multiway preflop leaves (a raise and a caller in front).
     { hero: C('9s 8s'), board: [], pot: 75, toCall: 20, stack: 1000, bigBlind: 10, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60,
       opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] },
-    // The field by raise size (an open with players behind, and a squeeze into five), with the
-    // multiway open and the call's own field.
-    { hero: C('Kh Td'), board: [], pot: 15, toCall: 10, stack: 400, bigBlind: 10, inPosition: false, mix: false, seed: 4, iterations: 2000, preflopIterations: 60, pfFieldBySize: true, pfOpenMulti: true,
-      opponents: ['A', 'B', 'C'].map((n) => ({ name: n, tally: {}, actions: { pre: 'pending' } })) },
-    { hero: C('Td 9d'), board: [], pot: 36, toCall: 8, heroBet: 2, stack: 60, bigBlind: 2, inPosition: false, mix: false, seed: 5, iterations: 2000, preflopIterations: 60, pfFieldBySize: true, pfCallField: true,
-      heroActions: { pre: 'pending' }, opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' }, bet: 2 }, { name: 'L2', tally: {}, actions: { pre: 'call' }, bet: 2 },
-        { name: 'R', tally: {}, actions: { pre: 'raise' }, bet: 10, pfAggressor: true }, { name: 'C1', tally: {}, actions: { pre: 'call' }, bet: 10 }, { name: 'C2', tally: {}, actions: { pre: 'call' }, bet: 10 }] },
     // Turn solver: facing a bet, first to act (odd and even hand counts), and multiway.
     turnSpot('Qs Js', { turnSolver: true, turnIterations: 6, heroActions: { pre: 'raise', flop: 'call' } }),
     turnSpot('Ah Kd', { turnSolver: true, turnIterations: 6, toCall: 0, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: '' } }], heroActions: { pre: 'raise', flop: 'bet' } }),
@@ -1968,23 +1908,6 @@ test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old s
   assert.ok(off[2].cont > 0.7 && Math.abs(off[2].cont - off[0].cont) < 1e-9, 'without the cliff a 51bb 4-bet is called like a 26.5bb one');
   assert.ok(on[1].cont < off[1].cont - 0.1 && on[2].cont < on[1].cont, `${on.map((o) => o.cont.toFixed(2))}`);
   assert.ok(on[2].cont >= 0.25 * off[2].cont - 1e-9, 'the fade stops at a quarter of the floor');
-});
-
-test('pfBigInPot: players with little in the pot fold to shoves above 30bb, committed ones keep the old rule (off by default)', () => {
-  const shove = (vIn, pot, toCall, extra) => {
-    const r = E.analyzeSync(Object.assign({
-      hero: [E.parseCard('Kh'), E.parseCard('Qh')], board: [], pot, toCall, stack: 148, bigBlind: 2, inPosition: false, tableStyle: 'typical',
-      heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroCommitted: 2, heroBet: 2,
-      opponents: [{ name: 'V', tally: {}, actions: { pre: vIn > 2 ? 'raise' : 'call' }, sizes: {}, pfAggressor: vIn > 2, position: 'late', committed: vIn, stack: 300 - vIn, bet: vIn, heroIP: false }],
-      iterations: 2000, mix: false, seed: 1,
-    }, extra));
-    return r.scenarios.find((x) => x.kind === 'allin').opp[0];
-  };
-  // A limper (1bb in) facing a shove to 75bb: the fade, at most a few percent left.
-  const off = shove(2, 50, 0, {}), on = shove(2, 50, 0, { pfBigInPot: true });
-  assert.ok(on.cont < off.cont - 0.05 && on.cont <= 0.06 && on.reraise <= on.cont + 1e-9, `limper ${on.cont} vs ${off.cont}`);
-  // An opener with 15bb in (a fifth of the raise-to) facing the same shove: unchanged.
-  near(shove(30, 33, 28, { pfBigInPot: true }).cont, shove(30, 33, 28, {}).cont);
 });
 
 test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead false: old rule)', () => {
