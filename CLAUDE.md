@@ -359,6 +359,24 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   session. In the 31 Oct + 1 Nov logs hero's smaller bets cluster at a third of the pot and at the minimum bet, often
   with strong hands (min-bets with 94-96% equity against advised 50-150% pot); in the simulator, 4 in 10 strong bets at
   0.4x the advice cost about -87 ± 25 bb/100 (cliff bots, live, 1,000 deals).
+- Bigger preflop raise heads-up (v1.8.6): with one opponent left, the preflop menu (toCall + f x (pot + toCall), f =
+  0.6 / 1 / 1.6) also has f = 2.6 (`input.pfBigRaise: false` drops it), offered only while the raise-to stays at or
+  under 30bb (`input.pfRaiseCapBB`), where friends stop calling raises. Logs: friends answer opens of 3.5-5bb and
+  5-7bb alike (continue 55%, n 31; 50%, n 6) and limpers facing 3-5bb and 5-8bb alike (57% / 58%), so bigger value
+  raises should get paid; nothing above 7bb was ever opened. Simulator, live budget, on vs off: 4-handed +3.7 ± 8.1,
+  +13.5 ± 7.0, +2.7 ± 6.2 and 3-handed -10.2 ± 13.1, pooled +5.1 ± 3.9 (3-4% of hands change). Offering it multiway
+  too (`input.pfRaiseHUOnly: false`) scored about the same in the first runs (4-handed +25.5, -4.5, +30.1, 3-handed
+  +28.0, heads-up table 0.0; pooled +13.6 ± 9.7), but that minus unopened multiway pots (opens with 2+ players to act)
+  scored -7.7, -23.6, -17.8 and -22.9 (pooled about -19 ± 9), which can't both hold, so the multiway part isn't
+  trusted. Its field hand is the strongest continuing hand at the pot-size raise's continue rates for every size
+  (`fieldMax` with `mid`'s conts), so it doesn't get stronger as the raise grows; a fix for that is its own thread.
+  Without the 30bb cap the 2.6 size also went into 4-bets past the cliff (premiums 4-bet to 60bb+ 39% vs 9%, -13.2
+  ± 4.7 premium on seed 652); uncapped 4-handed +13.2, +1.2, -14.3. Adding 4x and a 2.5x-pot option bet: -1.3 ± 20.4.
+  `pfRaiseFracs` / `pfBetFracs` replace the menus for simulator runs.
+- Tried and dropped (2 Nov): no raise against a bet after the flop with 2+ opponents while hero's showdown share is
+  under 0.5 (`input.mwRaiseEq`, kept as a simulator option): 4-handed +2.6 ± 8.2 and -0.1 ± 7.2, 5-handed -3.1 ± 8.6
+  (4-5% of hands change). The exploit.js spot table had multiway raises at about -30 bb a hand against -8 for calls,
+  but that compares hands, not choices.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.

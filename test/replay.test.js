@@ -112,6 +112,16 @@ test('hand log: every action with amount, pot, stack, advice match and result', 
   assert.strictEqual(e.heroNetBB, 5);
 });
 
+test('followed: a call matches "Call all-in" advice but not an all-in raise', () => {
+  const f = T.followedAdvice;
+  assert.strictEqual(f({ kind: 'allin', amount: 40, toCall: 40 }, 'call'), true);
+  assert.strictEqual(f({ kind: 'allin', amount: 300, toCall: 40 }, 'call'), false);
+  assert.strictEqual(f({ kind: 'allin', amount: 300, toCall: 40 }, 'raise'), true);
+  assert.strictEqual(f({ kind: 'raise', amount: 120, toCall: 40 }, 'allin'), true);
+  assert.strictEqual(f({ kind: 'call', amount: 40, toCall: 40 }, 'call'), true);
+  assert.strictEqual(f({ kind: 'check', amount: 0, toCall: 0 }, 'bet'), false);
+});
+
 test('real hand: solver returns a sane recommendation on the turn', () => {
   const x = replay(real).turns[2];
   const r = E.analyzeSync(Object.assign({}, x.input, { iterations: 6000 }));
@@ -1286,6 +1296,65 @@ test('kernels: river, preflop, turn and flop solves give bit-identical results w
     assert.ok(withK.solver, 'a solver ran');
     assert.strictEqual(json(withK), json(noK));
   }
+});
+
+test('preflop sizes: a 2.6x raise with one opponent left, up to a 30bb raise-to (v1.8.6)', () => {
+  const raises = (r) => r.scenarios.filter((s) => s.kind === 'raise' || s.kind === 'allin').map((s) => s.amount).sort((a, b) => a - b);
+  // Heads-up (small blind against the big blind, blinds 5/10): 2.5bb, 3.5bb, 5bb and the new 7.5bb.
+  const hu = { hero: C('Ac Kc'), board: [], pot: 15, toCall: 5, stack: 1500, bigBlind: 10, heroBet: 5, inPosition: false, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }] };
+  const r = E.analyzeSync(hu);
+  assert.deepStrictEqual(raises(r), [15, 25, 35, 55]);
+  assert.ok(r.solver && r.solver.kind === 'preflop', 'the preflop solver ran with the extra size');
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, hu, { pfBigRaise: false }))), [15, 25, 35]);
+  if (E.kernelsActive()) {
+    E.useKernels(false);
+    let noK;
+    try { noK = E.analyzeSync(hu); } finally { E.useKernels(true); }
+    assert.strictEqual(JSON.stringify(noK.ranked), JSON.stringify(r.ranked));
+  }
+  // Facing a 4-bet heads-up the 2.6x size would go past 30bb, so only the usual sizes.
+  const deep = Object.assign({}, hu, { pot: 360, toCall: 150, heroBet: 100, opponents: [{ name: 'V', tally: {}, actions: { pre: '4bet' }, pfAggressor: true }] });
+  assert.strictEqual(raises(E.analyzeSync(deep)).length, raises(E.analyzeSync(Object.assign({}, deep, { pfBigRaise: false }))).length);
+  // Multiway (two limpers and a player behind): the usual three sizes; pfRaiseHUOnly: false adds the 2.6x one.
+  const spot = { hero: C('Ac Kc'), board: [], pot: 55, toCall: 10, stack: 1500, bigBlind: 10, inPosition: true, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }, { name: 'P', tally: {}, actions: { pre: 'pending' } }] };
+  assert.deepStrictEqual(raises(E.analyzeSync(spot)), [50, 75, 115]);
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, spot, { pfRaiseHUOnly: false }))), [50, 75, 115, 180]);
+  // The cap (180 chips = 18bb here) and a list of sizes for the simulator.
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, spot, { pfRaiseHUOnly: false, pfRaiseCapBB: 15 }))), [50, 75, 115]);
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, spot, { pfRaiseFracs: [0.6, 1, 1.6, 2.6, 4], pfRaiseHUOnly: false, pfRaiseCapBB: 100 }))), [50, 75, 115, 180, 270]);
+  // The big blind's option (nothing to call): opening-bet fractions of the pot.
+  const opt = { hero: C('Qh Qd'), board: [], pot: 40, toCall: 0, stack: 1500, bigBlind: 10, inPosition: false, mix: false, seed: 3, iterations: 2000, preflopIterations: 60,
+    opponents: [{ name: 'L1', tally: {}, actions: { pre: 'call' } }, { name: 'L2', tally: {}, actions: { pre: 'call' } }] };
+  const bets = (x) => x.scenarios.filter((s) => s.kind === 'bet').map((s) => s.amount).sort((a, b) => a - b);
+  assert.deepStrictEqual(bets(E.analyzeSync(opt)), [30, 40, 60]);
+  assert.deepStrictEqual(bets(E.analyzeSync(Object.assign({}, opt, { pfBetFracs: [0.75, 1, 1.5, 2.5] }))), [30, 40, 60, 100]);
+});
+
+test('mwRaiseEq: no raise against a bet in a multiway pot below that showdown share (simulator option, off by default)', () => {
+  const mk = (hero, board, extra) => Object.assign({ hero: C(hero), board: C(board), pot: 30, toCall: 10, stack: 300, bigBlind: 2, inPosition: false, mix: false, seed: 5, iterations: 6000,
+    heroActions: { pre: 'call' }, opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'pending' } }] }, extra);
+  // A strong hand still raises; the gate leaves it alone.
+  const kk = E.analyzeSync(mk('Kc Kd', 'Kh 8h 4c', { mwRaiseEq: 0.5 }));
+  assert.strictEqual(kk.best.kind, 'raise');
+  // A draw: raises go below the passive options.
+  const r = E.analyzeSync(mk('Ah 5h', 'Kh 8h 4c', { mwRaiseEq: 0.5 }));
+  assert.ok(r.equity.share < 0.5);
+  assert.notStrictEqual(r.best.kind, 'raise');
+  const firstRaise = r.ranked.findIndex((s) => s.kind === 'raise');
+  assert.ok(r.ranked.slice(0, firstRaise).every((s) => s.kind === 'fold' || s.kind === 'call'));
+  // A solver's raise share moves to the other actions (turn solver against the field).
+  const t = E.analyzeSync(mk('Kd Qd', 'Kh 8h 4c 2s', { mwRaiseEq: 0.5, turnSolver: true, turnIterations: 6, iterations: 4000,
+    opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }] }));
+  if (t.solver && t.equity.share < 0.5) {
+    const raised = t.ranked.filter((a) => a.kind === 'raise' || (a.kind === 'allin' && a.amount > 10)).reduce((x, a) => x + a.freq, 0);
+    assert.strictEqual(raised, 0);
+    assert.ok(Math.abs(t.ranked.reduce((x, a) => x + a.freq, 0) - 1) < 1e-9);
+  }
+  // Heads-up the option does nothing.
+  const hu = mk('Ah 5h', 'Kh 8h 4c', { opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }] });
+  assert.strictEqual(JSON.stringify(E.analyzeSync(Object.assign({}, hu, { mwRaiseEq: 0.5 })).ranked), JSON.stringify(E.analyzeSync(hu).ranked));
 });
 
 // ---------------------------------------------------------------------------
