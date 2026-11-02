@@ -401,11 +401,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   rate at that size (`foldAtSize`) instead of their fold rate against a third of the pot, so a call of a pot-size bet
   keeps the top third or so of the range and a call of a min-bet most of it. Shown hands are always scored this way.
   Logs (247 shows): x1.52 -> x1.57 of a random guess (31 Oct +1.3 nats over 94 shows, 1 Nov -0.8 over 48, 2 Nov +7.1
-  over 105). Bots (twin sim, 5-handed, 714 shows): x2.04 -> x2.00, since the bots call big bets more like the old read
-  (their draws call up to a pot-size bet at 0.85). Simulator, live budget, against v1.8.7, 1,000 deals each: 4-handed
-  -37.1 ± 16.9 (seed 801) and +14.9 ± 16.9 (802), 5-handed -10.8 ± 17.0 (803), 6-handed +3.9 ± 13.5 (805), heads-up
-  -7.4 ± 21.2 (804); pooled -6.1 ± 7.4. Fits the friends, ties on the bots: held for Marwin (2 Nov night rule: reads
-  changes that fit the logs but lose or tie in sims don't merge).
+  over 105). Bots (twin sim, 5-handed, 714 shows): x2.04 -> x2.00 (unexplained: against main's read the bots' calls
+  get stronger with the bet size about as the friends' do, leaks thread). Simulator, live budget, against v1.8.7,
+  1,000 deals each: 4-handed -37.1 ± 16.9 (seed 801) and +14.9 ± 16.9 (802), 5-handed -10.8 ± 17.0 (803), 6-handed
+  +3.9 ± 13.5 (805), heads-up -7.4 ± 21.2 (804); pooled -6.1 ± 7.4. Fits the friends, ties on the bots: held for
+  Marwin (2 Nov night rule: reads changes that fit the logs but lose or tie in sims don't merge).
 - Simulator validity (diagnosis thread, 2 Nov night; scripts in /mnt/project-files/patio-solver/scripts/
   2026-11-02-diagnose/):
   - Friends don't adapt to frequent big raisers preflop: continue log-odds against raises to 30bb+ move -0.07 ± 0.52
@@ -443,8 +443,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     20% of 100bb+ pots (mean -8.5 ± 8.5 bb, n 41), the sim's 45-50%.
   - Folds to bets in 15bb+ pots: the bots fold 5-10 points less than their read (v6 bots: 0.37 against 0.46 to each
     other's bets, n 1,102; friend bots to hero's bets 0.44-0.47 against 0.51-0.53), the friends at it (0.43 against
-    0.44, n 371; to hero's 0.50 against 0.47, n 109). So the sim pays hero's big value bets more often, and with weaker
-    hands, than the friends do.
+    0.44, n 371; to hero's 0.50 against 0.47, n 109). So the sim pays hero's big value bets more often than the
+    friends do. Their big calls are as strong as the friends' against main's read (shown hands after calling 0.85 pot
+    or more: friends 0.567 ± 0.052, n 33; v6 bots 0.558 ± 0.029, n 101; v7 0.526 ± 0.033, n 60). The leaks thread's v7
+    bots (test/sim/profiles-v7.json, bigCall 0.18, on branch claude/project-thread-4ko8nc) fold to big-pot bets at the
+    read, and their showdowns per hand drop from 0.87 to 0.60 (friends 0.54).
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
