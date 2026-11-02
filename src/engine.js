@@ -6165,13 +6165,19 @@
       }
       const ranked = scenarios.slice().sort((a, b) => b.ev - a.ev);
       const aggressive = (sc) => sc.kind === 'bet' || sc.kind === 'raise' || (sc.kind === 'allin' && sc.amount > toCall);
+      // input.mwRaiseEq (simulator option, off by default): no raise against a bet after the flop with two or more
+      // opponents in when hero's showdown share against them is under this. The raises go to the end of the list.
+      raiseGated = mwRaiseGate();
+      if (raiseGated) ranked.sort((a, b) => (aggressive(a) ? 1 : 0) - (aggressive(b) ? 1 : 0));
       let best = ranked[0];
       if (aggressive(best)) {
         const tol = Math.max(0.02 * (pot + toCall), 1.5 * best.se, 0.1 * bigBlind);
         const near = ranked.filter((sc) => aggressive(sc) && best.ev - sc.ev <= tol);
         best = near.sort((a, b) => a.amount - b.amount)[0];
       }
-      let runnerUp = ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
+      let runnerUp = raiseGated
+        ? ranked.find((sc) => !aggressive(sc) && sc.kind !== best.kind)
+        : ranked.find((sc) => aggressive(sc) !== aggressive(best) || (!aggressive(best) && sc.kind !== best.kind));
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
       const base = scenarios.find((s) => s.kind !== 'fold');
       const margin = runnerUp ? best.ev - runnerUp.ev : Infinity;
@@ -6192,10 +6198,30 @@
       return finish(ranked, best, runnerUp, margin, close, mix);
     }
 
+    let raiseGated = false;
+    function mwRaiseGate() {
+      if (input.mwRaiseEq == null || street < 3 || toCall <= 0 || opps.length < 2) return false;
+      const base = scenarios.find((s) => s.kind !== 'fold');
+      const share = base && base.showdowns ? base.shareSum / base.showdowns : 1;
+      return share < +input.mwRaiseEq;
+    }
+
     // Advice from the river solve: its frequencies and EVs for hero's real hand.
     function solvedResult() {
       const name = { fold: 'Fold', check: 'Check', call: 'Call', bet: 'Bet', raise: 'Raise' };
-      const acts = solved.actions.map((a) => ({
+      let solvedActs = solved.actions;
+      if (raiseGated) {
+        // The gate (input.mwRaiseEq): the solve's raise share goes to the other actions in proportion, or all to the
+        // best of them by EV if the solve only raised.
+        const isRaise = (a) => a.kind === 'raise' || (a.kind === 'allin' && a.amount > toCall + 1e-9);
+        const rest = solvedActs.filter((a) => !isRaise(a));
+        const keep = rest.reduce((x, a) => x + a.freq, 0);
+        if (rest.length) {
+          const top = rest.reduce((m, a) => (a.ev > m.ev ? a : m), rest[0]);
+          solvedActs = solvedActs.map((a) => Object.assign({}, a, { freq: isRaise(a) ? 0 : keep > 1e-9 ? a.freq / keep : a === top ? 1 : 0 }));
+        }
+      }
+      const acts = solvedActs.map((a) => ({
         kind: a.kind, amount: a.amount, ev: a.ev, se: 0, freq: a.freq,
         label: a.label || (a.kind === 'allin' ? (a.amount <= toCall + 1e-9 ? 'Call all-in' : 'All-in') : name[a.kind]),
         sizeLabel: a.sizeLabel != null ? a.sizeLabel : a.frac && a.kind !== 'allin'

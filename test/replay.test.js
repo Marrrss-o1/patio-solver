@@ -1311,6 +1311,31 @@ test('preflop sizes: pfRaiseFracs and pfBetFracs add sizes for the simulator, de
   assert.deepStrictEqual(bets(E.analyzeSync(Object.assign({}, opt, { pfBetFracs: [0.75, 1, 1.5, 2.5] }))), [30, 40, 60, 100]);
 });
 
+test('mwRaiseEq: no raise against a bet in a multiway pot below that showdown share (simulator option, off by default)', () => {
+  const mk = (hero, board, extra) => Object.assign({ hero: C(hero), board: C(board), pot: 30, toCall: 10, stack: 300, bigBlind: 2, inPosition: false, mix: false, seed: 5, iterations: 6000,
+    heroActions: { pre: 'call' }, opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'pending' } }] }, extra);
+  // A strong hand still raises; the gate leaves it alone.
+  const kk = E.analyzeSync(mk('Kc Kd', 'Kh 8h 4c', { mwRaiseEq: 0.5 }));
+  assert.strictEqual(kk.best.kind, 'raise');
+  // A draw: raises go below the passive options.
+  const r = E.analyzeSync(mk('Ah 5h', 'Kh 8h 4c', { mwRaiseEq: 0.5 }));
+  assert.ok(r.equity.share < 0.5);
+  assert.notStrictEqual(r.best.kind, 'raise');
+  const firstRaise = r.ranked.findIndex((s) => s.kind === 'raise');
+  assert.ok(r.ranked.slice(0, firstRaise).every((s) => s.kind === 'fold' || s.kind === 'call'));
+  // A solver's raise share moves to the other actions (turn solver against the field).
+  const t = E.analyzeSync(mk('Kd Qd', 'Kh 8h 4c 2s', { mwRaiseEq: 0.5, turnSolver: true, turnIterations: 6, iterations: 4000,
+    opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet', turn: 'bet' }, pfAggressor: true }, { name: 'B', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'pending' } }] }));
+  if (t.solver && t.equity.share < 0.5) {
+    const raised = t.ranked.filter((a) => a.kind === 'raise' || (a.kind === 'allin' && a.amount > 10)).reduce((x, a) => x + a.freq, 0);
+    assert.strictEqual(raised, 0);
+    assert.ok(Math.abs(t.ranked.reduce((x, a) => x + a.freq, 0) - 1) < 1e-9);
+  }
+  // Heads-up the option does nothing.
+  const hu = mk('Ah 5h', 'Kh 8h 4c', { opponents: [{ name: 'A', tally: {}, actions: { pre: 'raise', flop: 'bet' }, pfAggressor: true }] });
+  assert.strictEqual(JSON.stringify(E.analyzeSync(Object.assign({}, hu, { mwRaiseEq: 0.5 })).ranked), JSON.stringify(E.analyzeSync(hu).ranked));
+});
+
 // ---------------------------------------------------------------------------
 // 9. Audit: chip accounting (pot odds, side pots, all-ins, blinds)
 // ---------------------------------------------------------------------------
