@@ -373,6 +373,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   Without the 30bb cap the 2.6 size also went into 4-bets past the cliff (premiums 4-bet to 60bb+ 39% vs 9%, -13.2
   ± 4.7 premium on seed 652); uncapped 4-handed +13.2, +1.2, -14.3. Adding 4x and a 2.5x-pot option bet: -1.3 ± 20.4.
   `pfRaiseFracs` / `pfBetFracs` replace the menus for simulator runs.
+- Tried and dropped (2 Nov): reading a turn or river bet by a player who only called the street before as stronger
+  (`afterCall`, code at ec491d7 in PR #80: the line's bet rate as an odds scale on the street's rate, and a share of the
+  range noise). Friends bet the turn after calling 13% of the time (87 chances) and the river 26% (77), against 25% /
+  48% after a checked street and 43% / 55% after betting it (all logs, 369 hands); the read uses the street's whole
+  rate (prior 26% / 42%) with about half the range random. Every turn lead after a flop call in the new logs was shown
+  (4 of 4, no unshown ones: Q8 and T8 two pair, J8 turned top pair, J9 turned straight, all made by the turn card).
+  With odds x0.43 turn / x0.48 river and a quarter of the noise, shown turn bets after a call fit x2.07 -> x3.12 of a
+  random guess (8 shows, mean quantile 0.78 -> 0.65), river x1.51 -> x1.53 (11 shows, 0.64 -> 0.53; river leads after
+  a call also include unshown pot-size bets and one fold to hero's raise). On 2 Nov's K3o hand (top pair facing
+  leballs' 55% turn lead after he called hero's flop raise on Qs Kh 2s Td; he had J9) the advice went from all-in
+  (equity 0.48) to fold (0.38), and JJ called instead of raising Jelonte's two pair; 16 of 387 logged decisions
+  changed. Simulator, live budget, against v1.8.6, 1,000 deals each: 4-handed +19.7 ± 16.6, -6.7 ± 14.5,
+  -2.7 ± 14.1, +7.1 ± 16.9, -29.5 ± 16.7, 3-handed -3.7 ± 16.4, 5-handed +12.4 ± 13.8 (pooled -0.1 ± 5.8); phone
+  -13.4 ± 16.6; turn only +6.1 ± 15.8 (3-handed), -10.1 ± 15.6; stronger (no noise, half the bluffs) -15.1 ± 13.9,
+  +10.2 ± 14.5, 5-handed +0.7 ± 11.2 (pooled -1.3 ± 7.5). The bots' bets after a call are value-heavy too (`lineBet`
+  -2.6 in log-odds), so the simulator could have shown a gain; the line comes up about once in ten turn chances, and
+  about 12% of hands end differently mostly through changed showdown fits. Revisit with more shown leads.
 - Tried and dropped (2 Nov): no raise against a bet after the flop with 2+ opponents while hero's showdown share is
   under 0.5 (`input.mwRaiseEq`, kept as a simulator option): 4-handed +2.6 ± 8.2 and -0.1 ± 7.2, 5-handed -3.1 ± 8.6
   (4-5% of hands change). The exploit.js spot table had multiway raises at about -30 bb a hand against -8 for calls,
