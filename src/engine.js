@@ -4494,9 +4494,19 @@
   // (kCall) or first raise (kRaise(amount)), and kappa per hero class: hero's K-way pot share at
   // showdown over hero's share against the field's strongest hand (the hand the solver plays
   // against). Both come from the same sampled boards and opponent hands, so the ratio is steady.
-  function preflopMulti(opps, scenarios, raisesSc, capE, toCall, samples, seed) {
+  //
+  // With opt.bySize (input.pfFieldBySize), kapBy(amount) gives, for each root raise, hero's share
+  // at the leaf where the field calls it, measured instead of interpolated: over the same samples,
+  // each opponent continues against that size with the top sc.opp[i].cont of their range (by class
+  // order, as fieldMax), and kapBy = sum(multiway share x leaf pot) / sum(share against the
+  // strongest caller x leaf pot at kRaise callers). The pot weighting keeps the pull of the
+  // spots with more callers (bigger pot, smaller share), which kappa^((k-1)/(K-1)) at the mean
+  // number of callers missed: on a logged 5-way 30bb shove (J8o) the old leaf gave hero 24.9% of a
+  // 248-chip pot, a direct simulation 22.7%, and lower still in the pots with more callers.
+  function preflopMulti(opps, scenarios, raisesSc, capE, toCall, samples, seed, opt) {
     const NC = 169, K = opps.length;
     const rng = mulberry32((seed ^ 0x3c6ef372) >>> 0);
+    const by = opt && opt.bySize && raisesSc.length ? opt : null;
     const cdfs = opps.map((o) => {
       const c = new Float64Array(NUM_COMBOS);
       let t = 0;
@@ -4514,6 +4524,36 @@
     const multi = new Float64Array(NC), vsMax = new Float64Array(NC);
     const used = new Uint8Array(52), buf = new Int32Array(7), oScore = new Int32Array(K), oHand = new Int32Array(K);
     let got = 0;
+    // Per raise size: each opponent's fold share (keep) and the class cdf by preflop order, the leaf's
+    // pot per number of callers, and the running sums.
+    let sizes = null, oU = null, Fb = null, Fa = null;
+    if (by) {
+      const order = Array.from({ length: NC }, (_, c) => c).sort((a, b) => CLASS_STRENGTH[a] - CLASS_STRENGTH[b]);
+      Fb = []; Fa = [];
+      for (const o of opps) {
+        const cw = classWeights(o.W), fb = new Float64Array(NC), fa = new Float64Array(NC);
+        let t = 0;
+        for (let c = 0; c < NC; c++) t += cw[c] * CLASS_COMBO_COUNT[c];
+        let cum = 0;
+        for (const c of order) { fb[c] = t > 0 ? cum / t : 0; cum += cw[c] * CLASS_COMBO_COUNT[c]; fa[c] = t > 0 ? Math.min(1, cum / t) : 1; }
+        Fb.push(fb); Fa.push(fa);
+      }
+      oU = new Float64Array(K);
+      const seen = new Set();
+      sizes = [];
+      for (const sc of raisesSc) {
+        const amt = capE(sc.amount);
+        if (seen.has(amt)) continue;
+        seen.add(amt);
+        const keep = sc.opp.map((r) => 1 - clamp(r.cont, 0, 1));
+        let sum = 0, none = 1;
+        for (const r of sc.opp) { const c = clamp(r.cont, 0, 1); sum += c; none *= 1 - c; }
+        const kbar = none < 1 ? Math.max(1, sum / (1 - none)) : 1;
+        const o = Math.max(0, Math.min(amt - toCall, by.oMax));
+        const potK = (n) => by.pot + amt + n * o;
+        sizes.push({ amt, keep, kbar, potK, ref: potK(kbar), num: new Float64Array(NC), den: new Float64Array(NC), n: 0, best: 0, ties: 0, top: 0, w: 0 });
+      }
+    }
     for (let it = 0; it < samples * 4 && got < samples; it++) {
       used.fill(0);
       let ok = cdfs.every(Boolean);
@@ -4540,6 +4580,21 @@
       let ties = 0;
       for (let i = 0; i < K; i++) if (oScore[i] === best) ties++;
       got++;
+      if (sizes) {
+        for (let i = 0; i < K; i++) oU[i] = rng();
+        for (const z of sizes) {
+          let n = 0, b2 = -1, t2 = 0, top2 = -1;
+          for (let i = 0; i < K; i++) {
+            const c = COMBO_CLASS[oHand[i]], fa = Fa[i][c], fb = Fb[i][c];
+            const pc = fa - fb > 1e-12 ? clamp((fa - z.keep[i]) / (fa - fb), 0, 1) : fa > z.keep[i] ? 1 : 0;
+            if (!(oU[i] < pc)) continue;
+            n++;
+            if (oScore[i] > b2) { b2 = oScore[i]; t2 = 1; } else if (oScore[i] === b2) t2++;
+            if (top2 < 0 || CLASS_STRENGTH[c] > CLASS_STRENGTH[COMBO_CLASS[oHand[top2]]]) top2 = i;
+          }
+          z.n = n; z.best = b2; z.ties = t2; z.top = n ? oScore[top2] : 0; z.w = n ? z.potK(n) / z.ref : 0;
+        }
+      }
       for (let a = 0; a < NC; a++) {
         const list = byClass[a];
         let k = -1;
@@ -4552,6 +4607,13 @@
         const h = evaluate(buf, 7);
         multi[a] += h > best ? 1 : h === best ? 1 / (ties + 1) : 0;
         vsMax[a] += h > oScore[top] ? 1 : h === oScore[top] ? 0.5 : 0;
+        if (sizes) {
+          for (const z of sizes) {
+            if (!z.n) continue;
+            z.num[a] += (h > z.best ? 1 : h === z.best ? 1 / (z.ties + 1) : 0) * z.w;
+            z.den[a] += h > z.top ? 1 : h === z.top ? 0.5 : 0;
+          }
+        }
       }
     }
     if (got < 20) return null;
@@ -4567,7 +4629,17 @@
       for (const r of sc.opp) { const c = clamp(r.cont, 0, 1); sum += c; none *= 1 - c; }
       return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
     };
-    return { K, kappa, kCall: Math.max(1, kCall), kRaise, samples: got };
+    let kapBy = null;
+    if (sizes) {
+      const vec = new Map();
+      for (const z of sizes) {
+        const v = new Float64Array(NC);
+        for (let a = 0; a < NC; a++) v[a] = clamp((z.num[a] + 0.5) / (z.den[a] + 0.5), 0.05, 1.1);
+        vec.set(z.amt, v);
+      }
+      kapBy = (amt) => { for (const [x, v] of vec) if (Math.abs(x - amt) < 1e-9) return v; return null; };
+    }
+    return { K, kappa, kCall: Math.max(1, kCall), kRaise, kapBy, samples: got };
   }
 
   function preflopSolve(cfg) {
@@ -4603,7 +4675,7 @@
     // ----- tree -----
     // The read's strategy at a villain node: continue with the top `cont` of the range they
     // can have here ([lo, hi] in their root-range quantiles), raise with the top `raise`.
-    function villainFixed(acts, lo, hi, cont, raise, shortStack) {
+    function villainFixed(acts, lo, hi, cont, raise, shortStack, q) {
       const s = new Float64Array(acts.length * NC);
       const span = Math.max(1e-6, hi - lo), w = Math.max(0.008, 0.03 * span);
       const foldEdge = lo + (1 - cont) * span, raiseEdge = hi - Math.min(raise, cont) * span;
@@ -4612,9 +4684,9 @@
       const iR = acts.findIndex((a) => a.kind === 'raise');
       const iA = acts.findIndex((a) => a.kind === 'allin' && !a.isCall);
       for (let b = 0; b < NC; b++) {
-        const q = qO[b];
-        const pC = iF < 0 || cont >= 0.999 ? 1 : sigmoid((q - foldEdge) / w);
-        const pR = raise > 0 && (iR >= 0 || iA >= 0) ? sigmoid((q - raiseEdge) / w) : 0;
+        const qb = q[b];
+        const pC = iF < 0 || cont >= 0.999 ? 1 : sigmoid((qb - foldEdge) / w);
+        const pR = raise > 0 && (iR >= 0 || iA >= 0) ? sigmoid((qb - raiseEdge) / w) : 0;
         const pr = new Float64Array(acts.length);
         if (iF >= 0) pr[iF] = 1 - pC;
         pr[iC] = pC * (1 - pR);
@@ -4643,16 +4715,18 @@
       for (let a = 0; a < NC; a++) out[a] = Math.pow(multi.kappa[a], e);
       return (kapCache[key] = out);
     }
-    function leaf(h, o, k) {
+    function leaf(h, o, k, kap) {
       terminals++;
       const m = multi && k > 1 ? k : 1;
       const allIn = h >= E - 1e-9 || o >= oMax - 1e-9;
       const potF = P0 + h + m * o;
       const n = allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF) };
-      if (m > 1) { n.m = m; n.kap = kapFor(k); }
+      if (m > 1) { n.m = m; n.kap = kap || kapFor(k); }
       return n;
     }
-    function node(player, hIn, oIn, raises, lo, hi, vRaised, depth) {
+    // q: the quantiles of the opponent's range in this part of the tree (the field's hand can
+    // differ by hero's root raise, cfg.rootActs[].fieldW).
+    function node(player, hIn, oIn, raises, lo, hi, vRaised, depth, q) {
       const potNow = P0 + hIn + oIn;
       const facing = player === 0 ? toCall + oIn - hIn : hIn - toCall - oIn;
       const myIn = player === 0 ? hIn : oIn;
@@ -4674,10 +4748,10 @@
           cont = rule.cont; raise = Math.min(rule.reraise, rule.cont);
         }
       }
-      const raiseAmts = [];
+      const raiseAmts = [], raiseW = [];
       if (raises > 0 && maxAdd > facing + 1e-9) {
         if (isRoot) {
-          for (const a of rootActs) if (a.amount > facing + 1e-9) raiseAmts.push(Math.min(a.amount, maxAdd));
+          for (const a of rootActs) if (a.amount > facing + 1e-9) { raiseAmts.push(Math.min(a.amount, maxAdd)); raiseW.push(a.fieldW || null); }
         } else {
           const r = round(facing + (potNow + facing));
           if (r < 0.45 * maxAdd) raiseAmts.push(r);
@@ -4688,6 +4762,8 @@
       // Players in at a leaf below this node: all of them after hero's call or check (or the
       // option checked back), the expected callers after hero's first raise, one deeper.
       const kLeaf = !multi ? 1 : depth === 0 ? multi.kCall : depth === 1 && player === 1 ? (facing > 0 ? multi.kRaise(hIn) : multi.kCall) : 1;
+      // Hero's measured share where the field calls this root raise (preflopMulti's kapBy).
+      const kapLeaf = multi && multi.kapBy && depth === 1 && player === 1 && facing > 0 ? multi.kapBy(hIn) : null;
       const childRange = (kind) => {
         if (player === 0) return [lo, hi];
         const span = hi - lo, foldEdge = lo + (1 - cont) * span, raiseEdge = hi - Math.min(raise, cont) * span;
@@ -4700,18 +4776,21 @@
         const [h2, o2] = put(c);
         const callKind = c >= maxAdd - 1e-9 ? 'allin' : 'call';
         const callLeaf = isRoot && option && c < maxAdd - 1e-9
-          ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1); }
-          : () => leaf(h2, o2, kLeaf);
+          ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1, q); }
+          : () => leaf(h2, o2, kLeaf, kapLeaf);
         add({ kind: callKind, amount: c, isCall: true }, callLeaf);
       } else {
         add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn, kLeaf));
       }
-      for (const amt of raiseAmts) {
+      raiseAmts.forEach((amt, j) => {
         const [h3, o3] = put(amt);
         const kind = amt >= maxAdd - 1e-9 ? 'allin' : 'raise';
         const [l3, hi3] = childRange('raise');
-        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, vRaised || player === 1, depth + 1));
-      }
+        const fw = raiseW[j];
+        const a = { kind, amount: amt };
+        if (fw) a.fieldW = fw;
+        add(a, () => node(1 - player, h3, o3, raises - 1, l3, hi3, vRaised || player === 1, depth + 1, fw ? branchQ(fw) : q));
+      });
       if (isRoot && cfg.noLimp) {
         const j = acts.findIndex((a) => a.kind === 'call');
         if (j >= 0 && acts.length > 2) { acts.splice(j, 1); kids.splice(j, 1); }
@@ -4720,10 +4799,31 @@
       n.kids = kids.map((k) => (typeof k === 'function' ? k() : k));
       n.regret = new Float64Array(acts.length * NC);
       n.sum = new Float64Array(acts.length * NC);
-      if (player === 1) n.fixed = villainFixed(acts, lo, hi, cont, raise, shortStack).s;
+      if (player === 1) n.fixed = villainFixed(acts, lo, hi, cont, raise, shortStack, q).s;
       return n;
     }
-    const root = node(0, 0, 0, cfg.raises || 4, 0, 1, cfg.villainRaised, 0);
+    const qCache = new Map();
+    function branchQ(w) {
+      if (!qCache.has(w)) qCache.set(w, classQuantiles(w));
+      return qCache.get(w);
+    }
+    const root = node(0, 0, 0, cfg.raises || 4, 0, 1, cfg.villainRaised, 0, qO);
+    // A root raise with its own field range (fieldW): the opponent's reach below it is that
+    // range, and hero's values there are rescaled per class by mass(oppW) / mass(fieldW) (the
+    // blocker-aware number of opponent combos), so every root action is valued against the same
+    // total and the EVs keep dividing by mass(oppW). In the opponent's pass hero's reach takes
+    // the same factor, which weights hero's classes as the branch's range does.
+    {
+      const base = new Float64Array(NC);
+      classMass(oppW, base, 1);
+      root.branch = root.acts.map((a) => {
+        if (!a.fieldW) return null;
+        const w = Float64Array.from(a.fieldW), bm = classMass(w, new Float64Array(NC), 1), sc = new Float64Array(NC);
+        for (let c = 0; c < NC; c++) sc[c] = bm[c] > 0 ? base[c] / bm[c] : 1;
+        return { w, s: sc };
+      });
+      if (!root.branch.some(Boolean)) root.branch = null;
+    }
 
     // ----- Discounted CFR over classes -----
     const acc = new Float64Array(NC), tot = new Float64Array(NC), live = new Int32Array(NC), lw = new Float64Array(NC);
@@ -4740,6 +4840,7 @@
       const mats = [MEQ, ...Object.values(shareCache)];
       const B = arenaBytes;
       let bytes = mats.length * 2 * B(NP * NP, 4) + B(NP, 4) + 5 * B(NP, 8) + 2 * B(NC, 8) + 2 * B(NC, 4) + B(13, 8);
+      if (root.branch) for (const br of root.branch) if (br) bytes += B(NP, 8);
       (function size(n) {
         for (const k of n.kids) {
           if (k.term) { bytes += B(NP, 8); continue; }
@@ -4759,6 +4860,7 @@
       }
       kLive = arenaI32(NP); kW = arenaF64(NP); kOut = arenaF64(NP); kTot = arenaF64(NP);
       kH = arenaF64(NP); kH.set(heroW); kO = arenaF64(NP); kO.set(oppW);
+      if (root.branch) for (const br of root.branch) if (br) { br.wK = arenaF64(NP); br.wK.set(br.w); }
       const cnt = arenaF64(NC), per = arenaF64(NC), r1 = arenaI32(NC), r2 = arenaI32(NC);
       cnt.set(CLASS_COMBO_COUNT); per.set(CLASS_PER_CARD); r1.set(CLASS_R1); r2.set(CLASS_R2);
       kc = { cnt: cnt.byteOffset, per: per.byteOffset, r1: r1.byteOffset, r2: r2.byteOffset, PP: arenaF64(13).byteOffset };
@@ -4928,7 +5030,10 @@
       for (let a = 0; a < nA; a++) {
         const r2 = n.r2[a];
         for (let i = 0; i < NC; i++) r2[i] = base[i] * s[a * NC + i];
-        const va = n.player === 0 ? cfr(n.kids[a], trav, r2, rO, avg) : cfr(n.kids[a], trav, rH, r2, avg);
+        const br = n.branch && n.branch[a];
+        if (br && trav === 1) for (let i = 0; i < NC; i++) r2[i] *= br.s[i];
+        const va = n.player === 0 ? cfr(n.kids[a], trav, r2, br ? br.w : rO, avg) : cfr(n.kids[a], trav, rH, r2, avg);
+        if (br && trav === 0) for (let i = 0; i < NC; i++) va[i] *= br.s[i];
         if (own) { vals.push(avg ? Float64Array.from(va) : va); for (let i = 0; i < NC; i++) v[i] += s[a * NC + i] * va[i]; }
         else for (let i = 0; i < NC; i++) v[i] += va[i];
       }
@@ -4967,7 +5072,10 @@
       for (let a = 0; a < nA; a++) {
         const r2 = n.r2[a];
         k.mul(r2.byteOffset, base.byteOffset, so + a * row, NP);
-        const va = n.player === 0 ? cfrK(n.kids[a], trav, r2, rO, avg) : cfrK(n.kids[a], trav, rH, r2, avg);
+        const br = n.branch && n.branch[a];
+        if (br && trav === 1) for (let i = 0; i < NC; i++) r2[i] *= br.s[i];
+        const va = n.player === 0 ? cfrK(n.kids[a], trav, r2, br ? br.wK : rO, avg) : cfrK(n.kids[a], trav, rH, r2, avg);
+        if (br && trav === 0) for (let i = 0; i < NC; i++) va[i] *= br.s[i];
         if (own) { vals.push(avg ? Float64Array.from(va.subarray(0, NC)) : va); k.addMul(v.byteOffset, so + a * row, va.byteOffset, NP); }
         else k.addTo(v.byteOffset, va.byteOffset, NP);
       }
@@ -6026,6 +6134,12 @@
       const raisesSc = scenarios.filter((s) => s.kind !== 'fold' && s.amount > toCall + 1e-9);
       const mid = raisesSc.find((s) => s.sizeLabel === 'pot-size raise') || raisesSc[0];
       const oppCw = field ? fieldMax(oppCws, mid ? mid.opp.map((r) => r.cont) : null) : oppCws[0];
+      // The field's hand by hero's raise size (input.pfFieldBySize): the strongest of the hands
+      // that continue against that size, each player at their own rate for it. With one range
+      // for every size (the pot-size raise's), a shove into four players kept 1 - prod(fold) near
+      // 1 and the field barely narrowed, so it called with too weak a hand.
+      const bySize = field && input.pfFieldBySize === true;
+      const fieldWOf = (sc) => (sc === mid ? oppCw : fieldMax(oppCws, sc.opp.map((r) => r.cont)));
       const rootResp = (amt) => {
         const sc = raisesSc.find((s) => Math.abs(capE(s.amount) - amt) < 1e-9);
         let fold = 1, noRaise = 1;
@@ -6047,10 +6161,11 @@
       const vRaised = pres.some((x) => /bet|raise/.test(x));
       const raises = /bet|raise/.test(heroPre) || reraised ? 2 : (!field || fieldOther) && vRaised ? 3 : 4;
       const pendingOpps = opps.filter((o) => o.pending);
-      const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed) : null;
+      const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed,
+        bySize && input.pfKappaBySize !== false ? { bySize: true, pot: potWin, oMax: Math.max(0, E - toCall) } : null) : null;
       const pf = preflopSolve({
         heroW: heroCw, oppW: oppCw, heroClass: hc, pot: potWin, toCall, stack: E, bigBlind, heroIP: inPosition,
-        rootActs: raisesSc.map((s) => ({ amount: capE(s.amount) })),
+        rootActs: raisesSc.map((s) => (bySize ? { amount: capE(s.amount), fieldW: fieldWOf(s) } : { amount: capE(s.amount) })),
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
