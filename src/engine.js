@@ -5127,6 +5127,8 @@
         const fracs = street === 0 ? (Array.isArray(input.pfRaiseFracs) ? input.pfRaiseFracs.map(Number) : [0.6, 1, 1.6]) : [0.6, 1];
         for (const f of fracs) {
           const amt = cap(roundChips(toCall + f * (pot + toCall), bigBlind));
+          // input.pfRaiseCapBB: sizes beyond the usual three only when the raise-to stays at or under this many bb.
+          if (street === 0 && input.pfRaiseCapBB != null && f !== 0.6 && f !== 1 && f !== 1.6 && (+input.heroBet || 0) + amt > +input.pfRaiseCapBB * bigBlind + 1e-9) continue;
           const label = street === 0 ? (f <= 0.6 ? 'small raise' : f === 1 ? 'pot-size raise' : f <= 1.6 ? 'big raise' : 'very big raise') : (f === 1 ? 'pot-size raise' : 'raise');
           addScenario({ kind: amt >= stack ? 'allin' : 'raise', label: amt >= stack ? 'All-in' : 'Raise', sizeLabel: label, amount: amt });
         }

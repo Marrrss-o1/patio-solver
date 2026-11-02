@@ -1296,6 +1296,9 @@ test('preflop sizes: pfRaiseFracs and pfBetFracs add sizes for the simulator, de
   const big = Object.assign({}, spot, { pfRaiseFracs: [0.6, 1, 1.6, 2.6] });
   const r = E.analyzeSync(big);
   assert.deepStrictEqual(raises(r), [50, 75, 115, 180]);
+  // pfRaiseCapBB: the extra size only while the raise-to stays under the cap (180 chips = 18bb here).
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseCapBB: 30 }))), [50, 75, 115, 180]);
+  assert.deepStrictEqual(raises(E.analyzeSync(Object.assign({}, big, { pfRaiseCapBB: 15 }))), [50, 75, 115]);
   assert.ok(r.solver, 'the preflop solver ran with the extra size');
   if (E.kernelsActive()) {
     E.useKernels(false);
