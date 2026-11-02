@@ -565,6 +565,26 @@
       return out;
     }
 
+    // The table's shows after a flop the player did not bet or raise, by players who put 15bb+ in: their scoreShow
+    // tilt log-likelihoods summed, in hero's pots (hi) and in pots hero had left (ho), for the engine's learned
+    // hero-pot tilt (heroPotLearned in engine.js). Shows recorded before v1.8.8 carry no `hp` and are left out.
+    heroPotShows() {
+      const out = { hi: null, hiN: 0, ho: null, hoN: 0 };
+      for (const r of Object.values(this.db.players)) {
+        for (const s of (r && r.tally && r.tally.shows) || []) {
+          const f = s && s.fit;
+          if (!s || s.folded || !s.hp || !(s.hp.put >= 15) || !f || !Array.isArray(f.tl)) continue;
+          if (this.fitVersion != null && f.v !== this.fitVersion) continue;
+          if (/bet|raise/.test((s.actions && s.actions.flop) || '')) continue;
+          const k = s.hp.in ? 'hi' : 'ho';
+          if (out[k] && out[k].length !== f.tl.length) continue;
+          out[k] = out[k] ? out[k].map((x, i) => x + f.tl[i]) : f.tl.slice();
+          out[k + 'N']++;
+        }
+      }
+      return out;
+    }
+
     // Shows scored by an older engine (or not at all) are scored again a few at a time after each
     // hand, so learned tilts and noise use the current range model. `fitVersion` is set by the UI.
     rescoreStale(limit) {
@@ -726,6 +746,8 @@
           ? { acts: r.blueprint.actions.filter((x) => x.p >= 0.02).map((x) => x.kind + (x.amount ? ' ' + r2(x.amount) : '') + ' ' + Math.round(x.p * 100) + '%'), visits: r2(r.blueprint.visits || 0), blended: !!r.blueprint.used }
           : { off: r.blueprint.why };
         if (r.quick) a.quick = true;
+        // Hero-pot tilt in use (learned from the table's shows; n of them) and how much of it this pot gets.
+        if (r.heroPot && r.heroPot.ramp > 0) a.heroPot = { tilt: r2(r.heroPot.tilt), n: r.heroPot.n, ramp: r2(r.heroPot.ramp) };
         if (fmt && r.ranked) a.options = r.ranked.slice(0, 5).map((sc) => ({ a: fmt(sc), ev: r2(sc.ev || 0) }));
         if (r.opponents) a.reads = r.opponents.map((o) => ({
           name: o.name, type: o.type && o.type.label, hands: Math.round(o.stats.hands || 0),
@@ -737,6 +759,7 @@
           act: o.stats.predAccuracy ? { n: Math.round(o.stats.predAccuracy.n), gain: r2(o.stats.predAccuracy.gain) } : undefined,
           noise: o.stats.rangeNoise != null ? r2(o.stats.rangeNoise) : undefined,
           tilt: o.stats.tiltAgg != null ? [r2(o.stats.tiltAgg), r2(o.stats.tiltPas)] : undefined,
+          tiltHero: o.stats.tiltHero ? r2(o.stats.tiltHero) : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -792,9 +815,12 @@
       const actions = { pre: PatioTracker.preAction(p) };
       for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) if (h.board.length >= n) actions[k] = PatioTracker.streetAction(p.seq[k], n);
       if (actions.pre === 'pending' && !p.blindAllin) actions.pre = 'call';
+      const hero = Object.values(h.players).find((x) => x.id === this.heroId());
       const show = {
         cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
         actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
+        // Whether hero was still in the pot, and the big blinds this player put in (heroPotShows).
+        hp: { in: !!(hero && !hero.folded), put: Math.round(((p.total || 0) / (h.bigBlind || 1)) * 10) / 10 },
       };
       // How well the range we would have put them on matches what they showed.
       // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.
@@ -938,6 +964,7 @@
           startStack: heroStack != null ? Math.min(heroStack + hero.total, Math.max(...opps.map((o) => { const s = snapOf(o.id); return s ? s.stack + o.total : 0; }))) : null,
           // Every known opponent's counts added up, for the engine's table prior.
           pool: this.poolTally(),
+          heroPotShows: this.heroPotShows(),
           iterations: opponents.length > 2 ? 16000 : 24000,
           // Fresh seed each decision, so close spots get mixed rather than always the same advice.
           seed: (Math.random() * 4294967296) >>> 0,

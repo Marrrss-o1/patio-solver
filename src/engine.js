@@ -1877,7 +1877,8 @@
   // (createAnalysis, input.heroPotTilt). With `learn`, `tilt` is the prior of a tilt learned from the table's own
   // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts, never below `min`: a tilt under 0
   // (hero's pots weaker than the rest) has no support in the logs and came only from a few shows on the bots.
-  const HERO_POT_TILT = { tilt: 0.3, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0 };
+  // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only).
+  const HERO_POT_TILT = { tilt: 0.3, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3 };
   // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
   // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
   // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
@@ -5110,7 +5111,7 @@
       typeof input.heroPotTilt === 'number' ? { tilt: input.heroPotTilt, learn: false } : typeof input.heroPotTilt === 'object' && input.heroPotTilt ? input.heroPotTilt : {});
     const hpLearned = hpt && hpt.learn && input.heroPotShows ? heroPotLearned(input.heroPotShows, hpt) : null;
     if (hpLearned) hpt.tilt = hpLearned.tilt;
-    const heroPotRamp = hpt && street > 0
+    const heroPotRamp = hpt && street > 0 && street >= (hpt.street || 3)
       ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {

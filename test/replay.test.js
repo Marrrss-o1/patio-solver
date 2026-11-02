@@ -1944,6 +1944,13 @@ test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10b
   assert.ok(on < off - 0.05 && more < on - 0.02, `30bb pot: on ${on} off ${off} 0.5 ${more}`);
   // They bet the flop: no tilt (those lines are on target in the logs).
   near(spot(60, {}, 'bet'), spot(60, { heroPotTilt: false }, 'bet'));
+  // street 4: turn and river only (this river spot keeps its tilt; a flop spot loses it).
+  near(spot(60, { heroPotTilt: { street: 4 } }), on);
+  const flop = (extra) => E.analyzeSync(Object.assign({ hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard),
+    pot: 60, toCall: 0, stack: 300, bigBlind: 2, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' }, bet: 0 }],
+    iterations: 500, mix: false, seed: 1 }, extra)).heroPot.ramp;
+  assert.strictEqual(flop({}), 1);
+  assert.strictEqual(flop({ heroPotTilt: { street: 4 } }), 0);
 });
 
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {
