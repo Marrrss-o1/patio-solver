@@ -5163,11 +5163,13 @@
         multiway: input.opponents.length >= 2,
         reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
         // Checked on this street already (hero bets into a check), or not acted on it yet.
-        street, line: now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
+        street, line: input.checkLine === false ? null : now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
       };
       const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
+      // input.checkLine: false drops the check-line read (#47) everywhere, the lookahead's after-check folds too (simulator).
+      if (input.checkLine === false) { const L1 = { checkedFold: 1, checkedRaise: 1, unactedRaise: 1 }; stats.line = L1; if (statsHU) statsHU.line = L1; }
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
       // input.reraiseLines: false reads a re-raise war after the flop as one raise again (before v1.8.10).
       if (input.reraiseLines === false) { stats.reraiseLines = false; if (statsHU) statsHU.reraiseLines = false; }

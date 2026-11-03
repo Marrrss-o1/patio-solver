@@ -52,13 +52,23 @@ function solverAgent(opts = {}) {
   const fallback = bots.baseline();
   const stats = { decisions: 0, errors: 0, ms: 0, solved: {} };
   const extra = Object.assign({}, opts.solver || {});
+  // Measurement only: _decay sets the tracker's per-hand decay of counts (0.997); _forget { id, every } drops the read of
+  // one player every `every` measured hands, as if they came back on a new account nobody linked.
+  if (extra._decay) tracker.decay = +extra._decay;
+  const forget = extra._forget || null;
+  let handsSeen = 0;
   if (opts.budget && !BUDGETS[opts.budget]) throw new Error('unknown budget ' + opts.budget + ' (' + Object.keys(BUDGETS).join(', ') + ')');
   const budget = opts.budget
     ? Object.assign({}, BUDGETS[opts.budget], opts.iters ? { iterations: opts.iters } : {}, opts.riverIters ? { riverIterations: opts.riverIters } : {})
     : { iterations: opts.iters || 3000, riverIterations: opts.riverIters || 120 };
   const agent = {
     E, T, tracker, stats,
-    onEvent(ev, data, snapFn) { tracker.handle(ev, data, snapFn()); },
+    onEvent(ev, data, snapFn) {
+      if (forget && ev === 'game:stage_began' && data && data.stageType === 'set_blinds' && ++handsSeen % forget.every === 0) {
+        for (const id of [].concat(forget.id)) delete tracker.db.players[id];
+      }
+      tracker.handle(ev, data, snapFn());
+    },
     act(v) {
       const b = tracker.solverInput(style);
       if (b.error) { stats.errors++; return fallback.act(v); }
