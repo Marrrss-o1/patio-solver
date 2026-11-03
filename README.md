@@ -39,7 +39,8 @@ Also works with Tampermonkey / Violentmonkey on desktop browsers and Firefox for
 3. **Range.** The solver turns each opponent's stats into a weighted range over all 1,326 starting hands, then
    narrows it by what they did this hand on each street, using that street's numbers, the size they bet and how
    often their bets of that size turned out to be bluffs. When someone bets into you, the panel says how likely
-   that bet is a bluff.
+   that bet is a bluff. In your pots, a player who only checked or called the flop and keeps putting chips in is
+   read stronger once the table's own showdowns show that habit (your friends check-call strong hands against you).
 4. **Simulate.** For every option (fold, check, call, a few bet and raise sizes) it deals opponents hands from
    their ranges and runs out the board thousands of times, with opponents folding according to their stats and the
    bet size. On the flop and turn, once it's you against one player, it also plays out the later streets: they bet,

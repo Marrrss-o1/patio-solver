@@ -118,6 +118,9 @@ function slim(r) {
   tracker.fitVersion = PokerEngine.FIT_VERSION;
   // Reads saved before v1.8.8 don't know who played together: learned from the stored hands.
   tracker.learnSeats(tracker.db.history || []);
+  // Shows saved before v1.8.9 don't say whether hero was in the pot (the learned hero-pot tilt): filled in from the
+  // stored hands.
+  if (tracker.tagHeroPot(tracker.db.history || [])) save(DB_KEY, tracker.db);
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

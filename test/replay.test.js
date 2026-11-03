@@ -243,6 +243,26 @@ test('showdown hand: the show records whether hero was in and what they put in (
   assert.strictEqual(t.heroPotShows().hiN, 0);
 });
 
+test('shows saved before v1.8.9 get their hp from the stored hands (tagHeroPot)', () => {
+  const t = new T({ players: {} });
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const sh = t.db.players.V.tally.shows[0], hist = t.db.history;
+  const want = sh.hp;
+  delete sh.hp;
+  assert.strictEqual(t.tagHeroPot([]), 0);
+  assert.strictEqual(sh.hp, undefined);
+  assert.strictEqual(t.tagHeroPot(JSON.parse(JSON.stringify(hist))), 1);
+  assert.deepStrictEqual(sh.hp, want);
+  assert.strictEqual(t.tagHeroPot(hist), 0, 'tagged shows are left alone');
+  // A show made before the river (an all-in) matches the hand by the board's first cards.
+  delete sh.hp; const full = sh.board; sh.board = full.slice(0, 3);
+  assert.strictEqual(t.tagHeroPot(hist), 1);
+  assert.deepStrictEqual(sh.hp, want);
+  delete sh.hp; sh.board = ['Kd', '8h', '3s']; // a different board: no match
+  assert.strictEqual(t.tagHeroPot(hist), 0);
+  sh.board = full;
+});
+
 test('showdown hand: bet sizes reach the solver input', () => {
   const x = replay(sd).turns[3];
   assert.strictEqual(x.input.pot, 420);

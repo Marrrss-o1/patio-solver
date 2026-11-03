@@ -537,7 +537,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   board is 0.55 ± 0.05 after a river bet (n 34; 31 Oct 0.61, 1 Nov 0.40), 0.52 ± 0.06 after a river call (n 15),
   0.53 ± 0.04 after a river check (n 53); 0.5 is on target. Script: rb-hero.js in
   /mnt/project-files/patio-solver/scripts/ (reads-bench-lines.js with these two tables).
-- Hero's pots read stronger (`HERO_POT_TILT`, `input.heroPotTilt`; false turns it off, a number sets a fixed tilt):
+- Hero's pots read stronger (v1.8.9; `HERO_POT_TILT`, `input.heroPotTilt`; false turns it off, a number sets a fixed tilt):
   after the flop, an opponent in hero's pot who did not bet or raise the flop gets extra strength tilt on their range
   (`stats.tiltHero`, added to the bias in buildRange), ramped in from 10bb to 25bb of pot. The tilt is learned from
   the table's own shows (`heroPotLearned`): shows record whether hero was still in and the big blinds the player put
@@ -567,8 +567,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   interpolated linearly) about half the time each, never at the friends' 0.3. On the logs it learns 0.3.
   Prior 0 (the default since a3daaeb; the runs above had a prior of 0.3): rebuilding the logs' reads, the tilt is 0.15
   for the first 150 hands, 0.22 at 200 and 0.3 from 250 (13 shows in hero's pots); with the prior of 0.3 it was
-  0.30-0.35 throughout. Shows recorded before this version carry no `hp`, so an install starts at 0 until new shows
-  come in, or at once after Import (rebuildReads). Live budget, 1,200 warm-up hands, off vs prior 0, v7 bots:
+  0.30-0.35 throughout. Shows recorded before v1.8.9 carry no `hp`: the panel fills them in once at start from every
+  stored hand (`tagHeroPot`: the hand where the same cards were shown on a board starting with the show's; flag
+  `db.hpTagged`), the userscript from its 150 at every load, so reads built from earlier sessions start at their
+  learned tilt (on the 31 Oct - 2 Nov logs every one of 308 shows gets the same `hp` as a rebuild, tilt 0.3). Live budget, 1,200 warm-up hands, off vs prior 0, v7 bots:
   6-handed +4.8 ± 11.9 and -8.2 ± 11.9, 5-handed +6.9 ± 14.5 and -3.9 ± 16.6, 4-handed -15.1 ± 18.7 (pooled
   -2 ± 6); bots that tighten up in hero's big pots (`--bot-params '{"hpCall":0.3,"hpFlop":1}'`, which also makes
   them fold more than read there, and their shows only reach about 0.59) 6-handed -9.2 ± 10.5, 5-handed
