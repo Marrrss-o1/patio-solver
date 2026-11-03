@@ -3,6 +3,8 @@
 //   node test/sim/diff.js test/out/sim-<tag>.json
 //   node test/sim/diff.js <file>:<A|B> <file>:<A|B>   compares variants from two runs of the same deals
 //                                                     (same players, bots, seed, block and deal count)
+//   ANY_BOTS=1 node test/sim/diff.js ...              lets the bots differ (same cards, other opponents): what one
+//                                                     opponent costs hero against another, e.g. an exploiter vs xp:none
 'use strict';
 const fs = require('fs');
 let deals, sum;
@@ -10,6 +12,7 @@ if (process.argv[3]) {
   const pick = (arg) => { const m = /^(.*?)(?::([AB]))?$/.exec(arg); const r = JSON.parse(fs.readFileSync(m[1], 'utf8')); return { r, v: m[2] || 'A' }; };
   const x = pick(process.argv[2]), y = pick(process.argv[3]);
   for (const k of ['players', 'bots', 'stackBB', 'dup', 'aivat', 'warm', 'seed', 'block']) {
+    if (k === 'bots' && process.env.ANY_BOTS === '1') continue;
     if (JSON.stringify(x.r.sum[k]) !== JSON.stringify(y.r.sum[k])) { console.log(`the runs differ in ${k}: ${JSON.stringify(x.r.sum[k])} vs ${JSON.stringify(y.r.sum[k])}`); process.exit(1); }
   }
   const nd = Math.min(x.r.deals.length, y.r.deals.length);
