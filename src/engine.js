@@ -1554,7 +1554,7 @@
     const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
     // Without a learned tilt for betting lines, only a weaker-than-expected average is used:
     // showdowns after bets are the ones that got called, so they look stronger than the bets were.
-    const bias = learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0;
+    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + (stats.tiltHero || 0);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -1873,6 +1873,38 @@
   const LINE_SOFT = 0.5;
   // Fold odds of players still to act once someone has called (see sc.oppAfter).
   const OVERCALL_FOLD = 1.3;
+  // Extra strength tilt on opponents' ranges in hero's pots after the flop, ramped in from `from` to `to` bb of pot
+  // (createAnalysis, input.heroPotTilt). With `learn`, `tilt` is the prior of a tilt learned from the table's own
+  // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts, never below `min`: a tilt under 0
+  // (hero's pots weaker than the rest) has no support in the logs and came only from a few shows on the bots.
+  // The prior is 0, so there is no tilt until the table's shows ask for one: on the friends' logs it reaches 0.22
+  // after 200 hands and 0.3 from 250 (13 shows in hero's pots). A prior of 0.3 cost -5 +- 4 bb/100 on bots that
+  // don't trap (18 runs) and -20 +- 8 on bots that tighten up in hero's big pots (4 runs); 0 is neutral on both.
+  // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only; that was no better).
+  const HERO_POT_TILT = { tilt: 0, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3 };
+  // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
+  // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
+  // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
+  // shrunk to 0), so a range model that is off everywhere doesn't count, and shrunk to cfg.tilt by cfg.k.
+  function heroPotLearned(hps, cfg) {
+    const ok = (v) => Array.isArray(v) && v.length === TILTS.length && v.every(Number.isFinite);
+    const at = (sum, tau) => {
+      tau = clamp(tau, TILTS[0], TILTS[TILTS.length - 1]);
+      let i = 0;
+      while (i < TILTS.length - 2 && tau > TILTS[i + 1]) i++;
+      const w = (tau - TILTS[i]) / (TILTS[i + 1] - TILTS[i]);
+      return sum[i] * (1 - w) + sum[i + 1] * w;
+    };
+    const argmax = (f, lo, hi) => {
+      let best = lo, bestV = -Infinity;
+      for (let j = 0; j <= 84; j++) { const x = lo + (j / 84) * (hi - lo); const v = f(x); if (v > bestV) { bestV = v; best = x; } }
+      return best;
+    };
+    const base = hps && ok(hps.ho) && hps.hoN > 0 ? argmax((t) => at(hps.ho, t) - cfg.kBase * t * t, -0.5, 0.5) : 0;
+    if (!(hps && ok(hps.hi) && hps.hiN > 0)) return { tilt: cfg.tilt, base, n: 0 };
+    const d = argmax((x) => at(hps.hi, base + x) - cfg.k * (x - cfg.tilt) * (x - cfg.tilt), Number.isFinite(cfg.min) ? cfg.min : -0.3, 0.75);
+    return { tilt: Math.round(d * 1000) / 1000, base: Math.round(base * 1000) / 1000, n: hps.hiN };
+  }
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
   // folding more, calling more, and betting and bluffing more than the read says.
@@ -5066,6 +5098,24 @@
     // weak turn call against 14) for no gain: 'none' vs 'all' -0.1 +- 23.4, 'unacted' vs 'all' +9.9 +- 17.7
     // (live budget, 4-handed, 1,000 deals); sticky exploiter +12.0 +- 31.9 and +19.5 +- 15.0 (600 deals).
     const AGGRO_FOLD = input.aggroFold || 'unacted';
+    // Hero's pots read stronger when they were passive on the flop (heroPotTilt): in the logs, friends' shown hands
+    // in hero's pots once they put 15bb+ in sit high in the range their actions predict when they did not bet or
+    // raise the flop (strength quantile 0.74, n 23; best tilt 0.5 / 0.15 / 0.3 in the three sessions), while lines
+    // with flop aggression are on target (0.52, n 6), and so are their showdowns with each other at every pot size
+    // and line (0.51, n 110). Their fold, raise and bet rates in hero's pots are on target too (fold 0.47 predicted /
+    // 0.50 actual, n 109). It looks like trapping against hero: strong hands check or call the flop and get the money
+    // in later. So the continuing part of a flop-passive range is stronger, not smaller: its range gets an extra
+    // strength tilt (buildRange's bias, exp(8 x tilt x (q - 0.5))), ramped in from a pot of `from` bb to `to` bb
+    // after the flop (`flopAgg` for lines that bet or raised the flop). input.heroPotTilt: false turns it off, a
+    // number sets a fixed tilt, an object replaces { tilt, flopAgg, from, to, learn, k, kBase }. By default the tilt
+    // is learned from the table's shows (input.heroPotShows, see heroPotLearned) with `tilt` (0) as its prior; without
+    // them (older trackers, tests) it is `tilt`, so off.
+    const hpt = input.heroPotTilt === false ? null : Object.assign({}, HERO_POT_TILT,
+      typeof input.heroPotTilt === 'number' ? { tilt: input.heroPotTilt, learn: false } : typeof input.heroPotTilt === 'object' && input.heroPotTilt ? input.heroPotTilt : {});
+    const hpLearned = hpt && hpt.learn && input.heroPotShows ? heroPotLearned(input.heroPotShows, hpt) : null;
+    if (hpLearned) hpt.tilt = hpLearned.tilt;
+    const heroPotRamp = hpt && street > 0 && street >= (hpt.street || 3)
+      ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5085,6 +5135,8 @@
         const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
         stats.afterCall = ac; if (statsHU) statsHU.afterCall = ac;
       }
+      const heroPotTilt = heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpt.tilt || 0) : 0;
+      if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -6295,6 +6347,7 @@
         street, streetName, pot, potWin, toCall, stack, bigBlind, realize, inPosition, lookahead,
         scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight,
         credibility, blueprint: bpOut ? bpOut.info : null,
+        heroPot: hpt ? { tilt: hpt.tilt, n: hpLearned ? hpLearned.n : 0, ramp: Math.round(heroPotRamp * 100) / 100 } : null,
         solver: solved ? { kind: solved.kind || 'river', iterations: solved.iterations, runs: solved.runs || 1, exploitWeight: opps[0].stats.exploitWeight, field: solved.field || solved.multiway || 0 } : null,
         equity, potOdds, hero: heroInfo, impliedOddsNeeded,
         iterations: done,

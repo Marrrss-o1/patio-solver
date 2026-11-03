@@ -396,6 +396,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   under 0.5 (`input.mwRaiseEq`, kept as a simulator option): 4-handed +2.6 ± 8.2 and -0.1 ± 7.2, 5-handed -3.1 ± 8.6
   (4-5% of hands change). The exploit.js spot table had multiway raises at about -30 bb a hand against -8 for calls,
   but that compares hands, not choices.
+- Tried and dropped (2 Nov night, live budget, bots refit on 458 hands with the commitment habits, profiles-v5):
+  the preflop field by raise size (`pfFieldBySize`, `pfOpenMulti`, `pfCallField`, with `pfFieldRange: false`,
+  `pfMeasuredFlop: false`; each root raise meets the strongest hand that calls that size, hero's multiway share
+  measured on preflopMulti's samples): 4-handed +2.1 ± 15.2, 5-handed +11.7 ± 15.6 and +20.0 ± 18.4, 6-handed
+  -19.5 ± 18.5 and -7.3 ± 20.0 (pooled +1.4 ± 7.9; preflop decisions nearly unchanged in --diag). On top of it
+  the 2.6x raise multiway (`pfRaiseHUOnly: false`): 6-handed -53.0 ± 24.5 and -7.1 ± 30.4, 5-handed -20.2 ± 24.2
+  and -34.1 ± 26.5 (pooled about -29 ± 13; raises move from 3-8bb to 8-20bb, early seats and medium hands lose).
+  An in-pot fade (`pfBigInPot`: players already in the pot continue x (30bb / raise-to)^2.5 above 30bb like players
+  yet to act, fully below a twentieth of the raise-to in, not at all from a fifth; logs: under a tenth in, 4 of 53
+  continued, a quarter or more 4 of 5), with `bigCliffFloor` 0.1: +192 ± 49 at 6-handed on the v4 bots, an artifact
+  (weak hands first in folded 24% instead of 95%, raised 64% instead of 0): with the bots' reads players with little
+  in were read as folding about 97% to big raises deeper in the tree, so raising and then shoving over a 3-bet paid
+  with any hand; with real reads it changes 2 of 361 decisions (2 Nov export) and 4 of 207 (31 Oct session 2).
+  Code on the heroPotTilt PR's history (f7989af to 3972560), reverted there. The night's regression checks (v1.8.1
+  vs v1.8.7, v4 bots, live): 6-handed +34.7 ± 21.2 and +106.7 ± 23.1, 5-handed +61.8 ± 23.5 and +42.6 ± 23.1
+  (pooled +60 ± 11). At 6-handed (exploit none) no bet hero faced would have been better folded (every
+  foldsWouldWin <= 0).
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
@@ -520,6 +537,52 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   board is 0.55 ± 0.05 after a river bet (n 34; 31 Oct 0.61, 1 Nov 0.40), 0.52 ± 0.06 after a river call (n 15),
   0.53 ± 0.04 after a river check (n 53); 0.5 is on target. Script: rb-hero.js in
   /mnt/project-files/patio-solver/scripts/ (reads-bench-lines.js with these two tables).
+- Hero's pots read stronger (v1.8.9; `HERO_POT_TILT`, `input.heroPotTilt`; false turns it off, a number sets a fixed tilt):
+  after the flop, an opponent in hero's pot who did not bet or raise the flop gets extra strength tilt on their range
+  (`stats.tiltHero`, added to the bias in buildRange), ramped in from 10bb to 25bb of pot. The tilt is learned from
+  the table's own shows (`heroPotLearned`): shows record whether hero was still in and the big blinds the player put
+  in (`show.hp`); the tracker sums scoreShow's tilt log-likelihoods of flop-passive shows with 15bb+ in, in hero's
+  pots and in the rest (`heroPotShows`), and the engine takes the tilt that fits hero's pots on top of the one that
+  fits the rest, shrunk to the prior 0 by 15 pseudo-counts, so there is no tilt until the table's shows ask for one.
+  Without `heroPotShows` it is off.
+  Shown hands, all six logs (308 hands, reads from earlier hands only; quantile 0.5 = on target): in hero's pots
+  with 15bb+ in after a passive flop the shown hand sits at 0.74 of the predicted range (n 23; per session 0.78 /
+  0.65 / 0.76, best tilt 0.5 / 0.15 / 0.3, and 0.3 beats no tilt in every session), after a flop bet or raise 0.52
+  (n 6), under 15bb 0.50 (n 15), in pots hero is not in 0.51 (n 110). Likelihood of those shows x2.30 -> x2.93 of a
+  random guess. Folds to hero's bets are on target (predicted 0.47, actual 0.50, n 109) and more range noise does
+  not fit, so the friends continue as often as read but with stronger hands: they check-call strong hands in hero's
+  pots. Outcomes agree: hero's turn and river decisions against flop-passive opponents came back 9.8 ± 2.7 bb below
+  the advised EV (16.4 ± 4.6 in 15bb+ pots), against flop aggressors 1.9 ± 12.0; in the simulator both are on
+  target (+4.7 / +0.2). Rebuilding the reads from the logs' raw events, the learned tilt is 0.35 after 50 hands and
+  0.3 from 150 on (23 shows in hero's pots, 61 in the rest). The bots can't be made to trap (a knob gave 0.53-0.58),
+  so on them a fixed 0.3 is pure cost: v6 bots, live, on vs off, 6-handed -31.3 ± 24.9 and -55.4 ± 23.2, 5-handed
+  +24.9 ± 21.7 and -44.8 ± 20.2, 4-handed +17.9 ± 26.0 and -36.0 ± 22.4, 3-handed +29.3 ± 31.1 (pooled -18 ± 9,
+  6-handed -44 ± 17; premium and strong hands value-bet less). Learned (212fe7d), vs off on bots that don't trap,
+  live: v6 6-handed -20.2 ± 18.9, -9.7 ± 18.9, -2.5 ± 15.8, 5-handed +2.4 ± 19.2, -4.3 ± 19.5, -22.2 ± 19.1,
+  4-handed +0.4 ± 17.0, -21.2 ± 19.0, +3.3 ± 21.0, 3-handed +3.7 ± 21.8; v7 6-handed -2.4 ± 15.7, 5-handed
+  +7.5 ± 14.3, 4-handed +3.0 ± 20.8 (pooled -4 ± 5). With the floor at 0 (`min`) and 1,200 warm-up hands (v7):
+  6-handed +0.2 ± 10.7, 5-handed -25.2 ± 14.5 and +14.2 ± 15.3, 4-handed -6.9 ± 18.6; with the floor and the usual
+  300, 5-handed -21.6 ± 15.9 (all 18 runs pooled -5 ± 4). A sim block
+  sees only 7-33 tagged shows in hero's pots, so the learned tilt sits at 0 or 0.15 (TILTS nodes; the curve is
+  interpolated linearly) about half the time each, never at the friends' 0.3. On the logs it learns 0.3.
+  Prior 0 (the default since a3daaeb; the runs above had a prior of 0.3): rebuilding the logs' reads, the tilt is 0.15
+  for the first 150 hands, 0.22 at 200 and 0.3 from 250 (13 shows in hero's pots); with the prior of 0.3 it was
+  0.30-0.35 throughout. Shows recorded before v1.8.9 carry no `hp`: the panel fills them in once at start from every
+  stored hand (`tagHeroPot`: the hand where the same cards were shown on a board starting with the show's; flag
+  `db.hpTagged`), the userscript from its 150 at every load, so reads built from earlier sessions start at their
+  learned tilt (on the 31 Oct - 2 Nov logs every one of 308 shows gets the same `hp` as a rebuild, tilt 0.3). Live budget, 1,200 warm-up hands, off vs prior 0, v7 bots:
+  6-handed +4.8 ± 11.9 and -8.2 ± 11.9, 5-handed +6.9 ± 14.5 and -3.9 ± 16.6, 4-handed -15.1 ± 18.7 (pooled
+  -2 ± 6); bots that tighten up in hero's big pots (`--bot-params '{"hpCall":0.3,"hpFlop":1}'`, which also makes
+  them fold more than read there, and their shows only reach about 0.59) 6-handed -9.2 ± 10.5, 5-handed
+  +15.7 ± 13.4, 4-handed +17.3 ± 12.6 (+5 ± 7). On those bots the prior of 0.3 lost -8.8 ± 17.9 and -31.4 ± 14.2
+  (5-handed), -40.5 ± 16.1 (6-handed) and +6.5 ± 16.6 (4-handed), pooled -20 ± 8, mostly in flop bets; the fixed 0.3
+  -22.8 ± 15.3. Tried and dropped: the tilt on the turn and river only (`street: 4`, prior 0.3), plain 5-handed
+  -11.5 ± 11.8 and 6-handed -25.1 ± 16.2, tightening bots -17.8 ± 10.8, -0.3 ± 12.8, -7.8 ± 16.1; on the 2 Nov
+  export it differs from the full tilt only on 7 flop decisions.
+  On the 2 Nov hand-log export (180 hands of 1-2 Nov) the fixed tilt changes 26 of 361 decisions, all postflop in
+  10bb+ pots (a 44 turn barrel into AA becomes a check, QQ stops betting and calling into AA, three losing calls
+  fold; an AK river value bet halves, an A4 turn raise that won becomes a call). Fold rates don't move, so a few
+  river checks become bluffs. Scripts and tables: /mnt/project-files/patio-solver/sims/2026-11-03-night/heropottilt/.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,

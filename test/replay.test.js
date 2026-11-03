@@ -229,6 +229,40 @@ test('showdown hand: revealed cards are logged with their bets', () => {
   assert.deepStrictEqual(shows[0].agg, [{ n: 4, frac: 1 }, { n: 5, frac: 0.17 }]);
 });
 
+test('showdown hand: the show records whether hero was in and what they put in (heroPotShows)', () => {
+  const t = new T({ players: {} });
+  t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical', t.poolTally());
+  t.fitVersion = E.FIT_VERSION;
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const sh = t.db.players.V.tally.shows[0];
+  assert.deepStrictEqual(sh.hp, { in: true, put: 24 }); // check-called the flop, 24bb in, hero to showdown
+  const hps = t.heroPotShows();
+  assert.strictEqual(hps.hiN, 1); assert.strictEqual(hps.hoN, 0);
+  assert.deepStrictEqual(hps.hi, sh.fit.tl);
+  sh.actions.flop = 'bet'; // flop aggression: not counted
+  assert.strictEqual(t.heroPotShows().hiN, 0);
+});
+
+test('shows saved before v1.8.9 get their hp from the stored hands (tagHeroPot)', () => {
+  const t = new T({ players: {} });
+  for (const m of sd) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); }
+  const sh = t.db.players.V.tally.shows[0], hist = t.db.history;
+  const want = sh.hp;
+  delete sh.hp;
+  assert.strictEqual(t.tagHeroPot([]), 0);
+  assert.strictEqual(sh.hp, undefined);
+  assert.strictEqual(t.tagHeroPot(JSON.parse(JSON.stringify(hist))), 1);
+  assert.deepStrictEqual(sh.hp, want);
+  assert.strictEqual(t.tagHeroPot(hist), 0, 'tagged shows are left alone');
+  // A show made before the river (an all-in) matches the hand by the board's first cards.
+  delete sh.hp; const full = sh.board; sh.board = full.slice(0, 3);
+  assert.strictEqual(t.tagHeroPot(hist), 1);
+  assert.deepStrictEqual(sh.hp, want);
+  delete sh.hp; sh.board = ['Kd', '8h', '3s']; // a different board: no match
+  assert.strictEqual(t.tagHeroPot(hist), 0);
+  sh.board = full;
+});
+
 test('showdown hand: bet sizes reach the solver input', () => {
   const x = replay(sd).turns[3];
   assert.strictEqual(x.input.pot, 420);
@@ -887,7 +921,7 @@ test('river solver: a player who bet earlier and then checks folds like anyone e
   // street and then check fold more than their read, not less, so the old fold-after-aggression scale
   // ('all') no longer applies once they checked on this street.
   const betEV = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet').map((s) => s.ev));
-  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3,
+  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3, heroPotTilt: false,
     opponents: [Object.assign({ name: 'V', tally: {}, pfAggressor: true }, opp)], heroActions }, extra));
   const gaveUp = (extra) => spot({ actions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, sizes: { flop: 0.5 } },
     { pre: 'call', flop: 'call', turn: 'check' }, Object.assign({ inPosition: true }, extra));
@@ -934,7 +968,7 @@ test('lookahead: also runs with two opponents left', () => {
 });
 
 test('side pots: a short all-in opponent can only pay what they have', () => {
-  const spot = riverSpot('As Kc', { riverSolver: false, toCall: 0, pot: 300, inPosition: true, iterations: 4000,
+  const spot = riverSpot('As Kc', { riverSolver: false, toCall: 0, pot: 300, inPosition: true, iterations: 4000, heroPotTilt: false,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'check' }, stack: 50, committed: 150 }],
     heroCommitted: 150 });
   const r = E.analyzeSync(spot);
@@ -1213,8 +1247,9 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
     assert.notStrictEqual(r.best.kind, 'raise', k + ': best was raise ' + r.best.amount);
     assert.ok(ev(r, 'raise') < 0, k + ': raise EV ' + ev(r, 'raise'));
   }
-  // A strong hand still wins a lot, and betting it is about as good as anything.
-  const qq = run({ hero: C('Qs Qc'), board: C('Qh 8d 3c'), pot: 24, toCall: 0, stack: 250, bigBlind: 2, inPosition: false,
+  // A strong hand still wins a lot, and betting it is about as good as anything (the lookahead alone: with
+  // heroPotTilt the bet is about 93% of checking here).
+  const qq = run({ hero: C('Qs Qc'), board: C('Qh 8d 3c'), pot: 24, toCall: 0, stack: 250, bigBlind: 2, inPosition: false, heroPotTilt: false,
     heroActions: { pre: 'call', flop: '' }, heroCommitted: 8,
     opponents: [0, 1].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: i ? 'call' : 'raise', flop: '' }, committed: 8, stack: 250 })) });
   assert.ok(qq.ranked[0].ev > 50, 'top set EV ' + qq.ranked[0].ev);
@@ -1916,6 +1951,66 @@ test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / f
   near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
 });
 
+test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10bb, full tilt from 25bb (false: off)', () => {
+  const spot = (pot, extra, flop) => E.analyzeSync(Object.assign({
+    hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: flop ? 'call' : 'bet', turn: 'check', river: '' }, heroSizes: {},
+    heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: flop || 'call', turn: 'check', river: 'check' },
+      sizes: {}, position: 'blinds', committed: pot / 2, stack: 300 - pot / 2, bet: 0, heroIP: true }],
+    iterations: 4000, mix: false, seed: 1,
+  }, extra)).equity.share;
+  near(spot(16, { heroPotTilt: 0.3 }), spot(16, { heroPotTilt: false })); // 8bb: below the ramp
+  const on = spot(60, { heroPotTilt: 0.3 }), off = spot(60, { heroPotTilt: false }), more = spot(60, { heroPotTilt: 0.5 });
+  assert.ok(on < off - 0.05 && more < on - 0.02, `30bb pot: on ${on} off ${off} 0.5 ${more}`);
+  near(spot(60, {}), off); // the default learns from a prior of 0: no shows from the tracker, no tilt
+  // They bet the flop: no tilt (those lines are on target in the logs).
+  near(spot(60, { heroPotTilt: 0.3 }, 'bet'), spot(60, { heroPotTilt: false }, 'bet'));
+  // street 4: turn and river only (this river spot keeps its tilt; a flop spot loses it).
+  near(spot(60, { heroPotTilt: { street: 4, tilt: 0.3, learn: false } }), on);
+  const flop = (extra) => E.analyzeSync(Object.assign({ hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard),
+    pot: 60, toCall: 0, stack: 300, bigBlind: 2, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' }, bet: 0 }],
+    iterations: 500, mix: false, seed: 1 }, extra)).heroPot.ramp;
+  assert.strictEqual(flop({}), 1);
+  assert.strictEqual(flop({ heroPotTilt: { street: 4 } }), 0);
+});
+
+test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {
+  const run = (hps) => E.analyzeSync({
+    hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot: 60, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: '' }, heroSizes: {},
+    heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' },
+      sizes: {}, position: 'blinds', committed: 30, stack: 270, bet: 0, heroIP: true }],
+    iterations: 2000, mix: false, seed: 1, heroPotShows: hps,
+  });
+  // n shows whose log-likelihood peaks at tilt `peak` (about the curvature of the logs' shows).
+  const curve = (n, peak) => E.TILTS.map((t) => -2.5 * n * (t - peak) * (t - peak));
+  const tilt = (hps) => run(hps).heroPot.tilt;
+  assert.strictEqual(run(undefined).heroPot.tilt, 0); // no shows from the tracker: the prior (0)
+  assert.strictEqual(tilt({ hi: null, hiN: 0, ho: curve(30, 0), hoN: 30 }), 0);
+  const calibrated = tilt({ hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 });
+  assert.ok(calibrated < 0.06, `calibrated table ${calibrated}`); // the bots: learns about 0
+  const trap = tilt({ hi: curve(60, 0.3), hiN: 60, ho: curve(60, 0), hoN: 60 });
+  assert.ok(trap > 0.25 && trap <= 0.3, `trapping table ${trap}`); // learned from 0, held back a little by the prior
+  // Ranges off everywhere by the same amount: not a hero-pot effect.
+  const offAll = tilt({ hi: curve(60, -0.15), hiN: 60, ho: curve(60, -0.15), hoN: 60 });
+  assert.ok(Math.abs(offAll) < 0.06, `off everywhere ${offAll}`);
+  // Weaker in hero's pots than elsewhere: held at 0 by default (min), learned below 0 only with a lower min.
+  const weaker = { hi: curve(60, -0.2), hiN: 60, ho: curve(60, 0), hoN: 60 };
+  assert.strictEqual(tilt(weaker), 0);
+  const below = E.analyzeSync({ hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h'].map(E.parseCard), pot: 60,
+    toCall: 0, stack: 300, bigBlind: 2, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: '' }, bet: 0 }], iterations: 500, mix: false,
+    seed: 1, heroPotTilt: { min: -0.3 }, heroPotShows: weaker }).heroPot.tilt;
+  assert.ok(below < -0.1, `below 0 with min -0.3: ${below}`);
+  const few = tilt({ hi: curve(4, 0.3), hiN: 4, ho: curve(60, 0), hoN: 60 });
+  assert.ok(few >= 0.06 && few < 0.2, `four shows ${few}`); // a few shows move it part of the way
+  // The prior is an option: a prior of 0.3 with shows that fit no tilt in hero's pots moves only part of the way down.
+  assert.ok(E.analyzeSync({ hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard), pot: 60, toCall: 0, stack: 300,
+    bigBlind: 2, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' }, bet: 0 }], iterations: 500, mix: false, seed: 1,
+    heroPotTilt: { tilt: 0.3 }, heroPotShows: { hi: curve(4, 0), hiN: 4, ho: curve(60, 0), hoN: 60 } }).heroPot.tilt >= 0.12);
+  assert.strictEqual(E.analyzeSync(Object.assign({}, { hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard), pot: 60, toCall: 0,
+    stack: 300, bigBlind: 2, inPosition: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' }, bet: 0 }], iterations: 500, mix: false, seed: 1,
+    heroPotTilt: 0.2, heroPotShows: { hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 } })).heroPot.tilt, 0.2); // a number: fixed
+});
 
 // ---------------------------------------------------------------------------
 // Linked reads: a friend on a new account id (Jagger, 2 Nov) or a new name

@@ -572,6 +572,15 @@
     tracker.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => tracker.poolTally());
     tracker.fitVersion = PokerEngine.FIT_VERSION;
     if (restored) saveDb();
+    // Shows saved before v1.8.9 don't say whether hero was in the pot, which the learned hero-pot tilt needs: they
+    // are filled in once from every stored hand, so the tilt starts from the table's history instead of from 0.
+    if (!tracker.db.hpTagged) {
+      handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
+        tracker.tagHeroPot(hands);
+        tracker.db.hpTagged = 1;
+        saveDb();
+      });
+    }
     tracker.on((type) => {
       if (type === 'save') saveDb();
       if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }

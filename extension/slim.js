@@ -10,7 +10,7 @@ function slim(r) {
     street: r.street, pot: r.pot, toCall: r.toCall, stack: isFinite(r.stack) ? r.stack : null,
     bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
-    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver, blueprint: r.blueprint,
+    margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver, blueprint: r.blueprint, heroPot: r.heroPot || null,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map((o) => ({
       name: o.name, pending: o.pending, aggressor: o.aggressor,
@@ -19,7 +19,7 @@ function slim(r) {
         hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af,
         foldToBet: o.stats.foldToBet, confidence: o.stats.confidence,
         exploitWeight: o.stats.exploitWeight, accuracy: o.stats.accuracy, strengthBias: o.stats.strengthBias,
-        callBig: o.stats.callBig, tiltAgg: o.stats.tiltAgg, tiltPas: o.stats.tiltPas,
+        callBig: o.stats.callBig, tiltAgg: o.stats.tiltAgg, tiltPas: o.stats.tiltPas, tiltHero: o.stats.tiltHero,
       },
       topClasses: o.grid.topClasses.slice(0, 8).map((c) => c.name),
       heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance,
