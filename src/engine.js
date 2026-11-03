@@ -810,8 +810,8 @@
     // Read accuracy: where each shown hand sat in the range we would have put them on.
     // A well-calibrated range has the shown hand in its more likely half about half the
     // time. Hands shown after folding are left out (the line we scored them on never finished).
-    const okShows = (t.shows || []).filter((x) => x && !x.folded && !(x.actions && Object.values(x.actions).includes('fold')));
-    const fits = okShows.map((x) => x.fit).filter((f) => f && f.top != null && f.v === FIT_VERSION);
+    const fits = (t.shows || []).filter((x) => x && !x.folded && !(x.actions && Object.values(x.actions).includes('fold')))
+      .map((x) => x.fit).filter((f) => f && f.top != null && f.v === FIT_VERSION);
     const hits = fits.filter((f) => f.top < 0.5).length;
     stats.accuracy = fits.length ? {
       n: fits.length, hits,
@@ -872,18 +872,6 @@
     stats.rangeNoiseAgg = Math.round(clamp(stats.rangeNoise * clamp((1 - vr) / Math.max(0.05, 1 - vr0), 0.25, 2), 0.02, 0.85) * 1000) / 1000;
     stats.tiltAgg = fitTilt(true);
     stats.tiltPas = fitTilt(false);
-    // Strong-action lines (ctx.lineTilt, simulator option): a tilt of their own for lines with a raise after the flop
-    // and for lines with a bet of 0.9 pot or more, from those shows only, around the betting-line tilt, so a player
-    // who raises or bets big only for value is read that way once their shows say so (red team, 3 Nov).
-    if (ctx && ctx.lineTilt) {
-      const lt = ctx.lineTilt;
-      for (const [cat, key] of [['raise', 'tiltRaise'], ['big', 'tiltBig']]) {
-        const c = lt[cat];
-        if (!c) continue;
-        const fl = okShows.filter((x) => x.fit && x.fit.top != null && x.fit.v === FIT_VERSION && x.fit.tl && x.fit.tl.length === TILTS.length && showLineKind(x) === cat).map((x) => x.fit);
-        stats[key] = fitTiltOf(fl, stats.tiltAgg, c.k, c.kUp);
-      }
-    }
 
     // Unblended read, for predicting what they do (predictAction) rather than for deciding.
     const fr = fam.fold.rate;
@@ -1528,35 +1516,6 @@
   }
 
   const TILTS = [-0.75, -0.5, -0.3, -0.15, 0, 0.15, 0.3, 0.5, 0.75];
-  // Maximum a posteriori tilt from a list of fits' tilt log-likelihoods (fit.tl), around mu, with penalty k below and
-  // kUp above it (computeStats' fitTilt, for the strong-action lines).
-  function fitTiltOf(fl, mu, k, kUp) {
-    if (!fl.length) return mu;
-    const sum = TILTS.map((_, i) => fl.reduce((a, f) => a + f.tl[i], 0));
-    let best = mu, bestV = -Infinity;
-    for (let j = 0; j <= 60; j++) {
-      const tau = TILTS[0] + (j / 60) * (TILTS[TILTS.length - 1] - TILTS[0]);
-      let i = 0;
-      while (i < TILTS.length - 2 && tau > TILTS[i + 1]) i++;
-      const w = (tau - TILTS[i]) / (TILTS[i + 1] - TILTS[i]);
-      const d = tau - mu;
-      const v = sum[i] * (1 - w) + sum[i + 1] * w - (d > 0 ? kUp : k) * d * d;
-      if (v > bestV) { bestV = v; best = tau; }
-    }
-    return Math.round(best * 1000) / 1000;
-  }
-  // 'raise' for a line with a raise after the flop, 'big' for one with a bet of 0.9 pot or more (and no raise), else null.
-  function lineKind(actions, sizes) {
-    let big = false;
-    for (const nm of ['flop', 'turn', 'river']) {
-      const a = STREET_ACTION_MAP[(actions || {})[nm]];
-      if (a === 'raise') return 'raise';
-      if (a === 'bet' && sizes && sizes[nm] >= 0.9) big = true;
-    }
-    return big ? 'big' : null;
-  }
-  const showLineKind = (x) => lineKind(x.actions, x.sizes);
-  const LINE_TILT = { raise: { k: 30, kUp: 30 }, big: { k: 30, kUp: 30 } };
   const DRAW_CALL = 2;
   const MEDIUM_BET = 0.3;
   // Preflop lines where the player raised: 'raise', '3bet', '4bet', '5bet'.
@@ -1620,12 +1579,7 @@
     // Learned correction: if this player's shown hands keep landing below (or above) the
     // middle of the range we predicted, tilt the range weaker (or stronger) to match.
     const aggLine = ['flop', 'turn', 'river'].some((n) => { const a = STREET_ACTION_MAP[actions[n]]; return a === 'bet' || a === 'raise'; });
-    let learned = aggLine ? stats.tiltAgg : stats.tiltPas;
-    if (aggLine && (stats.tiltRaise != null || stats.tiltBig != null)) {
-      const kind = lineKind(actions, sizes);
-      if (kind === 'raise' && stats.tiltRaise != null) learned = stats.tiltRaise;
-      else if (kind === 'big' && stats.tiltBig != null) learned = stats.tiltBig;
-    }
+    const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
     // Without a learned tilt for betting lines, only a weaker-than-expected average is used:
     // showdowns after bets are the ones that got called, so they look stronger than the bets were.
     const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + (stats.tiltHero || 0);
@@ -5210,8 +5164,6 @@
         reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
         // Checked on this street already (hero bets into a check), or not acted on it yet.
         street, line: input.checkLine === false ? null : now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
-        // input.lineTilt (simulator): true for LINE_TILT, or { raise: { k, kUp }, big: { k, kUp } }.
-        lineTilt: input.lineTilt === true ? LINE_TILT : input.lineTilt || null,
       };
       const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
