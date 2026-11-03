@@ -66,6 +66,7 @@
   let advice = null; // { result, ctx, forHandStreet, stale }
   let thinking = false;
   let blocked = false;
+  let hookProblem = null; // hook.js watchdog: 'nosocket' | 'silent' | null
   let reqId = 0;
 
   // Bets and raises well under the advised size (the tracker's sizeRatio: chips hero put in over
@@ -127,7 +128,7 @@
       border-bottom: 1px solid rgba(255,255,255,.08); }
     .hd b { font-size: 13px; letter-spacing: .02em; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #777; flex: none; }
-    .dot.live { background: #3fcf6e; } .dot.turn { background: #ffcc33; box-shadow: 0 0 8px #ffcc33; }
+    .dot.live { background: #3fcf6e; } .dot.turn { background: #ffcc33; box-shadow: 0 0 8px #ffcc33; } .dot.bad { background: #ff6b6b; }
     .hd .sp { flex: 1; }
     .btn { background: rgba(255,255,255,.08); color: inherit; border: 0; border-radius: 6px; padding: 3px 8px;
       font: inherit; font-size: 12px; cursor: pointer; }
@@ -442,9 +443,13 @@
     return out;
   }
 
+  const HOOK_MSG = {
+    nosocket: 'Can’t find the game’s connection, so there is no advice. Poker Patio may have changed: Patio Solver needs an update.',
+    silent: 'The table is moving but no game events arrive, so there is no advice. Poker Patio may have changed: Patio Solver needs an update.',
+  };
   function render() {
     styleSel.value = ui.tableStyle;
-    dot.className = 'dot' + (blocked ? '' : advice && !advice.stale || thinking ? ' turn' : tracker && tracker.snap ? ' live' : '');
+    dot.className = 'dot' + (blocked ? '' : hookProblem ? ' bad' : advice && !advice.stale || thinking ? ' turn' : tracker && tracker.snap ? ' live' : '');
     root.querySelector('[data-a="collapse"]').textContent = ui.collapsed ? '+' : '–';
     body.style.display = ui.collapsed ? 'none' : '';
     foot.style.display = ui.collapsed || blocked ? 'none' : '';
@@ -460,6 +465,7 @@
 
     const h = tracker && tracker.hand;
     let html = '';
+    if (hookProblem && HOOK_MSG[hookProblem]) html += `<div class="status neg">${esc(HOOK_MSG[hookProblem])}</div>`;
     const heroCards = h ? h.heroUids.map((u) => h.heroCards[u]).filter(Boolean) : [];
     if (heroCards.length || (h && h.board.length)) {
       html += `<div class="hand">${heroCards.map(cardHtml).join('')}${h.board.length ? '<span class="muted">&nbsp;board</span>' + h.board.map(cardHtml).join('') : ''}</div>`;
@@ -608,9 +614,17 @@
         return;
       }
       blocked = false;
+      if (ev === 'hook:health') {
+        hookProblem = (data && data.problem) || null;
+        render();
+        return;
+      }
       if (ev === 'hook:attached' || ev === 'hook:snapshot') {
         tracker.snap = snap;
-        if (!tracker.hand) status = 'Connected. Advice starts with the next hand.';
+        if (ev === 'hook:attached') hookProblem = null;
+        // An answer from a hook that has no socket yet (older hooks send no data and count as attached).
+        if (ev === 'hook:snapshot' && data && data.problem !== undefined) hookProblem = data.problem || null;
+        if (!tracker.hand) status = ev === 'hook:snapshot' && data && data.attached === false ? 'Looking for the game’s connection…' : 'Connected. Advice starts with the next hand.';
         render();
         return;
       }
