@@ -23,7 +23,10 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
                          The socket is GameManager.roomConnectionManager.socket since the game's 3 Nov 2026 update
                          (GameManager.socket before; v1.8.10 and older never attach to the new game and the panel
-                         stays on "Connected. Advice starts with the next hand.").
+                         stays on "Connected. Advice starts with the next hand."). Since v1.8.12 a watchdog posts
+                         `hook:health`: 'nosocket' (a table on screen, no socket for 15 s) or 'silent' (the chips move
+                         twice over 20 s with no socket event); both panels show a red dot and say Poker Patio may
+                         have changed (advice still runs). test/harness-watchdog.js checks both builds.
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
   handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
   backup.js              A copy of the reads (and the newest 150 hands, no raw events) in pokerpatio.com's IndexedDB,
@@ -621,7 +624,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
   statsHU too; predictAction and the tracker's predictor take d.checked). Facing-bet log-loss: old session 0.895 ->
   0.877, new 0.869 -> 0.857, each session alone fits about the same. Bots fold the same way (after checking 59%, old
-  read 54%). Simulator -9.5 ± 14.2 and +15.0 ± 14.1 on two seeds (neutral).
+  read 54%). Simulator -9.5 ± 14.2 and +15.0 ± 14.1 on two seeds (neutral). `input.checkLine: false` turns it off
+  (simulator; red team below).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
@@ -688,6 +692,26 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the default, -9 at phone) and #35 (+25 / -4) differ most between budgets, and #37 is the only one up at phone
   (+26 ± 21). So the single-PR gains measured before #55 are optimistic; nothing was reverted. The heads-up turn
   solver at the live budget is neutral (+3 ± 11).
+- Red team (3 Nov night, v1.8.11, live budget, v7 friend bots, 1,000 deals a run; tables and files in
+  /mnt/project-files/patio-solver/sims/2026-11-03-redteam/RESULTS.md): one seat played by an exploiter (`xp:<preset>`,
+  test/sim/exploiters.js, test/sim/README.md), scored as hero's result against it minus against the same seat played
+  by the pool bot on the same cards (`ANY_BOTS=1 diff.js`; part of that is just a different opponent). Pooled over
+  4- and 5-handed runs: a player who bets 1-1.5x pot only with strong hands (`bigvalue`) -34 ± 16 bb/100 (three runs;
+  premium hands pay it off), one who raises after the flop only for value (`vraise`) -26 ± 15 (three), a trapper in
+  hero's pots -16 ± 17, check-raiser -16 ± 14, lead bluffer after a call -8 ± 15, overcaller +21 ± 11 (hero gains),
+  loose/tight switcher every 100 hands -34 ± 35 (one run), a 20bb push/fold jammer none (exploit.js: no shove hero folded
+  would have been better called). A friend's read deleted every 100 hands (back on an unlinked account): -18 ± 12.
+  Turning off the read each exploiter aims at never helped: bigBetMedium off -5 ± 13, flopBigRaise on +10 ± 7, afterCall
+  off +13 ± 10, checkLine off +2 ± 12, overcallFold 1 +4 ± 8, decay 0.98 +4 ± 25, and heroPotTilt off -19 ± 11 against
+  the trapper (the learned tilt does its job). Tried and dropped: every flop raise at a quarter of the range noise (on
+  the logs shows after a flop raise fit x1.12 -> x0.60 of a random guess, 19 shows: the friends' flop raises are not
+  value-only); each friend's own rate of bets after calling (`afterCallLearn`, k 48: friend bots -0.5 ± 2.7 over four
+  runs, lead bluffer +6 ± 7 over three; on the logs every k predicts the friends' leads worse than the fixed read); a
+  per-player showdown tilt for raise lines and 0.9-pot bets (`lineTilt`: bigvalue +10 ± 12 and -22 ± 14, vraise
+  -5 ± 12; logs x1.83 -> x1.81 and x1.35 -> x1.32). The friends bet big with medium hands and raise the flop with
+  draws, so the two costly profiles are not tonight's table; they are what a friend who changes style would cost
+  until something reads size or raise strength per player faster than showdowns do. Logs (419 hands, 765 hero turns):
+  the tracker never lost the chips. Short stacks (12bb): hero shoves or folds almost always.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
