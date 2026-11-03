@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.11
+// @version      1.8.12
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -5179,11 +5179,13 @@ function ENGINE() {
         multiway: input.opponents.length >= 2,
         reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
         // Checked on this street already (hero bets into a check), or not acted on it yet.
-        street, line: now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
+        street, line: input.checkLine === false ? null : now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
       };
       const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
+      // input.checkLine: false drops the check-line read (#47) everywhere, the lookahead's after-check folds too (simulator).
+      if (input.checkLine === false) { const L1 = { checkedFold: 1, checkedRaise: 1, unactedRaise: 1 }; stats.line = L1; if (statsHU) statsHU.line = L1; }
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
       // input.reraiseLines: false reads a re-raise war after the flop as one raise again (before v1.8.10).
       if (input.reraiseLines === false) { stats.reraiseLines = false; if (statsHU) statsHU.reraiseLines = false; }
@@ -8108,6 +8110,12 @@ function slim(r) {
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
+  // Socket watchdog (see the hook below): 'nosocket' | 'silent' | null.
+  var hookProblem = null;
+  var HOOK_MSG = {
+    nosocket: 'Can’t find the game’s connection, so there is no advice. Poker Patio may have changed: Patio Solver needs an update.',
+    silent: 'The table is moving but no game events arrive, so there is no advice. Poker Patio may have changed: Patio Solver needs an update.'
+  };
 
   // ---------- formatting ----------
   function money(x) { return '$' + Math.round(x).toLocaleString('en-US'); }
@@ -8140,7 +8148,7 @@ function slim(r) {
     ':host{all:initial}' +
     '.panel{position:fixed;width:min(340px,calc(100vw - 16px));background:rgba(16,20,18,.95);color:#eef2ef;border:1px solid rgba(255,255,255,.16);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;overflow:hidden}' +
     '.bar{display:flex;align-items:center;gap:8px;padding:9px 10px 9px 12px;touch-action:none;user-select:none;-webkit-user-select:none;cursor:move}' +
-    '.dot{width:9px;height:9px;border-radius:50%;background:#777;flex:none}.dot.live{background:#3fcf6e}.dot.turn{background:#ffcc33;box-shadow:0 0 8px #ffcc33}' +
+    '.dot{width:9px;height:9px;border-radius:50%;background:#777;flex:none}.dot.live{background:#3fcf6e}.dot.turn{background:#ffcc33;box-shadow:0 0 8px #ffcc33}.dot.bad{background:#ff6b6b}' +
     '.main{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow:hidden}' +
     '.act{font-weight:700;font-size:17px;overflow:hidden;text-overflow:ellipsis}.act.aggr{color:#4be08a}.act.passive{color:#6cb8ff}.act.fold{color:#ff7a7a}.act.idle{font-weight:500;font-size:13.5px;color:#c4ccc6}' +
     '.ev{font-size:12px;color:#aab3ad;flex:none}' +
@@ -8360,7 +8368,7 @@ function slim(r) {
     var logDue = unexported() >= LOG_REMIND;
     var asking = tracker.linkAsks && Object.keys(tracker.linkAsks).length;
     var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
-    dot.className = 'dot' + (blocked ? '' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
+    dot.className = 'dot' + (blocked ? '' : hookProblem ? ' bad' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
 
@@ -8372,13 +8380,15 @@ function slim(r) {
       mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + esc(actionText(b, advice.ctx.heroStageBet, advice.result.toCall)) + '</span>' +
         (advice.result.close && fresh ? '<span class="badge">close</span>' : '') +
         '<span class="ev' + (advice.stale && sizing.note ? ' neg' : '') + '">' + (advice.stale ? (sizing.note ? 'bet under the advice' : 'last turn') : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>' + logBadge;
-    } else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>' + logBadge;
+    } else if (hookProblem) mainEl.innerHTML = '<span class="act idle">No game events: needs an update</span>';
+    else mainEl.innerHTML = '<span class="act idle">' + esc(status) + '</span>' + logBadge;
 
     body.style.display = ui.expanded ? '' : 'none';
     if (!ui.expanded) { place(); return; }
     if (blocked) { body.innerHTML = '<div class="status">' + esc(status) + '</div>'; place(); return; }
 
     var h = tracker.hand, html = '';
+    if (hookProblem && HOOK_MSG[hookProblem]) html += '<div class="status neg">' + esc(HOOK_MSG[hookProblem]) + '</div>';
     var heroCards = h ? h.heroUids.map(function (u) { return h.heroCards[u]; }).filter(Boolean) : [];
     if (heroCards.length || (h && h.board.length)) {
       html += '<div class="hand">' + heroCards.map(cardHtml).join('') + (h.board.length ? '<span class="muted">&nbsp;board</span>' + h.board.map(cardHtml).join('') : '') + '</div>';
@@ -8508,9 +8518,10 @@ function slim(r) {
     blocked = false;
     try { tracker.handle(ev, data, snap); } catch (err) { /* keep the table running */ }
   }
-  var hooked = null;
+  var hooked = null, lastEventAt = 0, sigMoves = 0, firstMoveAt = 0, lastSig = null, startedAt = Date.now();
   // Other table events go to the tracker only for the hand log's raw recorder.
   function onAnyEvent(ev, data) {
+    lastEventAt = Date.now(); sigMoves = 0;
     if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
   }
   setInterval(function () {
@@ -8525,8 +8536,25 @@ function slim(r) {
     tracker.snap = snapshot();
     if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
     else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }
+    hookProblem = null;
     render();
   }, 300);
+  // Watchdog, as in the extension's hook.js: a table on screen with no socket for noSocketMs ('nosocket'), or chips
+  // moving at least twice over silentMs with no socket event at all ('silent'). window.__patioSolverWatch shortens
+  // the waits on test pages.
+  setInterval(function () {
+    var gm = W.GameManager, cfg = W.__patioSolverWatch || {}, now = Date.now();
+    var noSocketMs = cfg.noSocketMs || 15000, silentMs = cfg.silentMs || 20000;
+    var ps = gm && gm.state && gm.state.players, table = !!(ps && ps.length), p = null;
+    if (table && !hooked && now - startedAt >= noSocketMs) p = 'nosocket';
+    if (table && hooked) {
+      var sig = ps.map(function (q) { return [q.id, q.stack, q.totalBetsMade, q.playState].join(':'); }).join('|');
+      if (lastSig != null && sig !== lastSig) { if (!sigMoves) firstMoveAt = now; sigMoves++; }
+      lastSig = sig;
+      if (sigMoves >= 2 && now - firstMoveAt >= silentMs && now - lastEventAt >= silentMs) p = 'silent';
+    }
+    if (p !== hookProblem && !(p && snapshot().tableType !== 'private')) { hookProblem = p; render(); }
+  }, 1000);
 
   function mount() {
     (document.body || document.documentElement).appendChild(host);

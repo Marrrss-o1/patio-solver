@@ -68,7 +68,9 @@
   }
 
   let hooked = null;
+  let lastEventAt = 0, sigMoves = 0, firstMoveAt = 0;
   const onAny = (ev, data) => {
+    lastEventAt = Date.now(); sigMoves = 0;
     if (WANTED.has(ev) || recordOnly(ev, data)) post(ev, data);
   };
   function attach() {
@@ -81,10 +83,38 @@
   }
 
   setInterval(attach, 250);
-  // Lets the overlay ask for fresh table state at any time.
+
+  // Watchdog: when a game update moves the socket again, the panel says so instead of a quiet "Connected" with no
+  // advice (3 Nov 2026: the hook never attached and nothing showed it). 'nosocket': a table is on screen but no
+  // socket was found for noSocketMs. 'silent': the table's chips moved at least twice over silentMs with no socket
+  // event at all in that time (the socket we hold went quiet). Test pages can shorten the waits with
+  // window.__patioSolverWatch = { noSocketMs, silentMs }.
+  const startedAt = Date.now();
+  let lastSig = null, problem = null;
+  function chipSig(gm) {
+    const ps = (gm && gm.state && gm.state.players) || [];
+    return ps.map((p) => [p.id, p.stack, p.totalBetsMade, p.playState].join(':')).join('|');
+  }
+  function watch() {
+    const gm = window.GameManager, cfg = window.__patioSolverWatch || {};
+    const noSocketMs = cfg.noSocketMs || 15000, silentMs = cfg.silentMs || 20000, now = Date.now();
+    const table = !!(gm && gm.state && Array.isArray(gm.state.players) && gm.state.players.length);
+    let p = null;
+    if (table && !hooked && now - startedAt >= noSocketMs) p = 'nosocket';
+    if (table && hooked) {
+      const sig = chipSig(gm);
+      if (lastSig != null && sig !== lastSig) { if (!sigMoves) firstMoveAt = now; sigMoves++; }
+      lastSig = sig;
+      if (sigMoves >= 2 && now - firstMoveAt >= silentMs && now - lastEventAt >= silentMs) p = 'silent';
+    }
+    if (p !== problem) { problem = p; post('hook:health', { problem: p }); }
+  }
+  setInterval(watch, 1000);
+
+  // Lets the overlay ask for fresh table state at any time (and whether a socket is attached).
   window.addEventListener('message', (e) => {
     if (e.source === window && e.data && e.data.source === 'patio-solver-overlay' && e.data.type === 'snapshot') {
-      post('hook:snapshot', null);
+      post('hook:snapshot', { attached: !!hooked, problem });
     }
   });
 })();

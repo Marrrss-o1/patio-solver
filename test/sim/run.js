@@ -9,7 +9,10 @@
 //                      bots calibrated to Marwin's friends, a different lineup per block), home:<id> (one friend
 //                      profile from profiles.json), solver (the solver itself, with its own tracker and reads;
 //                      solver@REF runs src/ of a git ref), or a comma list, one spec per bot seat
+//                      xp:<preset>[@home:<id>] is an exploiter bot (exploiters.js, base default home:pool), and
+//                      'friends' inside a comma list is the block's rotating friend lineup (e.g. xp:trap,friends)
 //   --stack BB         starting stacks in big blinds (default 150 with friends/home bots, 100 otherwise)
+//   --seat-stacks LIST stacks in big blinds for the bot seats, every hand (e.g. 20 = seat 1 at 20bb, the rest --stack)
 //   --bot-params JSON  overrides for every friend profile's bot parameters (friends, home:<id>), e.g.
 //                      '{"sizeTell":-0.6}' (bigger bets with weaker hands, as in the logs; see bots.js)
 //   --bb CHIPS         big blind in chips (default 2, like the real lobby; small blind is half)
@@ -51,6 +54,7 @@ const { playHand, keyed, shuffled } = require('./game.js');
 const bots = require('./bots.js');
 const { solverAgent, envSolverOpts } = require('./agents.js');
 const { patchedSrc } = require('./knobs.js');
+const { makeSeatBot } = require('./exploiters.js');
 const E0 = require('../../src/engine.js');
 const ORDER = {}; E0.PREFLOP_ORDER.forEach((nm, i) => { ORDER[nm] = i; });
 // Preflop-order rank of a starting hand (0 = AA).
@@ -106,7 +110,7 @@ function buildConfig(args) {
   const n = +(args.players || 2);
   if (n < 2 || n > 6) throw new Error('--players must be 2-6');
   const botsSpec = String(args.bots || 'typical');
-  const home = /^(friends|home)/.test(botsSpec);
+  const home = /^(friends|home|xp:)/.test(botsSpec) || /(^|,)friends(,|$)/.test(botsSpec);
   const bb = +(args.bb || 2);
   const env = envSolverOpts();
   const parse = (s) => (s ? JSON.parse(s) : {});
@@ -137,6 +141,7 @@ function buildConfig(args) {
     budget: args.budget ? String(args.budget) : null,
     iters: args.budget ? (args.iters ? +args.iters : null) : +(args.iters || 3000),
     riverIters: args.budget ? (args['river-iters'] ? +args['river-iters'] : null) : +(args['river-iters'] || 120),
+    seatStacks: args['seat-stacks'] ? String(args['seat-stacks']).split(',').map((x) => (x === '' ? 0 : Math.round(+x * bb))) : null,
     tag: args.tag || null, quiet: !!args.quiet, variants, profiles: loadProfiles(args['bot-params'] ? JSON.parse(args['bot-params']) : null),
     diag: !!args.diag, parts: !!args.parts, flopinfo: !!args.flopinfo,
   };
@@ -155,7 +160,10 @@ function lineup(cfg, block) {
   }
   if (s.includes(',')) {
     const list = s.split(',');
-    return Array.from({ length: k }, (_, i) => list[i % list.length]);
+    // 'friends' in the list: those seats take the block's friend lineup, in order.
+    const fr = list.includes('friends') ? lineup(Object.assign({}, cfg, { bots: 'friends' }), block) : null;
+    let fi = 0;
+    return Array.from({ length: k }, (_, i) => (list[i % list.length] === 'friends' ? fr[fi++] : list[i % list.length]));
   }
   return Array.from({ length: k }, () => s);
 }
@@ -173,13 +181,17 @@ function playBlock(cfg, block) {
   const n = cfg.n, rots = cfg.dup ? n : 1;
   const specs = lineup(cfg, block);
   const isSolver = (s) => !!(cfg.solverBots && cfg.solverBots[s]);
-  const shared = specs.map((s) => (isSolver(s) ? null : bots.makeBot(s, cfg.profiles)));
+  const shared = specs.map((s) => (isSolver(s) ? null : makeSeatBot(s, cfg.profiles)));
+  // Bots that change with time (exploiters.js switch) get the hand number: warm-up hands, then each deal's rotations
+  // (the same number in every variant).
+  const onHand = (k) => { for (const b of shared) if (b && b.onHand) b.onHand(k); };
   // Solver opponents keep reads (of hero too), so each variant gets its own copy; they watch the table from their seat.
   const botSets = cfg.variants.map(() => specs.map((s, j) => (isSolver(s)
     ? solverAgent({ src: cfg.solverBots[s].src, iters: cfg.iters, riverIters: cfg.riverIters, budget: cfg.budget, blueprint: '' }) : shared[j])));
   const watchersOf = (set) => set.map((b, j) => (b.onEvent ? { seat: j + 1, onEvent: (ev, data, snapFn) => b.onEvent(ev, data, snapFn) } : null)).filter(Boolean);
   const heroes = cfg.variants.map((v) => makeHero(v, cfg));
   const stacks = new Array(n).fill(cfg.stack);
+  if (cfg.seatStacks) cfg.seatStacks.forEach((x, i) => { if (x > 0 && i + 1 < n) stacks[i + 1] = x; });
   const deal = (d, rot, salt) => {
     const dealSeed = (Math.floor(keyed(cfg.seed, d, salt) * 4294967296)) >>> 0;
     const deck = shuffled(dealSeed);
@@ -202,6 +214,7 @@ function playBlock(cfg, block) {
   if (cfg.warm > 0 && (listeners.length || allWatchers.length)) {
     for (let w = 0; w < cfg.warm; w++) {
       const dl = deal(block * 100000 + w, 0, 31337);
+      onHand(w);
       playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [warmHero].concat(botSets[0]), hero: 0, names: NAMES, uidBase: 1000,
         emit: listeners.length ? (ev, data, snapFn) => { const s = snapFn(); for (const h of listeners) h.tracker.handle(ev, data, s); } : null,
         watchers: allWatchers }, dl));
@@ -219,6 +232,7 @@ function playBlock(cfg, block) {
       r.rots = [];
       for (let rot = 0; rot < rots; rot++) {
         const dl = deal(d, rot, 1);
+        onHand(cfg.warm + (d - start) * rots + rot);
         const diag = cfg.diag ? [] : null;
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
@@ -290,6 +304,9 @@ function blockKey(cfg) {
   // Only runs with a budget get it in the key, so blocks saved by runs without one still resume.
   if (cfg.budget) k.push({ budget: cfg.budget, settings: require('./agents.js').BUDGETS[cfg.budget] });
   if (process.env.BOTCLIFF === '0') k.push('noBotCliff');
+  if (cfg.seatStacks) k.push({ seatStacks: cfg.seatStacks });
+  // Exploiter seats: the exploiter code's hash, so a changed preset doesn't resume old blocks.
+  if (/(^|,)xp:/.test(cfg.bots)) k.push(require('crypto').createHash('sha1').update(fs.readFileSync(path.join(__dirname, 'exploiters.js'))).digest('hex').slice(0, 12));
   return crypto.createHash('sha1').update(JSON.stringify(k)).digest('hex').slice(0, 16);
 }
 function runMain(cfg) {
