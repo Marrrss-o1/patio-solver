@@ -116,6 +116,16 @@ bots, seed and block size), so a third arm can be added later without replaying 
   validate.js on the 337 hands: fitted RMS z 0.70, pooled 1.04, unfitted 1.14. `profiles-v3.json` is the same
   refit with `sizeTell` left at 0.6 (the table-step runs on seeds 502/503 in CLAUDE.md used it). The old bots: `BOTCLIFF=0` with
   `BOTPROFILES=<file>` holding `git show c8d50cb:test/sim/profiles.json` (run.js and exploit.js read BOTPROFILES).
+* Friend bots v5, v6 and v7 (2 Nov night; run with `BOTPROFILES=test/sim/profiles-v7.json`, the default profiles.json is
+  unchanged). v5: refit on all 458 logged hands with the commitment habit (`commit`, fold odds per hand x exp(commit x
+  share of the stack in)). v6: v5 with `commitCut` -1.8 (the same habit on the share that folds, so it moves the fold
+  share as much as the read's commitFold; `commit` moved it about a third as much). v7: v6 with `bigCall` 0.18 (facing a
+  bet in a pot of `bigPot` 15bb or more, the continue cut moves up 0.18): v6 bots folded to bets in 15bb+ pots 8-10
+  points less than main's read, the friends as the read says (against each other act - pred -0.004, n 371; against hero
+  +0.021, n 109); v7 -0.009 and -0.018 (seed 17), and showdowns per hand 0.87 -> 0.60 (friends 0.54). Off by default:
+  `pfCommit` (preflop chips-in lifts the cliff) and the hero-pot options `hpCall`, `hpWc`, `hpDraw`, `hpBluff`, `hpPut`,
+  `hpFlop`, which tried to reproduce the friends' strong hands in hero's big pots after a passive flop (0.74 of the
+  read's range, n 23) and never got the bots above about 0.59.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that

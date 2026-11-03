@@ -1186,7 +1186,14 @@
       }
       if (seq.includes('fold')) return 'fold';
       const first = seq[0];
-      if (seq.includes('raise')) return first === 'check' ? 'checkraise' : 'raise';
+      // Raised, then called a re-raise: like betcall, their range is the part of the raising range that continues.
+      // Two or more bets and raises on the street (bet then re-raise a raise: 'betraise'; raise, then raise again:
+      // 'reraise'; v1.8.10) are read as two aggressive actions, not as one raise.
+      if (seq.includes('raise')) {
+        const called = seq.slice(seq.lastIndexOf('raise') + 1).includes('call') ? 'call' : '';
+        if (seq.filter((a) => a === 'bet' || a === 'raise').length >= 2) return (first === 'bet' ? 'betraise' : 'reraise') + called;
+        return (first === 'check' ? 'checkraise' : 'raise') + called;
+      }
       // Bet, then called a raise (multiway): their range is what continues against a raise.
       if (seq.includes('bet')) return seq.includes('call') ? 'betcall' : 'bet';
       if (seq.includes('call')) return first === 'check' ? 'checkcall' : 'call';

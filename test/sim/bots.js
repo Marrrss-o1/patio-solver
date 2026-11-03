@@ -177,6 +177,22 @@ const HOME_DEFAULT = {
   mw: 0.035,                  // thresholds rise this much per extra opponent
   w: 0.05,                    // softness of the betting thresholds
   wc: 0.05,                   // softness of calling: larger = calls with weaker hands and folds some better ones
+  commit: 0,                  // facing a bet after the flop: fold odds x exp(commit x share of their stack already in)
+  commitCut: 0,               // the same habit on the share that folds: the continue cut moves so that the fold share's odds
+                              // scale by exp(commitCut x share in). `commit` scales each hand's odds, which moves the fold
+                              // share only for hands near the cut (about a third of the read's change at the fitted width).
+  pfCommit: 0,                // 1: preflop, chips in of a quarter of a big raise-to or more lift the cliff (see above)
+  // Hero's big pots after a passive flop (v7 bots; all off by default). In the logs a friend who checked or called the
+  // flop against hero and then put 15bb+ in shows a hand at 0.74 of the read's range (n 23), against 0.51 in pots
+  // without hero and about 0.61 for the v6 bots. When hero is still in the hand, the bot did not bet or raise the flop
+  // and its chips in would reach hpPut big blinds: facing a bet the continue cut moves up by hpCall, its softness wc is
+  // multiplied by hpWc and the draw floor by hpDraw; checked to, bluffs and semi-bluffs are multiplied by hpBluff.
+  // hpFlop: 1 applies it on the flop too (facing hero's flop bet; there "passive" means not yet aggressive).
+  hpCall: 0, hpWc: 1, hpDraw: 1, hpBluff: 1, hpPut: 15, hpFlop: 0,
+  // Big pots (v7): facing a bet with the pot at bigPot big blinds or more, the continue cut moves up by bigCall. The v6
+  // bots fold to bets in 15bb+ pots 8-10 points less than main's read (twin logs, n 400-1,200 per run) where the friends
+  // fold as the read says (0.434 vs 0.438 against each other, n 371; 0.495 vs 0.474 against hero, n 109).
+  bigCall: 0, bigPot: 15,
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
@@ -217,6 +233,15 @@ function homeBot(params) {
         const big = toCall >= 8 * bb;
         const cliff = BOT_CLIFF && v.cur > 30 * bb ? Math.pow(30 * bb / v.cur, 2.5) : 1;
         let cont = big ? P.callBig * Math.pow(8 * bb / toCall, 0.25) * cliff : P.cont * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
+        // Chips already in (pfCommit, opt-in): with a quarter of the raise-to or more in, no cliff and at least 75% of
+        // their range continues (logs: chips in under 0.1 of a 30bb+ raise-to 4 of 53 continued, 0.1-0.25 2 of 3, 0.25+ 4 of 5).
+        if (P.pfCommit && big && v.put > 0) {
+          const wC = clamp((v.put / v.cur - 0.1) / 0.15, 0, 1);
+          if (wC > 0) {
+            const width = v.seq.pre.some((k) => k === 'raise' || k === '3bet') ? P.pfr : P.vpip;
+            cont = Math.max(cont / cliff * (cliff + (1 - cliff) * wC), 0.75 * width * pm * wC);
+          }
+        }
         if (v.raises >= 2 && !big) cont *= 0.8;
         // Already in the pot: an opener facing a re-raise and a limper facing a raise have their own fitted rates
         // (real limpers fold about half the time, openers about a fifth); a caller sticks with most of its range.
@@ -249,12 +274,16 @@ function homeBot(params) {
       const k = Math.max(0, v.nOpp - 1);
       const air = hp < 0.5 && !strongDraw && !weakDraw;
       const pot = v.pot;
+      // Hero's pot after a passive flop (hp* above): flopPas when hero is in and this bot has not bet or raised the flop.
+      const hpOn = (P.hpCall || P.hpWc !== 1 || P.hpDraw !== 1 || P.hpBluff !== 1) && v.heroIn && v.seat !== v.heroSeat &&
+        (v.street >= 4 || (P.hpFlop && v.street === 3)) && !(v.seq.flop || []).some((x) => x === 'bet' || x === 'raise');
       if (toCall === 0) {
         const pv = sig((hp - (P.val[si] + P.mw * k)) / P.w) * (hp > 0.98 ? 1 - P.slow : 1);
         let pb = 0;
         if (strongDraw) pb = P.semi / (1 + 0.5 * k);
         else if (weakDraw) pb = P.semi / 3 / (1 + k);
         else if (air) pb = P.bluff[si] * (si === 0 && v.pfAgg === v.seat ? P.cbet : 1) / (1 + k);
+        if (hpOn && P.hpBluff !== 1 && v.put + P.betSize * pot >= P.hpPut * bb) pb *= P.hpBluff;
         let pBet = clamp(pv + (1 - pv) * pb, 0, 1);
         if (P.lineBet && si >= 1) {
           const pl = v.seq[STREET_OF[v.street - 1]] || [];
@@ -278,10 +307,23 @@ function homeBot(params) {
       // after someone has already called (overcall); heads-up from the start of the street has its own shift (callHu:
       // friends fold 52% to a first heads-up bet of 25-110% pot, n 61, where bots fitted without it folded 63%).
       const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : (P.callHu || 0);
-      const tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + mwShift + (v.raises >= 2 ? 0.06 : 0);
-      let pCont = sig((hp - tc) / P.wc);
-      if (strongDraw) pCont = Math.max(pCont, f <= 1 ? P.drawCall : P.drawCall / 2);
-      else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? P.drawCall / 2 : 0.1);
+      let tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + mwShift + (v.raises >= 2 ? 0.06 : 0);
+      if (P.commitCut && v.put > 0) {
+        const c = v.put / Math.max(1e-9, v.put + v.stack), t = clamp(tc, 1e-3, 1 - 1e-3);
+        tc = 1 / (1 + Math.exp(-(Math.log(t / (1 - t)) + P.commitCut * c)));
+      }
+      const hpNow = hpOn && v.put + toCall >= P.hpPut * bb;
+      if (hpNow) tc += P.hpCall;
+      if (P.bigCall && pot >= P.bigPot * bb) tc += P.bigCall;
+      let pCont = sig((hp - tc) / (P.wc * (hpNow ? P.hpWc : 1)));
+      const dc = P.drawCall * (hpNow ? P.hpDraw : 1);
+      if (strongDraw) pCont = Math.max(pCont, f <= 1 ? dc : dc / 2);
+      else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? dc / 2 : 0.1 * (hpNow ? P.hpDraw : 1));
+      // Part of their stack already in: fold odds x exp(commit x share in) (friends: about -1.8, see READ_PRIORS.home.commitFold).
+      if (P.commit && v.put > 0) {
+        const c = v.put / Math.max(1e-9, v.put + v.stack), fo = clamp(1 - pCont, 1e-4, 1 - 1e-4), m = Math.exp(P.commit * c);
+        pCont = 1 - (fo * m) / (fo * m + 1 - fo);
+      }
       const reR = P.reRaise !== 1 && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? P.reRaise : 1;
       const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hp - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
       const pRb = v.raises < 3 ? reR * P.bluffRaise * (strongDraw ? 2 : air ? 1 : 0.5) : 0;

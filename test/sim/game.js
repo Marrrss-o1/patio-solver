@@ -250,6 +250,8 @@ function playHand(cfg) {
       toAnswer: lv.filter((j) => j !== i && g.bet[j] < g.cur && g.stack[j] > 0).length,
       maxOppStack: Math.max(0, ...lv.filter((j) => j !== i).map((j) => g.stack[j] + g.bet[j] - g.bet[i])),
       rk: cfg.seed, nAct: g.nAct,
+      // Hero's seat and whether hero is still in the hand (bots with a habit for hero's pots, bots.js hp*).
+      heroSeat: hero, heroIn: !g.folded[hero],
     };
   }
 
