@@ -1324,8 +1324,10 @@
   // READ_PRIORS.home.afterCall says for them (their street bet rate at the prior's odds), sets the odds; when they bet
   // that line more often than the prior says, the range noise and the bluff share come back toward a plain bet's
   // (all the way once they bet it as often as any other street). Red team, 3 Nov: a friend who leads the turn and river
-  // with air after calling made the fixed read cost about 22 bb/100.
-  const AFTER_CALL_K = 12;
+  // with air after calling made the fixed read cost about 22 bb/100. On the logs (207 chances, earlier hands only) every
+  // k predicts the friends' leads a little worse than the fixed read (log-loss 0.488; k 24 0.496, 48 0.492, 96 0.490):
+  // they don't differ beyond their street bet rates, so k is large and only a big, steady habit moves it.
+  const AFTER_CALL_K = 48;
   function learnAfterCall(stats, tally, k) {
     const ac = stats.afterCall, t = tally && tally.ac;
     if (!ac || !t) return ac;
