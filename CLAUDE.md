@@ -522,7 +522,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the table's own shows (`heroPotLearned`): shows record whether hero was still in and the big blinds the player put
   in (`show.hp`); the tracker sums scoreShow's tilt log-likelihoods of flop-passive shows with 15bb+ in, in hero's
   pots and in the rest (`heroPotShows`), and the engine takes the tilt that fits hero's pots on top of the one that
-  fits the rest, shrunk to the prior 0.3 by 15 pseudo-counts (about 6 shows). Without `heroPotShows` it is 0.3.
+  fits the rest, shrunk to the prior 0 by 15 pseudo-counts, so there is no tilt until the table's shows ask for one.
+  Without `heroPotShows` it is off.
   Shown hands, all six logs (308 hands, reads from earlier hands only; quantile 0.5 = on target): in hero's pots
   with 15bb+ in after a passive flop the shown hand sits at 0.74 of the predicted range (n 23; per session 0.78 /
   0.65 / 0.76, best tilt 0.5 / 0.15 / 0.3, and 0.3 beats no tilt in every session), after a flop bet or raise 0.52
@@ -543,6 +544,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   300, 5-handed -21.6 ± 15.9 (all 18 runs pooled -5 ± 4). A sim block
   sees only 7-33 tagged shows in hero's pots, so the learned tilt sits at 0 or 0.15 (TILTS nodes; the curve is
   interpolated linearly) about half the time each, never at the friends' 0.3. On the logs it learns 0.3.
+  Prior 0 (the default since a3daaeb; the runs above had a prior of 0.3): rebuilding the logs' reads, the tilt is 0.15
+  for the first 150 hands, 0.22 at 200 and 0.3 from 250 (13 shows in hero's pots); with the prior of 0.3 it was
+  0.30-0.35 throughout. Shows recorded before this version carry no `hp`, so an install starts at 0 until new shows
+  come in, or at once after Import (rebuildReads). Live budget, 1,200 warm-up hands, off vs prior 0, v7 bots:
+  6-handed +4.8 ± 11.9 and -8.2 ± 11.9, 5-handed +6.9 ± 14.5 and -3.9 ± 16.6, 4-handed -15.1 ± 18.7 (pooled
+  -2 ± 6); bots that tighten up in hero's big pots (`--bot-params '{"hpCall":0.3,"hpFlop":1}'`, which also makes
+  them fold more than read there, and their shows only reach about 0.59) 6-handed -9.2 ± 10.5, 5-handed
+  +15.7 ± 13.4, 4-handed +17.3 ± 12.6 (+5 ± 7). On those bots the prior of 0.3 lost -8.8 ± 17.9 and -31.4 ± 14.2
+  (5-handed), -40.5 ± 16.1 (6-handed) and +6.5 ± 16.6 (4-handed), pooled -20 ± 8, mostly in flop bets; the fixed 0.3
+  -22.8 ± 15.3. Tried and dropped: the tilt on the turn and river only (`street: 4`, prior 0.3), plain 5-handed
+  -11.5 ± 11.8 and 6-handed -25.1 ± 16.2, tightening bots -17.8 ± 10.8, -0.3 ± 12.8, -7.8 ± 16.1; on the 2 Nov
+  export it differs from the full tilt only on 7 flop decisions.
   On the 2 Nov hand-log export (180 hands of 1-2 Nov) the fixed tilt changes 26 of 361 decisions, all postflop in
   10bb+ pots (a 44 turn barrel into AA becomes a check, QQ stops betting and calling into AA, three losing calls
   fold; an AK river value bet halves, an A4 turn raise that won becomes a call). Fold rates don't move, so a few
