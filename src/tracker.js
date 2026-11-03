@@ -66,9 +66,6 @@
       wonSD: 0, wonNoSD: 0,
       // Facing a bet after they had already bet or raised earlier in the hand: times, and folds.
       aggVsN: 0, aggVsFold: 0,
-      // Bets after calling: chances to bet the turn or river first after only calling the street before (n), and
-      // how often they bet (engine: input.afterCallLearn).
-      ac: { turn: { n: 0, bet: 0 }, river: { n: 0, bet: 0 } },
       // Think time per action kind: count and total seconds (capped at 60 per action).
       tt: { check: { n: 0, sum: 0 }, bet: { n: 0, sum: 0 }, call: { n: 0, sum: 0 }, raise: { n: 0, sum: 0 }, fold: { n: 0, sum: 0 } },
       // Continuation bets: preflop raiser's first flop decision, and how others react to it.
@@ -956,11 +953,6 @@
       const seqSt = p.seq[key] || [];
       if (facing > 0 && seqSt.slice(0, -1).includes('check') && !(p.xrSeen || (p.xrSeen = {}))[key]) {
         p.xrSeen[key] = true; t.xrOpp++; if (kind === 'raise') t.xr++;
-      }
-      // First to act with no bet on the turn or river, after only calling the street before.
-      if ((h.street === 4 || h.street === 5) && facing === 0 && seqSt.length === 1 && (kind === 'check' || kind === 'bet') && t.ac && t.ac[key]) {
-        const prev = PatioTracker.streetAction(p.seq[STREET_KEY[h.street - 1]] || [], h.street - 1);
-        if (prev === 'call' || prev === 'checkcall') { t.ac[key].n++; if (kind === 'bet') t.ac[key].bet++; }
       }
     }
 
