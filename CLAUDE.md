@@ -17,7 +17,7 @@ src/engine.js            The solver (exploitative Monte Carlo + CFR solvers). Pu
                          flopSolve/preflopSolve (cfr loop, showAdd, foldValues, riverExtra) needs the same change
                          there; the "kernels: ... bit-identical" test catches drift for the spots it covers.
                          The manifest allows 'wasm-unsafe-eval' for this.
-src/tracker.js           Socket events -> hand state, opponent tallies, solver input. Pure JS, unit-tested.
+src/tracker.js           Socket events -> hand state, opponent tallies, solver input, linked reads. Pure JS, unit-tested.
 src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
@@ -405,7 +405,27 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `betSize`, 3-bet / c-bet counters, `sawFlop`/`wtsd` and `shows` (last 40 revealed hands with their bets).
   `upgradeTally` fills in fields for reads saved by older versions.
 - Joining mid-hand: tracking starts at the next `set_blinds`.
-- Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser).
+- Reads are keyed by `authUserId` (anonymous guest ids can change if a friend clears their browser), so a name
+  change on the same account keeps them (PermPetch -> PermPocket, mkorn777 -> SPECTATEMK in the logs).
+- Linked reads (v1.8.8): a new account id is a new read. On 2 Nov Jagger came back as rM09... after 96 hands as
+  fqJt... (31 Oct phuketdemon, 1 Nov Jagger), so his read restarted; Dew666 did the same on 1 Nov (63 hands as
+  fphhq..., then J4Up...). On the 77 hand (2 Nov 14:31, his 17th hand on the new id) the joined read (112 hands)
+  still says maniac (VPIP 65%, PFR 32% vs 64% / 36%) and still 4-bets preflop (raise 17.4 vs call 12.8, was 21.2 vs
+  11.6, live budget); the flop changes from check to bet. Records stay per id; `db.same[id] = root` puts
+  ids in one group and every reader of a player (solver input, `scorePrediction`'s read, `scorer`, `rescoreStale`,
+  the panels, the log's `pred`/`accuracy`) uses `readTally(id)`: the group's counts added up (`mergeTallies`,
+  oldest id first, newest 80 shows). An unlinked player's readTally is its own tally object, so nothing changes
+  for them (sim A/B against main is identical). Each id keeps counting into its own record and every id of a
+  player dealt in decays once a hand, so a link can be split (`unlink`) without losing hands. Links are made only
+  by hand (Marwin, 3 Nov: friends change names on a whim, so he approves): at each new hand `askLinks` lists
+  players dealt in whose name (now or before, `seen[id].names`) another read used (`linkMatches`; generic
+  Guest/Player names never match), and the panel asks "Same player as the older read?" (`link` / `refuseLink`).
+  Two ids dealt into the same hand (`db.seen[id].met`, also learned from stored hands' raw snapshots by
+  `learnSeats` for reads saved before v1.8.8) can never be linked; "Different players" and splits go in
+  `db.notSame` and aren't asked again. "Link reads" on both panels joins any two (Dew999 -> Dew666 style changes
+  of both name and id) or splits them. Import passes the links into `rebuildReads` and takes them back
+  (`absorbLinks`). `tracker.linkReads = false` turns the seat notes and questions off. On the 31 Oct - 2 Nov logs
+  replayed in order it asks exactly twice: Dew666 (1 Nov) and Jagger (2 Nov).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
 - Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
   preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does

@@ -33,6 +33,9 @@ Also works with Tampermonkey / Violentmonkey on desktop browsers and Firefox for
    or stronger than predicted get their ranges shifted, and reads that keep missing get trusted less. Recent hands
    count more than old ones. Small samples are blended with table defaults (the Tight / Typical / Loose setting)
    and, while a read is thin, partly with balanced play so one lucky read can't push it into a big mistake.
+   Reads belong to a player's account, so a name change keeps them. When a friend comes back on a new account
+   under a name the reads already know, the panel asks "Same player as the older read?" and joins the two only
+   if you say so; "Link reads" joins or splits any two players by hand (never two who played the same hand).
 3. **Range.** The solver turns each opponent's stats into a weighted range over all 1,326 starting hands, then
    narrows it by what they did this hand on each street, using that street's numbers, the size they bet and how
    often their bets of that size turned out to be bluffs. When someone bets into you, the panel says how likely

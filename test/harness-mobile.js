@@ -34,6 +34,41 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
     }
     if (shots.includes(i)) { await page.screenshot({ path: path.join(out, `mobile_${i}.png`) }); const bb = await page.evaluate(() => { const r = document.getElementById("patio-solver-host").shadowRoot.querySelector(".bar").getBoundingClientRect(); return [r.left + 60, r.top + r.height/2]; }); await page.touchscreen.tap(bb[0], bb[1]); await page.waitForTimeout(300); await page.screenshot({ path: path.join(out, `mobile_${i}_open.png`) }); }
   }
+  // LINK=1: the opponent comes back on a new account id under the same name; the panel asks
+  // "Same player?", the harness says yes, then splits them again from "Link reads".
+  if (process.env.LINK) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (q) => page.evaluate((s) => document.getElementById('patio-solver-host').shadowRoot.querySelector(s).click(), q);
+    const snap0 = msgs.find((m) => m.snap).snap;
+    const opp = snap0.players.find((p) => p.authUserId !== snap0.heroAuthId).authUserId;
+    const again = JSON.parse(JSON.stringify(msgs).split(`"authUserId":"${opp}"`).join('"authUserId":"NEW-ID"'));
+    const upTo = again.findIndex((m) => m.ev === 'game:stage_began' && m.data && m.data.stageType === 'set_blinds');
+    for (const m of again.slice(0, upTo + 1)) {
+      if (m.ev === 'hook:attached') continue;
+      await page.evaluate(m => { GameManager.state.players = m.snap.players; __L.forEach(f => f(m.ev, m.data)); }, m);
+      await page.waitForTimeout(30);
+    }
+    await page.waitForTimeout(300);
+    const bar = await text();
+    console.log('--- new account, same name ---');
+    console.log(/same player\?/.test(bar) ? 'BADGE' : 'NO BADGE');
+    const open = await page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.bd').style.display !== 'none');
+    if (!open) await click('[data-a="toggle"]');
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(out, 'mobile_link_ask.png') });
+    const asked = await text();
+    console.log(/older read/.test(asked) ? 'ASKED' : 'NOT ASKED\n' + asked);
+    await click('[data-a="linkYes"]');
+    await page.waitForTimeout(200);
+    const joined = await text();
+    console.log(/Reads joined/.test(joined) && /Reads from 2 accounts/.test(joined) ? 'JOINED: ' + joined.split('\n').find((l) => /Reads joined/.test(l)) : 'NOT JOINED\n' + joined);
+    await click('[data-a="links"]');
+    await page.waitForTimeout(200);
+    await click('[data-a="unlink"]');
+    await page.waitForTimeout(200);
+    const split = await text();
+    console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT' : 'NOT SPLIT\n' + split);
+  }
   // expand and screenshot the last advice state
   console.log(await page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText));
   console.log('ERRORS', errs);
