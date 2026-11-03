@@ -134,6 +134,16 @@ bots, seed and block size), so a third arm can be added later without replaying 
   against its own copy, since the copies learn from hero's play. With solver opponents the warm-up puts the solver
   (variant A's code) in hero's seat too, so the copies' reads of hero come from solver-like play; with a simple
   player there instead, self-play came out about +70 bb/100 for hero, because the copies read hero wrong.
+* `xp:<preset>[@<base>]` (red team, 3 Nov): an exploiter seat, a friend bot (`home:pool` unless `@<base>` names
+  another) with one tendency pushed hard (test/sim/exploiters.js `PRESETS`): `leadbluff`, `bigvalue`, `xraise`, `trap`,
+  `jam`, `overcall`, `vraise`, `none` (the plain base, for comparisons), the older exploit.js presets, and
+  `switch<period>` (loose and tight in turns, every `period` hands, default 100). Seat it with the block's friend
+  lineup: `--bots xp:trap,friends`. `--seat-stacks 20,150,...` sets the bots' stacks in big blinds. To see what an
+  exploiter costs hero, run `xp:none,friends` on the same seed and pair the two A variants with
+  `ANY_BOTS=1 node test/sim/diff.js none.json:A xp.json:A`; to see whether a read assumption is what it beats, run the
+  A/B with that assumption turned off. `node test/sim/xp-check.js <preset>` prints the actions a preset changes.
+  Solver options for these runs only: `_forget {id, every}` deletes one seat's read every `every` hands (a friend back
+  on an unlinked account), `_decay` sets the tracker's per-hand decay.
 * `typical`, `station`, `maniac`, `mixed`: the old simulators' bots (same decisions), for continuity.
 * `--agent baseline`: the old simple solid regular, as a yardstick.
 
