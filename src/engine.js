@@ -1319,6 +1319,36 @@
     return Math.log(p / (1 - p));
   }
 
+  // Bets after calling, per player (input.afterCallLearn): the tally's chances to bet the turn or river first after only
+  // calling the street before (`ac.turn`, `ac.river`: n, bet). Their bet rate there, shrunk by k pseudo-counts to what
+  // READ_PRIORS.home.afterCall says for them (their street bet rate at the prior's odds), sets the odds; when they bet
+  // that line more often than the prior says, the range noise and the bluff share come back toward a plain bet's
+  // (all the way once they bet it as often as any other street). Red team, 3 Nov: a friend who leads the turn and river
+  // with air after calling made the fixed read cost about 22 bb/100.
+  const AFTER_CALL_K = 12;
+  function learnAfterCall(stats, tally, k) {
+    const ac = stats.afterCall, t = tally && tally.ac;
+    if (!ac || !t) return ac;
+    const out = {};
+    for (const [n, name] of [[4, 'turn'], [5, 'river']]) {
+      const a = ac[n];
+      if (!a) continue;
+      const c = t[name] || {};
+      const chances = Math.max(0, +c.n || 0), bets = clamp(+c.bet || 0, 0, chances);
+      const bf = clamp(streetField(stats, n, 'betFreq'), 1e-4, 1 - 1e-4);
+      const r0 = oddsScale(bf, a.odds);
+      const r = clamp((bets + k * r0) / (chances + k), 1e-4, 1 - 1e-4);
+      const odds = (r / (1 - r)) / (bf / (1 - bf));
+      const u = a.odds < 1 ? clamp((odds - a.odds) / (1 - a.odds), 0, 1) : 0;
+      out[n] = Object.assign({}, a, {
+        odds,
+        noise: a.noise != null ? a.noise + (1 - a.noise) * u : a.noise,
+        bluff: a.bluff != null ? a.bluff + (1 - a.bluff) * u : a.bluff,
+      });
+    }
+    return out;
+  }
+
   function clamp(x, lo, hi) {
     return Math.max(lo, Math.min(hi, x));
   }
@@ -5194,6 +5224,12 @@
         const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
         stats.afterCall = ac; if (statsHU) statsHU.afterCall = ac;
       }
+      // input.afterCallLearn (true, or a number of pseudo-counts): the after-call bet read from the player's own chances.
+      if (input.afterCallLearn && stats.afterCall) {
+        const k = typeof input.afterCallLearn === 'number' ? input.afterCallLearn : AFTER_CALL_K;
+        stats.afterCall = learnAfterCall(stats, o.tally, k);
+        if (statsHU && statsHU.afterCall) statsHU.afterCall = learnAfterCall(statsHU, o.tally, k);
+      }
       const heroPotTilt = heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpt.tilt || 0) : 0;
       if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
@@ -6565,7 +6601,7 @@
   const api = {
     RANKS, SUITS, CATEGORY_NAMES, CLASS_NAMES, CLASS_COMBO_COUNT, PREFLOP_ORDER, PLAYER_TYPES, TABLE_PRIORS,
     parseCard, cardToString, evaluate, describeScore, describeHero,
-    computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
+    computeStats, learnAfterCall, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
