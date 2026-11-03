@@ -59,9 +59,10 @@
   };
 
   let tracker = null;
-  let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true };
+  let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true, showLinks: false };
   let status = 'Connecting to the table…';
   let importNote = '', importing = false, restored = false;
+  let linkNote = ''; // the last link answer (or why a link was refused)
   let advice = null; // { result, ctx, forHandStreet, stale }
   let thinking = false;
   let blocked = false;
@@ -159,6 +160,11 @@
     .ft { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px 10px; border-top: 1px solid rgba(255,255,255,.08); }
     select { background: rgba(255,255,255,.08); color: inherit; border: 0; border-radius: 6px; padding: 3px 4px; font: inherit; font-size: 12px; }
     select option { color: #111; }
+    .ask { border-radius: 10px; padding: 8px 10px; background: rgba(255,204,51,.12); border: 1px solid rgba(255,204,51,.35); font-size: 12px; }
+    .ask .row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .lk { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 0; border-top: 1px solid rgba(255,255,255,.06); font-size: 12px; }
+    .lk:first-of-type { border-top: 0; }
+    .lk select { max-width: 180px; }
     .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid rgba(255,255,255,.25); border-top-color: #fff; border-radius: 50%; animation: s .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
     @keyframes s { to { transform: rotate(360deg); } }
   </style>
@@ -171,6 +177,7 @@
       <select data-a="style"><option value="tight">Tight</option><option value="typical">Typical</option><option value="loose">Loose</option></select>
       <span class="sp" style="flex:1"></span>
       <button class="btn" data-a="log">Hand log</button>
+      <button class="btn" data-a="links" title="Join the reads of a friend who came back on a new account, or split them again">Link reads</button>
       <button class="btn" data-a="import" title="Load hand-log exports (from an older install) and rebuild the reads from every stored hand">Import</button>
       <button class="btn" data-a="reset">Reset reads</button>
       <input type="file" accept=".json,application/json" multiple style="display:none">
@@ -232,14 +239,45 @@
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
       // The reads start over; the hand log stays.
       tracker.db = { players: {}, history: tracker.db.history || [] };
+      tracker.linkAsks = null;
+      tracker.learnSeats(tracker.db.history);
       backup.reset();
       saveDb();
       a.dataset.confirm = ''; a.textContent = 'Reset reads';
       render();
     } else if (what === 'toggleOpts') {
       ui.showOptions = !ui.showOptions; store.set(UI_KEY, ui); render();
+    } else if (what === 'links') {
+      ui.showLinks = !ui.showLinks; linkNote = ''; store.set(UI_KEY, ui); render();
+    } else if (what === 'linkYes' || what === 'linkNo' || what === 'unlink') {
+      if (!tracker) return;
+      const id = a.getAttribute('data-id'), to = a.getAttribute('data-to');
+      if (what === 'linkYes') {
+        const r = tracker.link(id, to);
+        linkNote = r.ok ? `Reads joined: ${r.info.names.join(' / ')}, ${handsTxt(r.info.hands)}.` : r.error;
+      } else if (what === 'linkNo') {
+        tracker.refuseLink(id, to);
+        linkNote = 'Kept apart. You won\'t be asked about these two again.';
+      } else {
+        tracker.unlink(id);
+        linkNote = `Split: ${tracker.namesOf(id)[0] || id} reads on their own again.`;
+      }
+      afterLink();
     }
   });
+  root.addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-a="linkPick"]');
+    if (!sel || !tracker || !sel.value) return;
+    const r = tracker.link(sel.getAttribute('data-id'), sel.value);
+    linkNote = r.ok ? `Reads joined: ${r.info.names.join(' / ')}, ${handsTxt(r.info.hands)}.` : r.error;
+    afterLink();
+  });
+  // A link changes the reads: advice on the table now was built from the old ones.
+  function afterLink() {
+    saveDb();
+    if (advice && !advice.stale) requestAdvice();
+    else render();
+  }
   fileIn.addEventListener('change', () => { if (fileIn.files && fileIn.files.length) importLogs([...fileIn.files]); });
 
   // "Import": hand-log exports (this install's or an older one's) go into the stored log, and the
@@ -265,9 +303,10 @@
       if (!add.ok) throw new Error(add.error || 'storage write failed');
       // Names in logs without account ids map to the ids the reads here already use.
       const known = {};
-      for (const [id, r] of Object.entries(tracker.db.players)) if (r && r.name && id.slice(0, 5) !== 'name:') known[r.name] = id;
+      for (const [id, r] of Object.entries(tracker.db.players)) if (r && r.name && id.slice(0, 5) !== 'name:') known[r.name] = tracker.canon(id);
       const res = await PatioTracker.rebuildReads(stored.concat(fresh), {
         known, heroAuth: tracker.snap && tracker.snap.heroAuthId, yieldEvery: 10,
+        same: tracker.db.same, notSame: tracker.db.notSame, linkLog: tracker.db.linkLog,
         setup: (t) => {
           t.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, t.poolTally());
           t.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => t.poolTally());
@@ -283,6 +322,7 @@
         if (cur && handsOf(cur) > handsOf(r) * 1.1 + 2) { kept++; continue; }
         tracker.db.players[id] = r;
       }
+      tracker.absorbLinks(res.db);
       await saveDb();
       importNote = `Imported ${add.added} new hand${add.added === 1 ? '' : 's'} (${got.length - fresh.length} already here). Reads rebuilt from ${res.replayed} hands` +
         (res.skipped ? `; ${res.skipped} without raw events only went into the log` : '') + (kept ? `; ${kept} reads with more history kept as they were` : '') + '.';
@@ -299,12 +339,91 @@
   });
 
   // ---------- rendering ----------
+  // Linked reads (tracker.js): a friend who came back on a new account id. Same-name matches are
+  // asked here and joined only on "Same player"; "Link reads" joins or splits any of them by hand.
+  const day = (t) => (t ? new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
+  const handsTxt = (n) => `${Math.round(n)} hand${Math.round(n) === 1 ? '' : 's'}`;
+  function readLabel(g) {
+    const also = g.names.slice(1, 3);
+    return `${g.names[0] || '?'}${also.length ? ' (also ' + also.join(', ') + ')' : ''} · ${handsTxt(g.hands)}${g.last ? ' · seen ' + day(g.last) : ''}`;
+  }
+  function authOf(name) {
+    const h = tracker && tracker.hand;
+    const p = h && Object.values(h.players).find((x) => x.name === name);
+    return p ? p.auth : null;
+  }
+  function linkedTxt(auth) {
+    const ids = auth ? tracker.groupOf(auth) : [];
+    if (ids.length < 2) return '';
+    const names = [];
+    for (const k of ids) for (const n of tracker.namesOf(k)) if (!names.includes(n)) names.push(n);
+    return `Reads from ${ids.length} accounts (${names.join(', ')})`;
+  }
+  function linkAsksHtml() {
+    const asks = tracker && tracker.linkAsks;
+    if (!asks) return '';
+    const seen = tracker.db.seen || {};
+    let html = '';
+    for (const a of Object.values(asks)) {
+      for (const m of a.matches) {
+        const last = Math.max(0, ...m.ids.map((k) => (seen[k] && seen[k].last) || 0));
+        html += `<div class="ask"><b>${esc(a.name)}</b> is on an account the reads haven't seen. Same player as the older read ${esc(readLabel(Object.assign({}, m, { last })))}?
+          <div class="row"><button class="btn" data-a="linkYes" data-id="${esc(a.id)}" data-to="${esc(m.id)}">Same player</button>
+          <button class="btn" data-a="linkNo" data-id="${esc(a.id)}" data-to="${esc(m.id)}">Different players</button></div></div>`;
+      }
+    }
+    return html;
+  }
+  // Older reads that could be this player, closest name first (the same name, then a shared
+  // start like Dew999 / Dew666), then the most recently seen.
+  function linkOptions(auth, groups) {
+    const mine = tracker.groupOf(auth);
+    const nm = (tracker.namesOf(auth)[0] || '').toLowerCase();
+    const close = (g) => {
+      let best = 0;
+      for (const n of g.names.map((x) => x.toLowerCase())) {
+        if (n === nm) best = Math.max(best, 3);
+        let k = 0;
+        while (k < n.length && k < nm.length && n[k] === nm[k]) k++;
+        if (k >= 3) best = Math.max(best, 2);
+      }
+      return best;
+    };
+    return groups.filter((g) => !g.ids.some((k) => mine.includes(k)) && !tracker.groupsApart(mine, g.ids, true))
+      .map((g) => ({ g, c: close(g) })).sort((a, b) => b.c - a.c || b.g.last - a.g.last).map((x) => x.g);
+  }
+  function linksHtml() {
+    if (!tracker) return '';
+    const groups = tracker.readGroups();
+    const h = tracker.hand, heroId = tracker.heroId();
+    let html = '<div><div class="sec">Link reads</div>';
+    const at = h ? Object.values(h.players).filter((p) => p.id !== heroId && p.auth) : [];
+    if (!at.length) html += '<div class="muted">Players at the table show here once a hand starts.</div>';
+    for (const p of at) {
+      const opts = linkOptions(p.auth, groups);
+      html += `<div class="lk"><span class="nm">${esc(p.name)}</span>` + (opts.length
+        ? `<select data-a="linkPick" data-id="${esc(p.auth)}"><option value="">Same player as…</option>${opts.map((g) => `<option value="${esc(g.id)}">${esc(readLabel(g))}</option>`).join('')}</select>`
+        : '<span class="muted">no other reads to join</span>') + '</div>';
+    }
+    const linked = groups.filter((g) => g.ids.length > 1);
+    if (linked.length) {
+      html += '<div class="sec" style="margin-top:6px">Joined</div>';
+      for (const g of linked) {
+        html += `<div class="lk"><span>${esc(readLabel(g))}</span>${g.ids.map((k) => `<button class="btn" data-a="unlink" data-id="${esc(k)}" title="This account's hands read on their own again">Split off ${esc(tracker.namesOf(k)[0] || k)} (${handsTxt(handsOfTally(tracker.db.players[k]))})</button>`).join('')}</div>`;
+      }
+    }
+    html += '<div class="muted">Joined reads add both accounts\' hands together; splitting gives each its own hands back. Two accounts that played the same hand can\'t be joined.</div></div>';
+    return html;
+  }
+  const handsOfTally = (r) => { const t = (r && r.tally) || {}; return (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0); };
+
   function oppReadsHtml(list) {
     if (!list.length) return '';
     return `<div><div class="sec">Reads</div>${list.map((o) => `
       <div class="opp"><span class="nm">${esc(o.name)}</span><span class="ty">${esc(o.type)}</span>
         <div class="muted">${Math.round(o.hands)} hand${Math.round(o.hands) === 1 ? '' : 's'} · VPIP ${pct(o.vpip)} · PFR ${pct(o.pfr)} · folds to bets ${pct(o.ftb)}${o.likely ? ' · likely ' + esc(o.likely) : ''}</div>
         ${o.summary ? `<div class="muted">${esc(o.summary)}</div>` : ''}
+        ${o.linked ? `<div class="muted">${esc(o.linked)}</div>` : ''}
         ${o.bluffChance != null ? `<div class="tip">Bluffing here about ${pct(o.bluffChance)} of the time</div>` : ''}
         ${o.tip ? `<div class="tip">${esc(o.tip)}</div>` : ''}</div>`).join('')}</div>`;
   }
@@ -315,11 +434,10 @@
     const out = [];
     for (const p of Object.values(tracker.hand.players)) {
       if (p.id === heroId) continue;
-      const r = tracker.db.players[p.auth];
-      const tally = Object.assign(PatioTracker.blankTally(), r ? r.tally : {});
+      const tally = Object.assign(PatioTracker.blankTally(), tracker.readTally(p.auth) || {});
       const st = PokerEngine.computeStats(tally, ui.tableStyle, tracker.poolTally());
       const ty = PokerEngine.classifyPlayer(st);
-      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: ty.label, tip: '', hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
+      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: ty.label, tip: '', hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st), linked: linkedTxt(p.auth) });
     }
     return out;
   }
@@ -383,16 +501,20 @@
           <td class="${s.ev < 0 ? 'neg' : s.ev > 0 ? 'pos' : ''}">${s.ev >= 0 ? '+' : '−'}${money(Math.abs(s.ev))}</td></tr>`).join('')}</table>`;
       }
       html += `</div>`;
+      html += linkAsksHtml();
       html += oppReadsHtml(r.opponents.map((o) => ({
         name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands,
         vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '),
-        summary: o.summary, bluffChance: o.bluffChance,
+        summary: o.summary, bluffChance: o.bluffChance, linked: linkedTxt(authOf(o.name)),
       })));
     } else {
       if (!thinking) html += `<div class="status">${esc(status)}</div>`;
+      html += linkAsksHtml();
       html += oppReadsHtml(liveReads());
     }
-    const n = tracker ? Object.keys(tracker.db.players).length : 0;
+    if (linkNote) html += `<div class="status">${esc(linkNote)}</div>`;
+    if (ui.showLinks) html += linksHtml();
+    const n = tracker ? tracker.readGroups().length : 0;
     html += `<div class="muted">Tracking ${n} player${n === 1 ? '' : 's'}. Reads sharpen as hands pile up.</div>`;
     if (sizing.small) html += `<div class="muted">Bets this session under ${Math.round(SMALL_SIZE * 100)}% of the advised size: ${sizing.small} of ${sizing.n}.</div>`;
     if (saveError) html += `<div class="status neg">Couldn't save reads and the hand log: ${esc(saveError)}</div>`;
@@ -444,6 +566,8 @@
       restored = true;
     }
     tracker = new PatioTracker(loaded.db);
+    // Reads saved before v1.8.8 don't know who played together: learned from the stored hands.
+    tracker.learnSeats(loaded.db.history || []);
     tracker.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally());
     tracker.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => tracker.poolTally());
     tracker.fitVersion = PokerEngine.FIT_VERSION;
@@ -454,7 +578,7 @@
       if (type === 'turn') { /* handled below with payload */ }
       if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }
       if (type === 'action') checkSize();
-      if (type === 'action' || type === 'street' || type === 'cards') render();
+      if (type === 'action' || type === 'street' || type === 'cards' || type === 'linkAsk') render();
     });
     tracker.on((type, p) => {
       if (type === 'turn' && p.isHero) requestAdvice(p.timeLeftMs);

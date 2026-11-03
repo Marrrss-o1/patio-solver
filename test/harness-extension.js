@@ -48,6 +48,39 @@ const fs = require('fs');
     console.log('--- after wiping the extension storage and reloading ---');
     console.log(/brought back/.test(after) ? 'RESTORED: ' + after.split('\n').find((l) => /brought back/.test(l)) : 'NOT RESTORED');
   }
+  // LINK=1: the opponent comes back on a new account id under the same name. The panel asks
+  // "Same player?"; the harness says yes, checks the reads are joined (also after a reload), then splits them.
+  if (process.env.LINK) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (sel) => page.evaluate((q) => document.getElementById('patio-solver-host').shadowRoot.querySelector(q).click(), sel);
+    const opp = msgs.find((m) => m.snap).snap.players.find((p) => p.authUserId !== msgs.find((m) => m.snap).snap.heroAuthId).authUserId;
+    const again = JSON.parse(JSON.stringify(msgs).split(`"authUserId":"${opp}"`).join('"authUserId":"NEW-ID"'));
+    const upTo = again.findIndex((m) => m.ev === 'game:stage_began' && m.data && m.data.stageType === 'set_blinds');
+    const send = async (list) => { for (const m of list) { await page.evaluate(x => window.postMessage(Object.assign({ source: 'patio-solver-hook' }, x), location.origin), m); await page.waitForTimeout(40); } };
+    await send(again.slice(0, upTo + 1));
+    await page.waitForTimeout(300);
+    const asked = await text();
+    console.log('--- new account, same name ---');
+    console.log(/Same player as the older read/.test(asked) ? 'ASKED: ' + asked.split('\n').find((l) => /older read/.test(l)) : 'NOT ASKED');
+    await click('[data-a="linkYes"]');
+    await page.waitForTimeout(300);
+    const joined = await text();
+    console.log(/Reads joined/.test(joined) && /Reads from 2 accounts/.test(joined) ? 'JOINED: ' + joined.split('\n').find((l) => /Reads joined/.test(l)) : 'NOT JOINED\n' + joined);
+    await page.waitForTimeout(1000);
+    await page.reload();
+    await page.waitForTimeout(2500);
+    await send(again.slice(0, upTo + 1));
+    await page.waitForTimeout(300);
+    const kept = await text();
+    console.log(/Reads from 2 accounts/.test(kept) && !/older read/.test(kept) ? 'KEPT AFTER RELOAD' : 'LOST AFTER RELOAD\n' + kept);
+    await click('[data-a="links"]');
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(out, 'ext_links.png') });
+    await click('[data-a="unlink"]');
+    await page.waitForTimeout(300);
+    const split = await text();
+    console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT: ' + split.split('\n').find((l) => /Split:/.test(l)) : 'NOT SPLIT\n' + split);
+  }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'ext_end.png') });
   const panel = await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; });

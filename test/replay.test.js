@@ -1992,5 +1992,161 @@ test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of th
     heroPotTilt: 0.2, heroPotShows: { hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 } })).heroPot.tilt, 0.2); // a number: fixed
 });
 
+// ---------------------------------------------------------------------------
+// Linked reads: a friend on a new account id (Jagger, 2 Nov) or a new name
+// ---------------------------------------------------------------------------
+// The heads-up showdown hand with Vic's account id and name swapped.
+const asPlayer = (msgs, id, name) => JSON.parse(JSON.stringify(msgs).replace(/"authUserId":"V"/g, `"authUserId":"${id}"`).replace(/"name":"Vic"/g, `"name":"${name}"`));
+const feedAll = (t, msgs) => { for (const m of msgs) { if (m.ev === 'hook:attached') { t.snap = m.snap; continue; } t.handle(m.ev, m.data, m.snap); } };
+const handsOf = (tally) => (tally.pfFold || 0) + (tally.pfCall || 0) + (tally.pfRaise || 0);
+const sdHand = require(path.join(__dirname, 'fixtures/synth-showdown.json'));
+const threeHand = require(path.join(__dirname, 'fixtures/three-hand-150bb.json'));
+
+test('linked reads: same name on a new account id is suggested, and joined only when hero says so', () => {
+  const t = new T({ players: {} });
+  const asks = [];
+  t.on((type, p) => { if (type === 'linkAsk') asks.push(JSON.parse(JSON.stringify(p))); });
+  for (let i = 0; i < 3; i++) feedAll(t, asPlayer(sdHand, 'J1', 'Jagger'));
+  assert.strictEqual(asks.length, 0);
+  let input = null;
+  t.on((type, p) => { if (type === 'turn' && p.isHero && !input) input = t.solverInput('typical').input; });
+  feedAll(t, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.strictEqual(asks.length, 1, 'one question');
+  assert.deepStrictEqual(Object.keys(asks[0]), ['J2']);
+  assert.strictEqual(asks[0].J2.matches[0].id, 'J1');
+  near(asks[0].J2.matches[0].hands, handsOf(t.db.players.J1.tally));
+  // Nothing joined before the answer: the new id reads as a new player.
+  assert.strictEqual(t.canon('J2'), 'J2');
+  near(handsOf(input.opponents[0].tally), 0);
+  near(handsOf(t.readTally('J2')), 1);
+  // "Same player": the read is both ids added up; each id keeps its own counts.
+  const old = handsOf(t.db.players.J1.tally);
+  assert.ok(t.link('J2', 'J1').ok);
+  assert.strictEqual(t.canon('J2'), 'J1');
+  assert.deepStrictEqual(t.linkAsks, {});
+  near(handsOf(t.db.players.J2.tally), 1);
+  near(handsOf(t.readTally('J2')), old + 1);
+  assert.strictEqual(t.readTally('J1').shows.length, 4);
+  input = null;
+  const before = t.db.players.J1.tally.bet;
+  feedAll(t, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.strictEqual(asks.length, 1, 'not asked again once linked');
+  near(handsOf(input.opponents[0].tally), (old + 1) * T.DECAY);
+  // Both ids' counts decay while the player plays on (once each per hand).
+  near(t.db.players.J1.tally.bet, before * T.DECAY);
+  assert.strictEqual(t.db.history[t.db.history.length - 1].players.find((x) => !x.hero).accounts, 2);
+});
+
+test('linked reads: a player not linked reads exactly as before (the same tally object)', () => {
+  const t = new T({ players: {} });
+  feedAll(t, sdHand);
+  assert.strictEqual(t.readTally('V'), t.db.players.V.tally);
+  assert.deepStrictEqual(t.groupOf('V'), ['V']);
+});
+
+test('linked reads: "different players" is not asked again', () => {
+  const t = new T({ players: {} });
+  feedAll(t, asPlayer(sdHand, 'J1', 'Jagger'));
+  feedAll(t, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.ok(t.linkAsks.J2);
+  t.refuseLink('J2', 'J1');
+  assert.ok(!t.linkAsks.J2);
+  feedAll(t, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.ok(!t.linkAsks.J2, 'not suggested again');
+  assert.strictEqual(t.canon('J2'), 'J2');
+  // Linking by hand still works and overrides the answer.
+  assert.ok(t.link('J2', 'J1').ok);
+  assert.strictEqual(t.canon('J2'), 'J1');
+});
+
+test('linked reads: two ids that played the same hand never link or get suggested', () => {
+  const t = new T({ players: {} });
+  feedAll(t, threeHand); // Ann (A) and Bob (B) at one table
+  const r = t.link('A', 'B');
+  assert.ok(!r.ok && /same hand/.test(r.error), r.error);
+  assert.strictEqual(t.canon('B'), 'B');
+  // Two older reads called Bob who played together: a new Bob gets both offered, and only one can join.
+  const t2 = new T({ players: {} });
+  feedAll(t2, JSON.parse(JSON.stringify(threeHand).replace(/"name":"Ann"/g, '"name":"Bob"')));
+  feedAll(t2, asPlayer(sdHand, 'B9', 'Bob'));
+  assert.deepStrictEqual(t2.linkAsks.B9.matches.map((m) => m.id).sort(), ['A', 'B']);
+  assert.ok(t2.link('B9', 'A').ok);
+  assert.ok(!t2.link('B9', 'B').ok, 'B played with A');
+  // A Bob sitting with an older Bob is not that Bob.
+  const t3 = new T({ players: {} });
+  feedAll(t3, asPlayer(sdHand, 'V1', 'Bob'));
+  feedAll(t3, JSON.parse(JSON.stringify(threeHand).replace(/"authUserId":"A"/g, '"authUserId":"V1"').replace(/"name":"Ann"/g, '"name":"Bob"')));
+  assert.ok(!(t3.linkAsks && t3.linkAsks.B), 'B sat with V1 (named Bob): no question');
+});
+
+test('linked reads: unlinking splits them back with their own counts', () => {
+  const t = new T({ players: {} });
+  feedAll(t, asPlayer(sdHand, 'J1', 'Jagger'));
+  feedAll(t, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.ok(t.link('J2', 'J1').ok);
+  assert.ok(t.unlink('J2'));
+  assert.deepStrictEqual(t.groupOf('J2'), ['J2']);
+  near(handsOf(t.readTally('J2')), 1);
+  feedAll(t, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.ok(!(t.linkAsks && t.linkAsks.J2), 'not suggested again after unlinking');
+  assert.ok(t.link('J2', 'J1').ok, 'by hand again');
+  // A new name and a new id, linked by hand; unlinking the root keeps the rest together.
+  feedAll(t, asPlayer(sdHand, 'J3', 'Jag'));
+  assert.ok(!(t.linkAsks && t.linkAsks.J3), 'another name: no suggestion');
+  assert.ok(t.link('J3', 'J2').ok);
+  assert.deepStrictEqual(t.groupOf('J3').sort(), ['J1', 'J2', 'J3']);
+  t.unlink('J1');
+  assert.deepStrictEqual(t.groupOf('J3').sort(), ['J2', 'J3']);
+  assert.deepStrictEqual(t.groupOf('J1'), ['J1']);
+  assert.strictEqual(t.readGroups().length, 2);
+});
+
+test('linked reads: a name change keeps the read; old names count; generic names and hero never match', () => {
+  const t = new T({ players: {} });
+  feedAll(t, asPlayer(sdHand, 'P1', 'phuketdemon'));
+  feedAll(t, asPlayer(sdHand, 'P1', 'Jagger')); // a name change on the same id: same read, no question
+  assert.ok(!(t.linkAsks && t.linkAsks.P1));
+  near(handsOf(t.readTally('P1')), 1 * T.DECAY + 1);
+  assert.deepStrictEqual(t.namesOf('P1'), ['Jagger', 'phuketdemon']);
+  feedAll(t, asPlayer(sdHand, 'P2', 'phuketdemon'));
+  assert.strictEqual(t.linkAsks.P2.matches[0].id, 'P1', 'a new id under the old name');
+  const g = new T({ players: {} });
+  feedAll(g, asPlayer(sdHand, 'G1', 'Guest 12'));
+  feedAll(g, asPlayer(sdHand, 'G2', 'guest 12'));
+  assert.ok(!(g.linkAsks && g.linkAsks.G2));
+  const h = new T({ players: {} });
+  feedAll(h, asPlayer(sdHand, 'V1', 'Hero'));
+  assert.ok(!(h.linkAsks && h.linkAsks.V1));
+  assert.ok(!h.link('V1', 'H').ok);
+  // linkReads false: no seat notes, no questions.
+  const off = new T({ players: {} });
+  off.linkReads = false;
+  feedAll(off, asPlayer(sdHand, 'J1', 'Jagger'));
+  feedAll(off, asPlayer(sdHand, 'J2', 'Jagger'));
+  assert.ok(!off.linkAsks && !off.db.seen);
+});
+
+test('linked reads: seats learned from stored hands', () => {
+  const t = new T({ players: {} });
+  feedAll(t, threeHand);
+  t.finishHand();
+  const hist = JSON.parse(JSON.stringify(t.db.history));
+  const fresh = new T({ players: JSON.parse(JSON.stringify(t.db.players)) });
+  fresh.learnSeats(hist);
+  assert.ok(fresh.db.seen.A.met.B && fresh.db.seen.B.met.A && !fresh.db.seen.H, JSON.stringify(fresh.db.seen));
+  assert.ok(!fresh.link('A', 'B').ok);
+});
+
+test('linked reads: merged tallies add every count and keep the newest shows', () => {
+  const a = T.blankTally(), b = T.blankTally();
+  a.bet = 2; a.st.flop.bet = 1; a.vs.small.fs = 0.5; a.pred.n = 3; a.shows = [{ n: 1 }, { n: 2 }];
+  b.bet = 1.5; b.st.flop.bet = 2; b.tt.call.n = 4; b.shows = Array.from({ length: 80 }, (_, i) => ({ n: 10 + i }));
+  const m = T.mergeTallies([a, b]);
+  near(m.bet, 3.5); near(m.st.flop.bet, 3); near(m.vs.small.fs, 0.5); near(m.pred.n, 3); near(m.tt.call.n, 4);
+  assert.strictEqual(m.shows.length, 80);
+  assert.strictEqual(m.shows[0].n, 10);
+  assert.strictEqual(a.bet, 2, 'inputs unchanged');
+});
+
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
 console.log('\nAll tests passed');

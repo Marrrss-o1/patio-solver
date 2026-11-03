@@ -116,6 +116,9 @@ function slim(r) {
   tracker.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally()); };
   tracker.predictor = PokerEngine.makePredictor(function () { return ui.tableStyle; }, function () { return tracker.poolTally(); });
   tracker.fitVersion = PokerEngine.FIT_VERSION;
+  // Reads saved before v1.8.8 don't know who played together: learned from the stored hands.
+  tracker.learnSeats(tracker.db.history || []);
+  var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
 
@@ -167,6 +170,8 @@ function slim(r) {
     '.sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#8c968f;margin-bottom:4px}' +
     '.opp{padding:6px 0;border-top:1px solid rgba(255,255,255,.06)}.opp:first-of-type{border-top:0}.nm{font-weight:600}.ty{font-size:11px;padding:1px 6px;border-radius:99px;background:rgba(255,255,255,.1);margin-left:4px}.tip{color:#aab3ad;font-size:12px;margin-top:2px}' +
     '.ft{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:4px}' +
+    '.ask{border-radius:10px;padding:8px 10px;background:rgba(255,204,51,.12);border:1px solid rgba(255,204,51,.35);font-size:13px}.ask .row{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}' +
+    '.lk{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0;border-top:1px solid rgba(255,255,255,.06);font-size:13px}.lk select{max-width:200px}' +
     '.btn,select{background:rgba(255,255,255,.1);color:inherit;border:0;border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}select option{color:#111}' +
     '.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;margin-right:6px;vertical-align:-1px}@keyframes s{to{transform:rotate(360deg)}}' +
     '</style>' +
@@ -227,11 +232,37 @@ function slim(r) {
         return;
       }
       // The reads start over; the hand log stays.
-      tracker.db = { players: {}, history: tracker.db.history || [] }; save(DB_KEY, tracker.db); render();
+      tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.learnSeats(tracker.db.history);
+      save(DB_KEY, tracker.db); render();
+    }
+    else if (what === 'links') { ui.showLinks = !ui.showLinks; linkNote = ''; save(UI_KEY, ui); render(); }
+    else if (what === 'linkYes' || what === 'linkNo' || what === 'unlink') {
+      var id = a.getAttribute('data-id'), to = a.getAttribute('data-to');
+      if (what === 'linkYes') {
+        var res = tracker.link(id, to);
+        linkNote = res.ok ? 'Reads joined: ' + res.info.names.join(' / ') + ', ' + handsTxt(res.info.hands) + '.' : res.error;
+      } else if (what === 'linkNo') {
+        tracker.refuseLink(id, to);
+        linkNote = 'Kept apart. You won\'t be asked about these two again.';
+      } else {
+        tracker.unlink(id);
+        linkNote = 'Split: ' + (tracker.namesOf(id)[0] || id) + ' reads on their own again.';
+      }
+      afterLink();
     }
   });
+  // A link changes the reads: advice on the table now was built from the old ones.
+  function afterLink() {
+    save(DB_KEY, tracker.db);
+    if (advice && !advice.stale) requestAdvice(); else render();
+  }
   root.addEventListener('change', function (e) {
-    if (e.target.matches('select')) {
+    if (e.target.matches('select[data-a="linkPick"]')) {
+      if (!e.target.value) return;
+      var res = tracker.link(e.target.getAttribute('data-id'), e.target.value);
+      linkNote = res.ok ? 'Reads joined: ' + res.info.names.join(' / ') + ', ' + handsTxt(res.info.hands) + '.' : res.error;
+      afterLink();
+    } else if (e.target.matches('select')) {
       ui.tableStyle = e.target.value; save(UI_KEY, ui);
       if (advice && !advice.stale) requestAdvice(); else render();
     }
@@ -244,6 +275,7 @@ function slim(r) {
       return '<div class="opp"><span class="nm">' + esc(o.name) + '</span><span class="ty">' + esc(o.type) + '</span>' +
         '<div class="muted">' + Math.round(o.hands) + ' hand' + (Math.round(o.hands) === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
         (o.summary ? '<div class="muted">' + esc(o.summary) + '</div>' : '') +
+        (o.linked ? '<div class="muted">' + esc(o.linked) + '</div>' : '') +
         (o.bluffChance != null ? '<div class="tip">Bluffing here about ' + pct(o.bluffChance) + ' of the time</div>' : '') +
         (o.tip ? '<div class="tip">' + esc(o.tip) + '</div>' : '') + '</div>';
     }).join('') + '</div>';
@@ -256,17 +288,91 @@ function slim(r) {
     Object.keys(h.players).forEach(function (k) {
       var p = h.players[k];
       if (p.id === heroId) return;
-      var r = tracker.db.players[p.auth];
-      var st = PokerEngine.computeStats(Object.assign(PatioTracker.blankTally(), r ? r.tally : {}), ui.tableStyle, tracker.poolTally());
-      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
+      var st = PokerEngine.computeStats(Object.assign(PatioTracker.blankTally(), tracker.readTally(p.auth) || {}), ui.tableStyle, tracker.poolTally());
+      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st), linked: linkedTxt(p.auth) });
     });
     return out;
+  }
+
+  // Linked reads (tracker.js): a friend who came back on a new account id. Same-name matches are
+  // asked here and joined only on "Same player"; "Link reads" joins or splits any of them by hand.
+  function day(t) { return t ? new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : ''; }
+  function handsTxt(n) { return Math.round(n) + ' hand' + (Math.round(n) === 1 ? '' : 's'); }
+  function readLabel(g) {
+    var also = g.names.slice(1, 3);
+    return (g.names[0] || '?') + (also.length ? ' (also ' + also.join(', ') + ')' : '') + ' · ' + handsTxt(g.hands) + (g.last ? ' · seen ' + day(g.last) : '');
+  }
+  function authOf(name) {
+    var h = tracker.hand;
+    if (!h) return null;
+    var k = Object.keys(h.players).filter(function (x) { return h.players[x].name === name; })[0];
+    return k ? h.players[k].auth : null;
+  }
+  function linkedTxt(auth) {
+    var ids = auth ? tracker.groupOf(auth) : [];
+    if (ids.length < 2) return '';
+    var names = [];
+    ids.forEach(function (k) { tracker.namesOf(k).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); }); });
+    return 'Reads from ' + ids.length + ' accounts (' + names.join(', ') + ')';
+  }
+  function linkAsksHtml() {
+    var asks = tracker.linkAsks, seen = tracker.db.seen || {}, html = '';
+    if (!asks) return '';
+    Object.keys(asks).forEach(function (k) {
+      var a = asks[k];
+      a.matches.forEach(function (m) {
+        var last = Math.max.apply(null, [0].concat(m.ids.map(function (x) { return (seen[x] && seen[x].last) || 0; })));
+        html += '<div class="ask"><b>' + esc(a.name) + '</b> is on an account the reads haven\'t seen. Same player as the older read ' + esc(readLabel(Object.assign({}, m, { last: last }))) + '?' +
+          '<div class="row"><button class="btn" data-a="linkYes" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Same player</button> ' +
+          '<button class="btn" data-a="linkNo" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Different players</button></div></div>';
+      });
+    });
+    return html;
+  }
+  function linkOptions(auth, groups) {
+    var mine = tracker.groupOf(auth), nm = (tracker.namesOf(auth)[0] || '').toLowerCase();
+    function close(g) {
+      var best = 0;
+      g.names.forEach(function (x) {
+        var n = x.toLowerCase(), k = 0;
+        if (n === nm) best = Math.max(best, 3);
+        while (k < n.length && k < nm.length && n[k] === nm[k]) k++;
+        if (k >= 3) best = Math.max(best, 2);
+      });
+      return best;
+    }
+    return groups.filter(function (g) { return !g.ids.some(function (k) { return mine.indexOf(k) >= 0; }) && !tracker.groupsApart(mine, g.ids, true); })
+      .map(function (g) { return { g: g, c: close(g) }; }).sort(function (a, b) { return b.c - a.c || b.g.last - a.g.last; }).map(function (x) { return x.g; });
+  }
+  function handsOfTally(r) { var t = (r && r.tally) || {}; return (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0); }
+  function linksHtml() {
+    var groups = tracker.readGroups(), h = tracker.hand, heroId = tracker.heroId();
+    var html = '<div><div class="sec">Link reads</div>';
+    var at = h ? Object.keys(h.players).map(function (k) { return h.players[k]; }).filter(function (p) { return p.id !== heroId && p.auth; }) : [];
+    if (!at.length) html += '<div class="muted">Players at the table show here once a hand starts.</div>';
+    at.forEach(function (p) {
+      var opts = linkOptions(p.auth, groups);
+      html += '<div class="lk"><span class="nm">' + esc(p.name) + '</span>' + (opts.length
+        ? '<select data-a="linkPick" data-id="' + esc(p.auth) + '"><option value="">Same player as…</option>' + opts.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(readLabel(g)) + '</option>'; }).join('') + '</select>'
+        : '<span class="muted">no other reads to join</span>') + '</div>';
+    });
+    var linked = groups.filter(function (g) { return g.ids.length > 1; });
+    if (linked.length) {
+      html += '<div class="sec" style="margin-top:6px">Joined</div>';
+      linked.forEach(function (g) {
+        html += '<div class="lk"><span>' + esc(readLabel(g)) + '</span>' + g.ids.map(function (k) {
+          return '<button class="btn" data-a="unlink" data-id="' + esc(k) + '">Split off ' + esc(tracker.namesOf(k)[0] || k) + ' (' + handsTxt(handsOfTally(tracker.db.players[k])) + ')</button>';
+        }).join(' ') + '</div>';
+      });
+    }
+    return html + '<div class="muted">Joined reads add both accounts\' hands together; splitting gives each its own hands back. Two accounts that played the same hand can\'t be joined.</div></div>';
   }
 
   function render() {
     var fresh = advice && !advice.stale;
     var logDue = unexported() >= LOG_REMIND;
-    var logBadge = logDue && !fresh && !thinking ? '<span class="badge">export log</span>' : '';
+    var asking = tracker.linkAsks && Object.keys(tracker.linkAsks).length;
+    var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
     dot.className = 'dot' + (blocked ? '' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
@@ -313,17 +419,21 @@ function slim(r) {
         }).join('') + '</table>';
       }
       html += '</div>';
+      html += linkAsksHtml();
       html += readsHtml(r.opponents.map(function (o) {
-        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '), summary: o.summary, bluffChance: o.bluffChance };
+        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '), summary: o.summary, bluffChance: o.bluffChance, linked: linkedTxt(authOf(o.name)) };
       }));
     } else {
       if (!thinking) html += '<div class="status">' + esc(status) + '</div>';
+      html += linkAsksHtml();
       html += readsHtml(liveReads());
     }
-    var n = Object.keys(tracker.db.players).length;
+    if (linkNote) html += '<div class="status">' + esc(linkNote) + '</div>';
+    if (ui.showLinks) html += linksHtml();
+    var n = tracker.readGroups().length;
     html += '<div class="ft"><select>' + ['tight', 'typical', 'loose'].map(function (s) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
-    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
+    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="links">Link reads</button> <button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
     if (sizing.small) html += '<div class="muted">Bets this session under ' + Math.round(SMALL_SIZE * 100) + '% of the advised size: ' + sizing.small + ' of ' + sizing.n + '.</div>';
     if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log to keep them: this phone keeps the newest 150 hands, with raw events for 60.</div>';
@@ -376,6 +486,7 @@ function slim(r) {
       else if (advice && !advice.stale) { advice.stale = true; render(); }
     } else if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
     else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
+    else if (type === 'linkAsk') render();
   });
 
   // ---------- reading the game ----------
