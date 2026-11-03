@@ -411,7 +411,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   fqJt... (31 Oct phuketdemon, 1 Nov Jagger), so his read restarted; Dew666 did the same on 1 Nov (63 hands as
   fphhq..., then J4Up...). On the 77 hand (2 Nov 14:31, his 17th hand on the new id) the joined read (112 hands)
   still says maniac (VPIP 65%, PFR 32% vs 64% / 36%) and still 4-bets preflop (raise 17.4 vs call 12.8, was 21.2 vs
-  11.6, live budget); the flop changes from check to bet. Records stay per id; `db.same[id] = root` puts
+  11.6, live budget); the flop changes from check to bet. Over the 2 Nov session from his first hand on the new id,
+  joining from that hand changes 6 of 97 hero decisions with Jagger in the hand (phone budget, mix off). Records stay per id; `db.same[id] = root` puts
   ids in one group and every reader of a player (solver input, `scorePrediction`'s read, `scorer`, `rescoreStale`,
   the panels, the log's `pred`/`accuracy`) uses `readTally(id)`: the group's counts added up (`mergeTallies`,
   oldest id first, newest 80 shows). An unlinked player's readTally is its own tally object, so nothing changes
