@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.9
+// @version      1.8.10
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -385,6 +385,13 @@ function ENGINE() {
       // they looked like a third bluffs and draws. No random share and half the bluffs fit the shown
       // turn bets best (x2.07 -> x3.30 of a guess, 8 shows; river x1.51 -> x1.54, 11 shows).
       afterCall: { 4: { odds: 0.43, noise: 0, bluff: 0.5 }, 5: { odds: 0.48, noise: 0, bluff: 0.5 } },
+      // Players with much of their stack already in the pot fold less (v1.8.10): fold odds x exp(commitFold x c), c =
+      // committed / (committed + behind) at the decision. Fitted on every friend facing a bet after the flop in all logs
+      // (750 decisions, 308 hands): -1.8 +- 1.0 against the read (heads-up -2.3, multiway -0.9). Facing a bet with 30%+
+      // of their stack in, friends folded 27% where the read said 44% (n 11), 15-30% in: 29% vs 36% (n 41); under 5%
+      // in, on target (51% vs 52%, n 509). On 2 Nov the solver bet king-high into meww (60% of his stack in, 20% needed
+      // to call) reading 51% folds; with the scale about 26%.
+      commitFold: -1.8,
     },
     solid: {
       vpip: { mu: { all: 0.28, early: 0.224, late: 0.35, blinds: 0.28, other: 0.28 }, tau: 0.8, tauC: 0.35 },
@@ -859,6 +866,7 @@ function ENGINE() {
     stats.rangeNoise = nz.mu;
     stats.bigBetMedium = prior.bigBetMedium || null;
     stats.afterCall = prior.afterCall || null;
+    stats.commitFold = prior.commitFold || 0;
     const fn = fits.filter((f) => f.nl && f.nl.length === NOISES.length);
     if (fn.length) {
       const sum = NOISES.map((_, i) => fn.reduce((a, f) => a + f.nl[i], 0));
@@ -1388,6 +1396,11 @@ function ENGINE() {
   function foldAtSize(stats, f, n) {
     // The field (several players as one): it folds only if every one of them folds.
     if (stats.fieldOf) return clamp(stats.fieldOf.reduce((a, x) => a * foldAtSize(Object.assign({}, x, { foldShift: 0 }), f, n), 1), 0.01, 0.98);
+    const p = foldAtSizeRead(stats, f, n);
+    // Part of their stack already in the pot (stats.commitOdds, set per decision in createAnalysis): they fold less.
+    return stats.commitOdds != null && stats.commitOdds !== 1 ? clamp(oddsScale(p, stats.commitOdds), 0.02, 0.98) : p;
+  }
+  function foldAtSizeRead(stats, f, n) {
     const ftb = streetField(stats, n, 'foldToBet');
     // Past about pot size, folds grow much more slowly than the curve says: home-game
     // players call overbets more than the pot-odds math suggests.
@@ -1499,7 +1512,7 @@ function ENGINE() {
     // Experiment (`input.flopBigRaise`, off): flop raises of pot size or more the same way. In the
     // logs (31 Oct + 1 Nov) 5 of 6 shown postflop raises of pot or more were top pair or better, both
     // flop ones (A3 on A-5-4, Q7 on Q-7-8 for 6.7x the pot); flop min-raises stay wide.
-    if (action === 'raise' && (st.street >= 4 || (stats.flopBigRaise && size >= 1))) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
+    if (action === 'raise' && (st.street >= 4 || (opts && opts.reraise) || (stats.flopBigRaise && size >= 1))) eps = noise * Math.min(1, size > 0 ? 0.6 / size : 1) * 0.25;
     if (ac && ac.noise != null) eps *= ac.noise;
     if (eps > 0) {
       let sw = 0, sp = 0;
@@ -1525,8 +1538,18 @@ function ENGINE() {
   const PRE_RAISED = /^(raise|\dbet)$/;
   const STREET_ACTION_MAP = {
     check: 'check', bet: 'bet', call: 'call', raise: 'raise',
-    checkcall: 'call', checkraise: 'raise', betcall: 'bet',
+    checkcall: 'call', checkraise: 'raise', betcall: 'bet', raisecall: 'raise', checkraisecall: 'raise',
+    betraise: 'raise', betraisecall: 'raise', reraise: 'raise', reraisecall: 'raise',
   };
+  // Lines that bet or raised and then called a re-raise (v1.8.10 for raises: until then a raiser who called a re-raise
+  // kept the whole raising range, bluffs included).
+  const CALLED_AFTER = { betcall: 1, raisecall: 1, checkraisecall: 1, betraisecall: 1, reraisecall: 1 };
+  // Re-raise wars after the flop (v1.8.10): bet then re-raise a raise, or raise and raise again. Read as the first
+  // action and then a raise with a quarter of the noise, like turn and river raises. Until then the tracker called
+  // both 'raise', so the line was one flop raise with about half the range random: tonight's K6 on 4-6-7 had 61%
+  // against a flop 4-bet. In the logs 5 of the 6 shown lines were overpairs, sets, straights or two pair (one
+  // open-ender).
+  const RERAISE_FIRST = { betraise: 'bet', betraisecall: 'bet', reraise: 'raise', reraisecall: 'raise' };
 
   function sumWeights(W) {
     let s = 0;
@@ -1551,11 +1574,16 @@ function ENGINE() {
       // Only called on the street before (a call or a check-call), now bets.
       const afterCall = len >= 4 && act === 'bet' && prevAct === 'call';
       prevAct = act;
-      const next = applyAction(W, st, act, stats, sizes && sizes[name], { cbet, afterCall });
+      const rrFirst = stats.reraiseLines !== false && RERAISE_FIRST[actions[name]];
+      if (rrFirst) {
+        const first = applyAction(W, st, rrFirst, stats, sizes && sizes[name], { cbet });
+        if (sumWeights(first) > 1e-9) W = first;
+      }
+      const next = applyAction(W, st, act, stats, sizes && sizes[name], rrFirst ? { reraise: true } : { cbet, afterCall });
       if (sumWeights(next) > 1e-9) W = next;
       W.bluffShare = act === 'bet' || act === 'raise' ? next.bluffShare : null;
       // Bet, then called a raise: keep the part of the betting range that continues.
-      if (actions[name] === 'betcall') {
+      if (CALLED_AFTER[actions[name]] && (actions[name] === 'betcall' || stats.raiseCallLine !== false)) {
         const after = applyAction(W, st, 'call', stats, null, {});
         if (sumWeights(after) > 1e-9) W = after;
         W.bluffShare = null;
@@ -1735,6 +1763,12 @@ function ENGINE() {
         return { cont: clamp(cont, 0.01, 0.95), nut: 0.965, reraise: clamp(s.pfr * 0.4, 0.02, 0.12) };
       }
       const raised = PRE_RAISED.test(opp.actions.pre || '');
+      // Chips already in (input.pfCommit: true turns it on; off by default): a player whose chips in are a quarter or more
+      // of the raise-to isn't faded by the big-raise cliff and continues with at least 75% of their range. Logs, first
+      // time a player already in the pot faces a raise to 30bb+: chips in under 0.1 of the raise-to 4 of 53 continued,
+      // 0.1-0.25 2 of 3, 0.25+ 4 of 5 (Diagnose thread, scripts/inpot-logs.js). It lost in the simulator: alone -24.5 ±
+      // 14.2 and -18.8 ± 18.0 (v6 bots, 4- and 5-handed, live budget), mostly the big blind.
+      const inW = ctx.pfCommit !== true || opp.committed == null ? 0 : clamp((opp.committed / Math.max(1e-9, kind.amount + (ctx.heroBet || 0)) - 0.1) / 0.15, 0, 1);
       // Raisers facing hero's re-raise to 30bb or less (input.pfRaisedRead): their own read. In the logs, the first time a
       // raiser faces a re-raise in a hand (45 spots), they fold 3% below 35bb (n 39) and call or re-raise about half each
       // (min-raise wars). The reads' foldTo3bet / fourBet (home prior 13% / 50%) carry that; the rule below had them
@@ -1748,7 +1782,8 @@ function ENGINE() {
       // Callers (mostly limpers) continue at their learned rate against a raise.
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
-      const floor = big * fade * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6));
+      const fadeC = fade + (1 - fade) * inW;
+      const floor = Math.max(big * fadeC * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6)), 0.75 * inW);
       return { cont: clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
@@ -1756,9 +1791,14 @@ function ENGINE() {
     // A bettor who gets raised folds less than their fold-to-bet curve: in the logs 6 of 19 (32%), where
     // x0.75 said about 45-50% at the usual raise sizes (0.55: simulator +22.6 +- 20.6 4-handed, +11.7 +- 18.6
     // heads-up against 0.75).
-    if (kind.raiseOverAggressor) fold *= ctx.raiseAggFold != null ? ctx.raiseAggFold : 0.55;
+    // A raiser facing hero's re-raise (v1.8.10, input.reraiseRaiserFold, false for the old rule): friends folded 0 of 9
+    // times in all logs (read 32%; re-raised 2), so fold x 0.25 and no value-share cap. The bettor rule below had them
+    // folding about 35% (1 - value share - 0.1): on 2 Nov the solver re-raised king-high into meww's flop raise.
+    const rrRaiser = kind.raiseOverRaiser && ctx.reraiseRaiserFold !== false;
+    if (rrRaiser) fold *= ctx.reraiseRaiserFold != null ? +ctx.reraiseRaiserFold : 0.25;
+    else if (kind.raiseOverAggressor) fold *= ctx.raiseAggFold != null ? ctx.raiseAggFold : 0.55;
     let cont = 1 - fold;
-    if (kind.raiseOverAggressor) cont = Math.min(cont, valueShare(s) + (ctx.street < 5 ? 0.1 : 0));
+    if (kind.raiseOverAggressor && !rrRaiser) cont = Math.min(cont, valueShare(s) + (ctx.street < 5 ? 0.1 : 0));
     // A player who bet and got raised re-raises more often than one facing a first bet (logs:
     // 3 of 11 flop bettors and 4 of 22 overall re-raised, against about 8% facing a first bet).
     const rrScale = kind.raiseOverAggressor && ctx.rrAgg != null ? ctx.rrAgg : 1;
@@ -5145,6 +5185,23 @@ function ENGINE() {
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
+      // input.reraiseLines: false reads a re-raise war after the flop as one raise again (before v1.8.10).
+      if (input.reraiseLines === false) { stats.reraiseLines = false; if (statsHU) statsHU.reraiseLines = false; }
+      // input.raiseCallLine: false reads a raise that then called a re-raise as a plain raise (before v1.8.10).
+      if (input.raiseCallLine === false) { stats.raiseCallLine = false; if (statsHU) statsHU.raiseCallLine = false; }
+      // Commitment (READ_PRIORS.home.commitFold): fold odds x exp(beta x share of their stack already in). input.commitFold:
+      // false turns it off, a number replaces beta.
+      // Heads-up decisions only (input.commitHUOnly: false applies it multiway too): on every decision it scored about
+      // -3 ± 14 on the v7 bots (4- and 5-handed); on heads-up decisions only +5.2 ± 3.0 over 33 runs, but by table size
+      // heads-up +35.8 ± 9.7, 4-handed +12.1 ± 5.4, 5-handed -2.5 ± 5.1, 6-handed -6.6 ± 7.1.
+      if (street > 0 && o.committed != null && o.stack != null && isFinite(o.stack) && +o.committed + +o.stack > 0 && !(input.commitHUOnly !== false && ctx.multiway)) {
+        const beta = input.commitFold === false ? 0 : typeof input.commitFold === 'number' ? input.commitFold : stats.commitFold || 0;
+        // input.commitFoldMw: beta for the multiway read (statsHU keeps beta), for simulator runs.
+        const betaMw = ctx.multiway && typeof input.commitFoldMw === 'number' ? input.commitFoldMw : beta;
+        const c = clamp(+o.committed / (+o.committed + +o.stack), 0, 1);
+        if (betaMw && c > 0) stats.commitOdds = Math.exp(betaMw * c);
+        if (beta && c > 0 && statsHU) statsHU.commitOdds = Math.exp(beta * c);
+      }
       if (input.bigBetMedium === false) { stats.bigBetMedium = null; if (statsHU) statsHU.bigBetMedium = null; }
       // input.afterCall: false turns READ_PRIORS.home.afterCall off, an object replaces it (simulator).
       if (input.afterCall != null) {
@@ -5161,9 +5218,12 @@ function ENGINE() {
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
         ? PRE_RAISED.test(actions.pre || '')
-        : currentAction === 'bet' || currentAction === 'betcall' || currentAction === 'raise' || currentAction === 'checkraise';
+        : STREET_ACTION_MAP[currentAction] === 'bet' || STREET_ACTION_MAP[currentAction] === 'raise';
       return {
         name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
+        // Raised on this street (after the flop): hero's raise now is a re-raise of a raise.
+        raiser: street > 0 && STREET_ACTION_MAP[currentAction] === 'raise',
+        committed: o.committed != null ? +o.committed : null,
         // They bet or raised on some street after the flop: from here on their range is strong.
         aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
         // Whether the plans and solvers fold them at foldAfterAgg (see AGGRO_FOLD).
@@ -5193,7 +5253,12 @@ function ENGINE() {
     }
 
     const scenarios = [];
+    // A bet or raise that would leave less than 10% of the effective stack behind is an all-in (input.nearAllIn: the
+    // share, 0 turns it off). On 2 Nov a turn bet of 108 left meww 2 of 110: it skipped the all-in's stress variants
+    // and came out 10 chips over shoving, the same play.
+    const nearAllIn = input.nearAllIn != null ? +input.nearAllIn : 0.9;
     const cap = (x) => Math.min(x, stack);
+    const capBet = (x) => (nearAllIn > 0 && isFinite(stack) && x >= nearAllIn * stack ? stack : Math.min(x, stack));
     const fmtFrac = (f) => ({ 0.33: '⅓ pot', 0.5: '½ pot', 0.75: '¾ pot', 1: 'pot', 1.5: '1½ pot', 2: '2× pot overbet' })[f] || Math.round(f * 100) + '% pot';
     const addScenario = (s) => {
       if (scenarios.some((x) => x.kind === s.kind && Math.abs(x.amount - s.amount) < 1e-9)) return;
@@ -5209,7 +5274,7 @@ function ENGINE() {
       // input.pfBetFracs / pfRaiseFracs: other preflop sizes (pot fractions), for the simulator.
       const fracs = street === 0 ? (Array.isArray(input.pfBetFracs) ? input.pfBetFracs.map(Number) : [0.75, 1, 1.5]) : [0.33, 0.5, 0.75, 1, 1.5];
       for (const f of fracs) {
-        const amt = cap(Math.max(bigBlind, roundChips(f * pot, bigBlind)));
+        const amt = capBet(Math.max(bigBlind, roundChips(f * pot, bigBlind)));
         addScenario({ kind: amt >= stack ? 'allin' : 'bet', label: amt >= stack ? 'All-in' : 'Bet', sizeLabel: fmtFrac(f), amount: amt });
       }
       if (shoveMakesSense) addScenario({ kind: 'allin', label: 'All-in', amount: stack });
@@ -5226,7 +5291,7 @@ function ENGINE() {
         const pfCapBB = input.pfRaiseCapBB != null ? +input.pfRaiseCapBB : 30;
         const fracs = street === 0 ? (pfExtra ? pfFracs : [0.6, 1, 1.6]) : [0.6, 1];
         for (const f of fracs) {
-          const amt = cap(roundChips(toCall + f * (pot + toCall), bigBlind));
+          const amt = capBet(roundChips(toCall + f * (pot + toCall), bigBlind));
           if (street === 0 && f !== 0.6 && f !== 1 && f !== 1.6 && (+input.heroBet || 0) + amt > pfCapBB * bigBlind + 1e-9) continue;
           const label = street === 0 ? (f <= 0.6 ? 'small raise' : f === 1 ? 'pot-size raise' : f <= 1.6 ? 'big raise' : 'very big raise') : (f === 1 ? 'pot-size raise' : 'raise');
           addScenario({ kind: amt >= stack ? 'allin' : 'raise', label: amt >= stack ? 'All-in' : 'Raise', sizeLabel: label, amount: amt });
@@ -5240,11 +5305,16 @@ function ENGINE() {
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
     }
+    // After the flop, players who checked and still owe the current bet (they answer it after hero) face it like the
+    // players still to act (v1.8.10). Until then a call treated them as already in for free: they never folded and added
+    // nothing, so hero needed to beat their whole checking range (or, with an all-in player, the main pot's).
+    const facing = opps.map((o, i) => input.checkersFace !== false && street > 0 && toCall > 0 && !o.pending && !allIn(i) && (owe(i, toCall) || 0) > 1e-9);
+    const unmatched = (i) => opps[i].pending || facing[i];
     for (const sc of scenarios) {
       sc.opp = opps.map((o, i) => {
         const stay = { cont: 1, nut: 0, add: 0 };
@@ -5256,7 +5326,7 @@ function ENGINE() {
         }
         const raising = sc.amount > toCall + 1e-9;
         if (!raising) {
-          if (!o.pending) return stay;
+          if (!unmatched(i)) return stay;
           if (i === bigBlindSeat) return { cont: 1, nut: 0, add: 0, reraise: clamp(o.stats.pfr * 0.6, 0.02, 0.2) };
           const rule = continueRule(o, ctx, pot / (pot + toCall), { amount: toCall });
           rule.add = oweOr(i, toCall, toCall);
@@ -5275,9 +5345,9 @@ function ENGINE() {
           const cont = clamp(Math.max(o.stats.vpip * 1.6 * Math.sqrt((2.5 * bigBlind) / sc.amount), big * (o.stats.callBig != null ? o.stats.callBig : 0.25) * bigFade(sc.amount + (+input.heroBet || 0), bigBlind)), 0.05, 0.9);
           rule = { cont, nut: 0.965, reraise: clamp(o.stats.pfr * 0.4, 0.02, 0.12) / Math.max(cont, 0.05), add: sc.amount - bigBlind };
         } else {
-          const mdf = o.pending ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
-          rule = continueRule(o, ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, openTo });
-          rule.add = o.pending ? sc.amount : sc.amount - toCall;
+          const mdf = unmatched(i) ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
+          rule = continueRule(o, ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser, openTo });
+          rule.add = unmatched(i) ? sc.amount : sc.amount - toCall;
           if (!(street === 0 && o.pending)) rule.reraise = Math.min(rule.reraise, rule.cont);
         }
         if (sc.amount >= stack) rule.reraise = 0;
@@ -5312,8 +5382,8 @@ function ENGINE() {
         sc.oppHU = opps.map((o, i) => {
           const r = sc.opp[i];
           if (r.cont >= 0.999 || !o.statsHU) return r;
-          const mdf = o.pending ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
-          const hu = continueRule(Object.assign({}, o, { stats: o.statsHU }), ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor });
+          const mdf = unmatched(i) ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
+          const hu = continueRule(Object.assign({}, o, { stats: o.statsHU }), ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser });
           hu.reraise = sc.amount >= stack ? 0 : Math.min(hu.reraise, hu.cont);
           hu.add = r.add;
           return hu;
@@ -5328,7 +5398,7 @@ function ENGINE() {
           if (sc.kind === 'fold' || sc.kind === 'check' || (toCall > 0 && sc.amount > toCall + 1e-9)) continue;
           sc.oppAfter = opps.map((o, i) => {
             const r = sc.opp[i];
-            if (!o.pending || r.cont >= 0.999) return r;
+            if (!unmatched(i) || r.cont >= 0.999) return r;
             const cont = clamp(1 - oddsScale(1 - r.cont, ocf), 0.03, 0.97);
             return Object.assign({}, r, { cont, reraise: Math.min(r.reraise || 0, cont) });
           });
@@ -7714,7 +7784,14 @@ ENGINE();
       }
       if (seq.includes('fold')) return 'fold';
       const first = seq[0];
-      if (seq.includes('raise')) return first === 'check' ? 'checkraise' : 'raise';
+      // Raised, then called a re-raise: like betcall, their range is the part of the raising range that continues.
+      // Two or more bets and raises on the street (bet then re-raise a raise: 'betraise'; raise, then raise again:
+      // 'reraise'; v1.8.10) are read as two aggressive actions, not as one raise.
+      if (seq.includes('raise')) {
+        const called = seq.slice(seq.lastIndexOf('raise') + 1).includes('call') ? 'call' : '';
+        if (seq.filter((a) => a === 'bet' || a === 'raise').length >= 2) return (first === 'bet' ? 'betraise' : 'reraise') + called;
+        return (first === 'check' ? 'checkraise' : 'raise') + called;
+      }
       // Bet, then called a raise (multiway): their range is what continues against a raise.
       if (seq.includes('bet')) return seq.includes('call') ? 'betcall' : 'bet';
       if (seq.includes('call')) return first === 'check' ? 'checkcall' : 'call';

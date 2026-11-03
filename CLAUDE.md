@@ -413,6 +413,36 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   vs v1.8.7, v4 bots, live): 6-handed +34.7 ± 21.2 and +106.7 ± 23.1, 5-handed +61.8 ± 23.5 and +42.6 ± 23.1
   (pooled +60 ± 11). At 6-handed (exploit none) no bet hero faced would have been better folded (every
   foldsWouldWin <= 0).
+- 2 Nov night (v1.8.10, all from the 2 Nov log, -300 bb in 86 hands; hands where hero went against the advice at least
+  once lost -188 of it, test/analyze-log.js). Every switch is a simulator option; results are live budget, B - A
+  aivat bb/100, pooled with inverse variance, files in /mnt/project-files/patio-solver/sims/2026-11-02-commit/
+  (RESULTS.md). None cleared the merge bar (a sim win); Marwin merged it on the log fixes (#83, 3 Nov).
+  - Commitment read (`READ_PRIORS.home.commitFold` -1.8, `stats.commitOdds` in foldAtSize; `input.commitFold`): fold
+    odds x exp(-1.8 x share of their stack already in), fitted on 750 friend decisions facing a bet after the flop
+    (heads-up -2.3, multiway -0.9). On every decision: v6 bots 8 runs +0.7 ± 7.2, v7 2 runs -3 ± 14. On heads-up
+    decisions only (`input.commitHUOnly`, default true): 33 runs +5.2 ± 3.0, by table size heads-up +35.8 ± 9.7,
+    3-handed -0.8 ± 12.0, 4-handed +12.1 ± 5.4, 5-handed -2.5 ± 5.1, 6-handed -6.6 ± 7.1; weighted to Marwin's tables
+    (3/4/5/6-handed 15/107/207/38 logged hands) +1.4 ± 3.4. The deep diagnosis thread's caveat: in big real pots,
+    players passive on the flop hold stronger hands than the read (shown at about the 0.71 quantile), so "committed
+    players fold less" may partly be "committed players are stronger", and this read keeps the range.
+  - Raise then call a re-raise (`raisecall`, `checkraisecall`; `input.raiseCallLine`): the range is the raising range
+    that continues, like betcall. Changed no hero decision in 5,000 hands (v5).
+  - Re-raise wars after the flop (`betraise`, `reraise` from the tracker; `input.reraiseLines`) and players who checked
+    and still owe the bet face hero's call (`input.checkersFace`): together 13 runs about -0.8 ± 3.4 (v6 and v7).
+    2 Nov's K6 on 4-6-7 against a flop 4-bet: 0.61 -> 0.42 equity, shove -> call (Marwin folded).
+  - Near-all-in bets (`input.nearAllIn` 0.9: a bet leaving under 10% of the effective stack is an all-in): 5 runs
+    +1.0 ± 2.7.
+  - A raiser facing hero's re-raise after the flop folds x0.25 (`input.reraiseRaiserFold`; friends folded 0 of 9): 9
+    runs -1.6 ± 2.3.
+  - Preflop chips-in (`input.pfCommit`, now off by default): -24.5 ± 14.2 and -18.8 ± 18.0 alone (v6), mostly the BB.
+  - All of it together (pfCommit off, commitment heads-up only) against all of it off: 14 runs +1.2 ± 4.9 (4-handed
+    +3.7 ± 8.3, 5-handed -0.6 ± 6.5, 6-handed +2.5 ± 17.4). Log replay against main: 17 of 361 decisions change on
+    1-2 Nov, 5 of 207 on 31 Oct (replay-proposal-*.txt).
+  - Friend bots v5/v6/v7 (test/sim/profiles-v5/v6/v7.json; README). v7's bigCall 0.18 makes their folds to bets in
+    15bb+ pots match main's read as the friends' do (act - pred about 0; v6 bots were 8-10 points too sticky there,
+    which flatters any read that lowers folds). Shown hands by the largest bet called (quantile in the read's range)
+    match the friends at every size, so no v8 for call strength. What no bot setting reproduced: friends' hands in
+    hero's 15bb+ pots after a passive flop show at 0.74 of the read's range (n 23), bots 0.50-0.59.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
   `node test/analyze-log.js <export.json>` prints hero results by kind of spot.

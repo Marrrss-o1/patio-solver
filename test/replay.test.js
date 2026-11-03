@@ -492,6 +492,108 @@ test('reads: a bet that then calls a raise reads stronger than a plain bet', () 
   assert.ok(mean(betcall) > mean(bet) + 0.03, mean(bet) + ' vs ' + mean(betcall));
 });
 
+test('reads: a raise that then calls a re-raise reads stronger than a plain raise (v1.8.10)', () => {
+  assert.strictEqual(T.streetAction(['raise', 'call'], 3), 'raisecall');
+  assert.strictEqual(T.streetAction(['check', 'raise', 'call'], 3), 'checkraisecall');
+  assert.strictEqual(T.streetAction(['bet', 'raise'], 3), 'betraise');
+  assert.strictEqual(T.streetAction(['raise', 'raise'], 3), 'reraise');
+  assert.strictEqual(T.streetAction(['check', 'raise', 'raise', 'call'], 3), 'reraisecall');
+  assert.strictEqual(T.streetAction(['raise'], 3), 'raise');
+  assert.strictEqual(T.streetAction(['call', 'raise'], 3), 'raise');
+  const board = C('8h Td 3h');
+  const st = E.computeStats(T.blankTally(), 'typical');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
+  const mean = (W) => { let a = 0, w = 0; for (let k = 0; k < W.length; k++) if (W[k] > 0 && strengths[3].hs[k] >= 0) { a += W[k] * strengths[3].hs[k]; w += W[k]; } return a / w; };
+  const raise = E.buildRange(st, { pre: 'raise', flop: 'raise' }, strengths, board);
+  const raisecall = E.buildRange(st, { pre: 'raise', flop: 'raisecall' }, strengths, board);
+  assert.ok(mean(raisecall) > mean(raise) + 0.02, mean(raise) + ' vs ' + mean(raisecall));
+});
+
+test('reads: a re-raise war after the flop reads stronger than one raise (v1.8.10)', () => {
+  // 2 Nov: meww raised hero's flop bet on 4h 6c 7d and re-raised hero's raise; K6 (one pair) was read at 61%.
+  const board = C('4h 6c 7d');
+  const st = E.computeStats(T.blankTally(), 'typical');
+  const strengths = { 0: E.boardStrength([]), 3: E.boardStrength(board) };
+  const mean = (W) => { let a = 0, w = 0; for (let k = 0; k < W.length; k++) if (W[k] > 0 && strengths[3].hs[k] >= 0) { a += W[k] * strengths[3].hs[k]; w += W[k]; } return a / w; };
+  const raise = mean(E.buildRange(st, { pre: 'call', flop: 'raise' }, strengths, board, { flop: 0.5 }));
+  const reraise = mean(E.buildRange(st, { pre: 'call', flop: 'reraise' }, strengths, board, { flop: 0.5 }));
+  const betraise = mean(E.buildRange(st, { pre: 'call', flop: 'betraise' }, strengths, board, { flop: 0.5 }));
+  assert.ok(reraise > raise + 0.05, raise + ' vs ' + reraise);
+  assert.ok(betraise > raise + 0.05, raise + ' vs ' + betraise);
+  const off = Object.assign({}, st, { reraiseLines: false });
+  assert.ok(Math.abs(mean(E.buildRange(off, { pre: 'call', flop: 'reraise' }, strengths, board, { flop: 0.5 })) - raise) < 1e-9);
+});
+
+test('a player who checked and still owes the bet answers hero\'s call (v1.8.10)', () => {
+  // 2 Nov: Dew666 checked, etestraight bet, hero to call with Dew666 still to answer. The call treated Dew666 as in for free.
+  const tally = Object.assign(T.blankTally(), { check: 20, bet: 10, call: 10, raise: 3, fold: 15 });
+  const input = {
+    hero: C('Ad Js'), board: C('2s Qs 9s'), pot: 60, toCall: 20, stack: 300, bigBlind: 2, iterations: 4000, mix: false, seed: 3,
+    heroBet: 0, heroCommitted: 20,
+    opponents: [
+      { name: 'Checker', tally, actions: { pre: 'raise', flop: 'check' }, committed: 20, stack: 280, bet: 0, heroIP: false },
+      { name: 'Bettor', tally, actions: { pre: 'call', flop: 'bet' }, committed: 40, stack: 260, bet: 20, heroIP: true },
+    ],
+  };
+  const call = (r) => r.ranked.find((s) => s.kind === 'call');
+  const on = call(E.analyzeSync(input)), off = call(E.analyzeSync(Object.assign({}, input, { checkersFace: false })));
+  assert.ok(on.oppFolds[0] > 0.2 * on.n, 'checker folds to the bet ' + on.oppFolds[0] / on.n);
+  assert.strictEqual(off.oppFolds[0], 0);
+});
+
+test('commitment: players with most of their stack in fold less; a bet leaving 2 chips is an all-in (v1.8.10)', () => {
+  // 2 Nov: KQs king-high on 8h Td 3h 6d against meww, who raised the flop and called a re-raise (163 in, 110 behind).
+  const tally = Object.assign(T.blankTally(), { check: 27, bet: 16, call: 9, raise: 6, fold: 22 });
+  const input = (extra) => Object.assign({
+    hero: C('Qc Kc'), board: C('8h Td 3h 6d'), pot: 327, toCall: 0, stack: 110, bigBlind: 2, inPosition: false,
+    opponents: [{ name: 'V', tally, actions: { pre: 'raise', flop: 'raisecall', turn: '' }, sizes: { pre: 2, flop: 0.3 }, committed: 163, stack: 110, bet: 0 }],
+    heroActions: { pre: '3bet', flop: 'raise', turn: '' }, heroBet: 0, heroCommitted: 163, iterations: 6000, mix: false, seed: 1,
+  }, extra || {});
+  const on = E.analyzeSync(input()), off = E.analyzeSync(input({ commitFold: false }));
+  const bet = (r) => r.ranked.find((s) => s.kind !== 'check');
+  assert.ok(on.ranked.every((s) => s.kind === 'check' || s.kind === 'allin'), on.ranked.map((s) => s.kind + ' ' + s.amount).join(', '));
+  assert.ok(bet(on).foldPct < bet(off).foldPct - 0.08, bet(on).foldPct + ' vs ' + bet(off).foldPct);
+  assert.strictEqual(on.best.kind, 'check', on.ranked.map((s) => s.label + ' ' + s.amount + ' ' + Math.round(s.ev)).join(', '));
+  // Multiway decisions keep the plain read unless input.commitHUOnly is false (it lost multiway in the simulator).
+  const mw = (extra) => input(Object.assign({
+    pot: 490, stack: 300, heroCommitted: 163,
+    opponents: [
+      { name: 'V', tally, actions: { pre: 'raise', flop: 'raisecall', turn: '' }, sizes: { pre: 2, flop: 0.3 }, committed: 163, stack: 110, bet: 0 },
+      { name: 'W', tally, actions: { pre: 'call', flop: 'call', turn: '' }, committed: 163, stack: 300, bet: 0, heroIP: true },
+    ],
+  }, extra || {}));
+  const mwOn = bet(E.analyzeSync(mw())), mwOff = bet(E.analyzeSync(mw({ commitFold: false }))), mwAll = bet(E.analyzeSync(mw({ commitHUOnly: false })));
+  assert.strictEqual(mwOn.foldPct, mwOff.foldPct);
+  assert.ok(mwAll.foldPct < mwOff.foldPct - 0.03, mwAll.foldPct + ' vs ' + mwOff.foldPct);
+});
+
+test('re-raising a flop raiser: they rarely fold, so king-high calls instead of re-raising (v1.8.10)', () => {
+  // 2 Nov: hero c-bet 16 with KQs on 8h Td 3h, meww raised to 40 (23 in before the flop, 250 behind).
+  const tally = Object.assign(T.blankTally(), { check: 27, bet: 16, call: 9, raise: 6, fold: 22 });
+  const input = (extra) => Object.assign({
+    hero: C('Qc Kc'), board: C('8h Td 3h'), pot: 103, toCall: 24, stack: 234, bigBlind: 2, inPosition: false,
+    opponents: [{ name: 'V', tally, actions: { pre: 'raise', flop: 'raise' }, sizes: { pre: 2, flop: 0.3 }, committed: 63, stack: 210, bet: 40 }],
+    heroActions: { pre: '3bet', flop: 'bet' }, heroBet: 16, heroCommitted: 39, iterations: 6000, mix: false, seed: 1,
+  }, extra || {});
+  const raise = (r) => r.ranked.find((s) => s.kind === 'raise');
+  const on = E.analyzeSync(input()), old = E.analyzeSync(input({ reraiseRaiserFold: false }));
+  assert.ok(raise(on).foldPct < raise(old).foldPct - 0.1, raise(on).foldPct + ' vs ' + raise(old).foldPct);
+  assert.notStrictEqual(on.best.kind, 'raise', on.ranked.map((s) => s.label + ' ' + s.amount + ' ' + Math.round(s.ev)).join(', '));
+});
+
+test('preflop: a player with a quarter of the raise-to in is not faded by the big-raise cliff (v1.8.10)', () => {
+  // Hero shoves 150bb over a 3-bettor who put 40bb in: they continue far more than a cold caller would.
+  const tally = Object.assign(T.blankTally(), { pfFold: 20, pfCall: 15, pfRaise: 8 });
+  const input = (extra) => Object.assign({
+    hero: C('As 5s'), board: [], pot: 103, toCall: 60, stack: 280, bigBlind: 2, inPosition: true,
+    opponents: [{ name: 'V', tally, actions: { pre: '3bet' }, committed: 80, stack: 220, bet: 80, position: 'late' }],
+    heroActions: { pre: 'raise' }, heroBet: 20, heroCommitted: 20, iterations: 4000, preflopSolver: false, mix: false, seed: 1,
+  }, extra || {});
+  const shove = (r) => r.ranked.find((s) => s.kind === 'allin');
+  const on = E.analyzeSync(input({ pfCommit: true })), off = E.analyzeSync(input());
+  assert.ok(shove(on).foldPct < shove(off).foldPct - 0.15, shove(on).foldPct + ' vs ' + shove(off).foldPct);
+});
+
 test('reads: players who re-raised preflop fold less after the flop', () => {
   const t = T.blankTally();
   const flat = E.computeStats(t, 'typical');
@@ -1936,7 +2038,8 @@ const fourBetSpot = (extra) => E.analyzeSync(Object.assign({
 }, extra)).scenarios.filter((s) => s.kind === 'raise').sort((a, b) => a.amount - b.amount).map((s) => s.opp[0]);
 
 test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old size-blind floor without it', () => {
-  const on = fourBetSpot({ pfRaisedRead: false }), off = fourBetSpot({ bigCliff: false, pfRaisedRead: false });
+  // pfCommit off: the 3-bettor has 12bb in, a quarter of a 4-bet to 51bb, which lifts the cliff (tested below).
+  const on = fourBetSpot({ pfRaisedRead: false, pfCommit: false }), off = fourBetSpot({ bigCliff: false, pfRaisedRead: false, pfCommit: false });
   assert.ok(on.length >= 3, 'three 4-bet sizes');
   near(on[0].cont, off[0].cont); // to 26.5bb: no change
   assert.ok(off[2].cont > 0.7 && Math.abs(off[2].cont - off[0].cont) < 1e-9, 'without the cliff a 51bb 4-bet is called like a 26.5bb one');
@@ -1945,7 +2048,7 @@ test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old s
 });
 
 test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead false: old rule)', () => {
-  const on = fourBetSpot({}), off = fourBetSpot({ pfRaisedRead: false });
+  const on = fourBetSpot({ pfCommit: false }), off = fourBetSpot({ pfRaisedRead: false, pfCommit: false });
   assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
   assert.ok(off[0].reraise < 0.2);
   near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
