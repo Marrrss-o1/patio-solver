@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.7
+// @version      1.8.8
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -6591,13 +6591,37 @@ ENGINE();
   function sizeBucket(f) {
     return f < 0.45 ? 'small' : f < 0.85 ? 'medium' : 'large';
   }
+  // Linked reads: one friend's counts kept under more than one account id, added up.
+  function addCounts(out, t) {
+    for (const k of Object.keys(t || {})) {
+      if (k === 'shows') continue;
+      const v = t[k];
+      if (typeof v === 'number') out[k] = (out[k] || 0) + v;
+      else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
+    }
+    return out;
+  }
+  // Tallies oldest id first (the order its shows are kept in); the newest MAX_SHOWS shows kept.
+  function mergeTallies(list) {
+    const out = blankTally();
+    for (const t of list) addCounts(out, t);
+    const shows = [];
+    for (const t of list) for (const sh of t.shows || []) shows.push(sh);
+    out.shows = shows.slice(-MAX_SHOWS);
+    return out;
+  }
+  const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
+  // Names a site could hand out to many people (none seen at Marwin's tables yet): never matched.
+  const GENERIC_NAME = /^(guest|player|user|anonymous|anon)[\s_#-]*\d*$/;
+  const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
 
   const STREET_BY_STAGE = { pre_flop: 0, flop: 3, turn: 4, river: 5 };
   const STREET_KEY = { 0: 'pre', 3: 'flop', 4: 'turn', 5: 'river' };
 
   class PatioTracker {
     constructor(db) {
-      // db: { players: { [authUserId]: { name, tally } } }
+      // db: { players: { [authUserId]: { name, tally } }, history, and for linked reads (below):
+      //   same: { [id]: root id }, notSame: { 'a|b': time }, seen: { [id]: { names, met, first, last } } }
       this.db = db && db.players ? db : { players: {} };
       this.hand = null;
       this.snap = null;
@@ -6616,6 +6640,255 @@ ENGINE();
       return r;
     }
 
+    // ---------- linked reads ----------
+    // A friend can turn up under a new account id (a guest id changes when they clear their
+    // browser or switch devices: Jagger on 2 Nov came back on a new id, read from his first hands
+    // there instead of the 96 on his old one) and under a new name. Reads stay stored per id; `db.same[id] =
+    // root` puts id in root's group, and everything that reads a player (solver input, read scores,
+    // the panel) uses the group's counts added up (`readTally`). Each id keeps counting into its
+    // own record, so a link can be undone at any time without losing hands. Links are made only
+    // by hand (the panel suggests same-name matches, `linkMatches`). Two ids never link when they
+    // were dealt into the same hand (`seen[id].met`): they are two players. A pair answered
+    // "different players" or unlinked is not suggested again (`notSame`).
+    canon(id) {
+      const s = this.db.same;
+      return (s && s[id]) || id;
+    }
+
+    // Root first, then the other ids linked to it.
+    groupOf(id) {
+      if (!id) return [];
+      const root = this.canon(id);
+      const out = [root];
+      const s = this.db.same;
+      if (s) for (const k of Object.keys(s)) if (s[k] === root && k !== root) out.push(k);
+      return out;
+    }
+
+    // The read for id: its own tally when it is not linked (the same object, so nothing changes
+    // for players with one id), else every linked id's counts added up, oldest first.
+    readTally(id) {
+      const ids = this.groupOf(id).filter((k) => this.db.players[k] && this.db.players[k].tally);
+      if (ids.length <= 1) return ids.length ? this.db.players[ids[0]].tally : null;
+      const seen = this.db.seen || {};
+      const first = (k) => (seen[k] && seen[k].first) || 0;
+      ids.sort((a, b) => first(a) - first(b));
+      return mergeTallies(ids.map((k) => upgradeTally(this.db.players[k].tally)));
+    }
+
+    // Every name an id has played under, newest first.
+    namesOf(id) {
+      const e = this.db.seen && this.db.seen[id];
+      const out = e ? Object.keys(e.names || {}).sort((a, b) => e.names[b] - e.names[a]) : [];
+      const r = this.db.players[id];
+      const cur = (r && r.name) || null;
+      return cur ? [cur].concat(out.filter((n) => n !== cur)) : out;
+    }
+
+    // Why two ids can't be one player: 'table' (dealt into the same hand), 'unlinked', or null.
+    apart(a, b) {
+      const seen = this.db.seen || {};
+      if ((seen[a] && seen[a].met && seen[a].met[b]) || (seen[b] && seen[b].met && seen[b].met[a])) return 'table';
+      if (this.db.notSame && this.db.notSame[pairKey(a, b)]) return 'unlinked';
+      return null;
+    }
+    groupsApart(A, B, ignoreUnlinked) {
+      for (const a of A) for (const b of B) {
+        const why = this.apart(a, b);
+        if (why && !(ignoreUnlinked && why === 'unlinked')) return { why, a, b };
+      }
+      return null;
+    }
+
+    // Who was dealt in this hand: the names each id used, and which ids played together.
+    noteSeats(ids, names, t) {
+      const seen = this.db.seen || (this.db.seen = {});
+      ids.forEach((id, i) => {
+        const e = seen[id] || (seen[id] = { names: {}, met: {}, first: t, last: t });
+        e.last = t;
+        if (names[i]) e.names[names[i]] = t;
+        for (const o of ids) if (o !== id) e.met[o] = 1;
+      });
+    }
+
+    // Groups in one: every id points at the root (the id seen first).
+    joinGroups(groups) {
+      const all = [];
+      for (const g of groups) for (const k of g) if (!all.includes(k)) all.push(k);
+      const seen = this.db.seen || {};
+      const first = (k) => (seen[k] && seen[k].first != null ? seen[k].first : -Infinity);
+      const root = groups.map((g) => g[0]).sort((a, b) => first(a) - first(b))[0]; // ties: the first group
+      const same = this.db.same || (this.db.same = {});
+      for (const k of all) if (k !== root) same[k] = root;
+      delete same[root];
+      return root;
+    }
+
+    linkInfo(id) {
+      const ids = this.groupOf(id);
+      const t = this.readTally(id);
+      const hands = t ? (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0) : 0;
+      const names = [];
+      for (const k of ids) for (const n of this.namesOf(k)) if (!names.includes(n)) names.push(n);
+      return { id, ids, names, hands };
+    }
+
+    // A player sitting down under a name another read used (now or before), on another account
+    // id, with no sign that they are two people: the panel asks whether they are the same player
+    // (Marwin answers; nothing is joined before that, 3 Nov). A name change on the same id needs
+    // nothing: reads are kept by id. -> the older reads that could be this player (one entry per
+    // player, as `linkInfo`), or [].
+    linkMatches(id, name, heroId) {
+      const nm = normName(name);
+      if (!id || id === heroId || !nm || GENERIC_NAME.test(nm)) return [];
+      const mine = this.groupOf(id);
+      const roots = [];
+      for (const k of Object.keys(this.db.players)) {
+        if (k === heroId || mine.includes(k)) continue;
+        if (!this.namesOf(k).some((n) => normName(n) === nm)) continue;
+        const root = this.canon(k);
+        if (!roots.includes(root) && !mine.includes(root)) roots.push(root);
+      }
+      return roots.map((r) => this.groupOf(r))
+        .filter((g) => !g.includes(heroId) && !this.groupsApart(mine, g))
+        .map((g) => this.linkInfo(g[0]));
+    }
+
+    // At each new hand: the players dealt in who could be an older read (`linkMatches`), kept in
+    // `linkAsks` for the panel. 'linkAsk' fires when the list changes.
+    askLinks(dealt, heroId) {
+      const asks = {};
+      for (const p of dealt) {
+        const m = this.linkMatches(p.authUserId, p.name, heroId);
+        if (m.length) asks[p.authUserId] = { id: p.authUserId, name: p.name, matches: m };
+      }
+      const key = (a) => Object.keys(a).sort().map((k) => k + ':' + a[k].matches.map((x) => x.id).join(',')).join(';');
+      const changed = key(asks) !== key(this.linkAsks || {});
+      this.linkAsks = asks;
+      if (changed) this.emit('linkAsk', asks);
+      return asks;
+    }
+
+    // "Different players": id and that read are never suggested together again.
+    refuseLink(a, b) {
+      const ns = this.db.notSame || (this.db.notSame = {});
+      for (const x of this.groupOf(a)) for (const y of this.groupOf(b)) ns[pairKey(x, y)] = this.now();
+      if (this.linkAsks && this.linkAsks[a]) {
+        const e = this.linkAsks[a];
+        e.matches = e.matches.filter((m) => !m.ids.includes(b));
+        if (!e.matches.length) delete this.linkAsks[a];
+      }
+      this.emit('save', this.db);
+      return true;
+    }
+
+    // By hand (the panel): a and b are one player. Refused when they were dealt into the same
+    // hand, or when one of them is hero. Clears earlier "not the same player" answers between them.
+    link(a, b) {
+      const heroId = this.snap && this.snap.heroAuthId;
+      if (!a || !b || a === b) return { ok: false, error: 'Pick two different players.' };
+      if (a === heroId || b === heroId) return { ok: false, error: "That's you." };
+      const has = (k) => this.db.players[k] || (this.db.seen && this.db.seen[k]);
+      if (!has(a) || !has(b)) return { ok: false, error: 'No reads for that player yet.' };
+      const A = this.groupOf(a), B = this.groupOf(b);
+      if (A[0] === B[0]) return { ok: true, already: true, info: this.linkInfo(a) };
+      const c = this.groupsApart(A, B, true);
+      if (c) {
+        const nameOf = (k) => this.namesOf(k)[0] || k;
+        return { ok: false, error: `${nameOf(c.a)} and ${nameOf(c.b)} played the same hand, so they are two players.` };
+      }
+      for (const x of A) {
+        if (!this.db.players[x]) this.record(x, this.namesOf(x)[0]);
+        for (const y of B) if (this.db.notSame) delete this.db.notSame[pairKey(x, y)];
+      }
+      for (const y of B) if (!this.db.players[y]) this.record(y, this.namesOf(y)[0]);
+      this.joinGroups([B, A]);
+      if (this.linkAsks) for (const x of this.groupOf(a)) delete this.linkAsks[x];
+      const log = this.db.linkLog || (this.db.linkLog = []);
+      log.push({ t: this.now(), id: a, name: this.namesOf(a)[0], ids: this.groupOf(a).slice() });
+      if (log.length > 50) log.splice(0, log.length - 50);
+      const info = this.linkInfo(a);
+      this.emit('link', info);
+      this.emit('save', this.db);
+      return { ok: true, info };
+    }
+
+    // "Not the same player" after linking: id leaves its group with its own counts, and is not
+    // suggested with the rest again.
+    unlink(id) {
+      const g = this.groupOf(id);
+      if (g.length < 2) return false;
+      const same = this.db.same;
+      const rest = g.filter((k) => k !== id);
+      delete same[id];
+      if (g[0] === id) { delete same[rest[0]]; for (const k of rest.slice(1)) same[k] = rest[0]; }
+      const ns = this.db.notSame || (this.db.notSame = {});
+      for (const k of rest) ns[pairKey(id, k)] = this.now();
+      const log = this.db.linkLog || (this.db.linkLog = []);
+      log.push({ t: this.now(), id, name: this.namesOf(id)[0], ids: rest.slice(), unlinked: true });
+      if (log.length > 50) log.splice(0, log.length - 50);
+      this.emit('unlink', { id, ids: rest });
+      this.emit('save', this.db);
+      return true;
+    }
+
+    // Read groups for the panel: one entry per player (linked ids together), with every name
+    // used, hands, and when they were last dealt in.
+    readGroups() {
+      const out = [];
+      const done = new Set();
+      const seen = this.db.seen || {};
+      const heroId = this.snap && this.snap.heroAuthId;
+      for (const k of Object.keys(this.db.players)) {
+        const root = this.canon(k);
+        if (done.has(root) || k === heroId) continue;
+        done.add(root);
+        const info = this.linkInfo(root);
+        info.last = Math.max(0, ...info.ids.map((x) => (seen[x] && seen[x].last) || 0));
+        out.push(info);
+      }
+      return out.sort((a, b) => b.last - a.last || b.hands - a.hands);
+    }
+
+    // After "Import": the rebuild's links (it started from these and added to them) and its seat
+    // info merged into this page's (which may know hands the stored log no longer has).
+    absorbLinks(rebuilt) {
+      for (const k of ['same', 'notSame', 'linkLog']) if (rebuilt[k]) this.db[k] = rebuilt[k];
+      const seen = this.db.seen || (this.db.seen = {});
+      for (const [id, e] of Object.entries(rebuilt.seen || {})) {
+        const cur = seen[id];
+        if (!cur) { seen[id] = e; continue; }
+        cur.first = Math.min(cur.first, e.first);
+        cur.last = Math.max(cur.last, e.last);
+        for (const [n, t] of Object.entries(e.names || {})) if (!(cur.names[n] >= t)) cur.names[n] = t;
+        Object.assign(cur.met, e.met);
+      }
+    }
+
+    // Seat info from stored hands (raw snapshots carry account ids since v1.8.1), for reads
+    // saved before v1.8.8: which ids played the same hands, and the names they used.
+    learnSeats(entries) {
+      const seen = this.db.seen || (this.db.seen = {});
+      for (const e of entries || []) {
+        const hero = (e && e.players || []).find((p) => p.hero);
+        const dealt = new Map(); // id -> name, for everyone in the hand in any snapshot
+        for (const r of (e && e.raw) || []) {
+          for (const x of r.s || []) {
+            if (!x[5] || (hero && x[1] === hero.name)) continue;
+            if (x[4] === 'playing' || x[4] === 'folded' || x[4] === 'all_in') dealt.set(x[5], x[1]);
+          }
+        }
+        const t = e.t || 0;
+        for (const [id, name] of dealt) {
+          const en = seen[id] || (seen[id] = { names: {}, met: {}, first: t, last: t });
+          if (!(en.first <= t)) en.first = t;
+          if (!(en.last >= t)) en.last = t;
+          if (name && !(en.names[name] >= t)) en.names[name] = t;
+          for (const o of dealt.keys()) if (o !== id) en.met[o] = 1;
+        }
+      }
+    }
+
     heroId() {
       const s = this.snap;
       if (!s) return null;
@@ -6627,10 +6900,24 @@ ENGINE();
       const s = this.snap || { players: [] };
       this.settleLog(s);
       const players = {};
+      const dealt = s.players.filter((p) => (p.playState === 'playing' || p.playState === 'folded' || p.playState === 'all_in') && p.authUserId && p.authUserId !== s.heroAuthId);
+      // Seats first (who played together), then which new ids might be an older read.
+      if (this.linkReads !== false) {
+        this.noteSeats(dealt.map((p) => p.authUserId), dealt.map((p) => p.name), this.now());
+        this.askLinks(dealt, s.heroAuthId);
+      }
+      // Counts shrink for every id of a player dealt in (linked ids together), once a hand.
+      const decayed = new Set();
       for (const p of s.players) {
         if (p.playState !== 'playing' && p.playState !== 'folded' && p.playState !== 'all_in') continue;
-        const known = p.authUserId !== s.heroAuthId && this.db.players[p.authUserId];
-        if (known && known.tally) decayTally(upgradeTally(known.tally), this.decay);
+        if (p.authUserId !== s.heroAuthId) {
+          for (const k of this.groupOf(p.authUserId)) {
+            const known = this.db.players[k];
+            if (decayed.has(k) || !known || !known.tally) continue;
+            decayed.add(k);
+            decayTally(upgradeTally(known.tally), this.decay);
+          }
+        }
         players[p.id] = {
           id: p.id, auth: p.authUserId, name: p.name, pos: p.posType,
           stageBet: 0, total: 0, folded: false, allin: false,
@@ -6856,7 +7143,7 @@ ENGINE();
             // First action on this street a check (true), or none before this one (false).
             checked: p.seq[key].length >= 2 ? (p.seq[key][0] === 'check' ? true : null) : false }
           : (kind === 'check' || kind === 'bet') && { kind: 'open', n: street, out: kind, cbet: street === 3 && h.pfRaiser === p.id && !p.cbetSeen && !h.flopBet, mw: multiway };
-        if (d) this.scorePrediction(r.tally, Object.assign(d, { pos: this.posGroup(p.id) }));
+        if (d) this.scorePrediction(r.tally, Object.assign(d, { pos: this.posGroup(p.id) }), this.readTally(p.auth));
       }
       if (r) this.extraStats(p, r.tally, kind, facing, key);
       if (street === 0) {
@@ -6935,7 +7222,7 @@ ENGINE();
           const r = this.record(p.auth, p.name);
           if (!r) continue;
           const g = this.posGroup(p.id);
-          this.scorePrediction(r.tally, { kind: 'pf', out: { pfFold: 'fold', pfCall: 'call', pfRaise: 'raise' }[p.pfCat || 'pfFold'], pos: g });
+          this.scorePrediction(r.tally, { kind: 'pf', out: { pfFold: 'fold', pfCall: 'call', pfRaise: 'raise' }[p.pfCat || 'pfFold'], pos: g }, this.readTally(p.auth));
           r.tally[p.pfCat || 'pfFold']++;
           if (g) {
             const pt = r.tally.pos[g];
@@ -6970,7 +7257,8 @@ ENGINE();
         players: Object.values(h.players).map((p) => ({
           name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded, stack: p.start,
           put: p.total, actions: p.seq, shown: p.shown, fit: p.fit, accuracy: p.accuracy, left: p.left || undefined,
-          pred: p.id === heroId ? undefined : predSummary(this.db.players[p.auth] && this.db.players[p.auth].tally),
+          pred: p.id === heroId ? undefined : predSummary(this.readTally(p.auth)),
+          accounts: p.id !== heroId && this.groupOf(p.auth).length > 1 ? this.groupOf(p.auth).length : undefined,
         })),
       };
       h.logEntry = entry;
@@ -7011,14 +7299,15 @@ ENGINE();
 
     // Read accuracy: before an action is counted, how likely the read made it, and how likely an
     // average player's read did. `predictor(tally, d)` (set by the UI from the engine) returns
-    // [read probabilities, average-player probabilities] for the decision d.
-    scorePrediction(t, d) {
+    // [read probabilities, average-player probabilities] for the decision d. The score is counted
+    // in t (the player's own record); `read` is the tally the read comes from (linked ids added up).
+    scorePrediction(t, d, read) {
       if (!this.predictor || !t.pred) return;
       try {
-        const [read, pop] = this.predictor(t, d);
+        const [rd, pop] = this.predictor(read || t, d);
         const pr = (x) => { let s = 0; for (const v of Object.values(x)) s += Math.max(0, v); return Math.max(1e-3, (x[d.out] || 0) / (s || 1)); };
         t.pred.n++;
-        t.pred.read += -Math.log(pr(read));
+        t.pred.read += -Math.log(pr(rd));
         t.pred.pop += -Math.log(pr(pop));
       } catch (e) { /* scoring is optional */ }
     }
@@ -7045,7 +7334,7 @@ ENGINE();
     rescoreStale(limit) {
       if (!this.scorer || this.fitVersion == null) return 0;
       let done = 0;
-      for (const r of Object.values(this.db.players)) {
+      for (const [id, r] of Object.entries(this.db.players)) {
         const shows = (r.tally && r.tally.shows) || [];
         for (const sh of shows) {
           if (done >= limit) return done;
@@ -7053,7 +7342,8 @@ ENGINE();
           sh.rescored = this.fitVersion;
           done++;
           try {
-            const others = Object.assign({}, r.tally, { shows: shows.filter((x) => x !== sh) });
+            const rt = this.readTally(id) || r.tally;
+            const others = Object.assign({}, rt, { shows: (rt.shows || []).filter((x) => x !== sh) });
             const fit = this.scorer(sh, others);
             if (fit) sh.fit = fit;
           } catch (e) { /* keep the old fit */ }
@@ -7274,12 +7564,12 @@ ENGINE();
       // How well the range we would have put them on matches what they showed.
       // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.
       if (p.folded) show.folded = true;
-      else if (this.scorer) { try { show.fit = this.scorer(show, r.tally); } catch (e) { /* scoring is optional */ } }
+      else if (this.scorer) { try { show.fit = this.scorer(show, this.readTally(p.auth)); } catch (e) { /* scoring is optional */ } }
       r.tally.shows.push(show);
       // Hand log: how well this read fit, and the player's running accuracy.
       if (show.fit) {
         p.fit = show.fit;
-        p.accuracy = accuracySummary(r.tally);
+        p.accuracy = accuracySummary(this.readTally(p.auth));
         const lp = h.logEntry && h.logEntry.players.find((x) => x.name === p.name && !x.hero);
         if (lp) { lp.fit = p.fit; lp.accuracy = p.accuracy; }
       }
@@ -7380,7 +7670,7 @@ ENGINE();
         return a;
       };
       const opponents = opps.map((o) => {
-        const r = this.record(o.auth, o.name);
+        this.record(o.auth, o.name);
         const actions = { pre: PatioTracker.preAction(o) };
         for (const [k, n] of [['flop', 3], ['turn', 4], ['river', 5]]) {
           if (street >= n) actions[k] = PatioTracker.streetAction(o.seq[k], n);
@@ -7388,7 +7678,7 @@ ENGINE();
         // A player all-in from posting a blind made no preflop choice: 'pending' reads as any two cards.
         if (street > 0 && actions.pre === 'pending' && !o.blindAllin) actions.pre = 'call';
         const cbetter = h.pfRaiser === o.id;
-        return { name: o.name, tally: Object.assign(blankTally(), r ? r.tally : {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
+        return { name: o.name, tally: Object.assign(blankTally(), this.readTally(o.auth) || {}), actions, sizes: Object.assign({}, o.sizes), pfAggressor: cbetter, position: this.posGroup(o.id),
           // For side pots: chips already in the pot this hand, and chips behind.
           committed: o.total, stack: snapOf(o.id) ? snapOf(o.id).stack : null,
           // Chips in on this street (blinds count), so the engine knows what each still owes.
@@ -7436,7 +7726,8 @@ ENGINE();
   // maps to the id its chat lines carried that day, else to the id `known` gives it (the reads
   // the page already has), else to "name:<name>". `setup(tracker)` sets the scorer, predictor and
   // fit version like the overlay's. Async: it yields every `yieldEvery` hands so a page stays usable.
-  // -> { db: { players }, replayed, skipped (no raw events) }
+  // `same`/`notSame`/`linkLog`: the page's linked reads, kept (and added to) in the rebuild.
+  // -> { db: { players, same, notSame, seen, linkLog }, replayed, skipped (no raw events) }
   async function rebuildReads(entries, opts) {
     const o = opts || {};
     const day = (e) => new Date(e.t || 0).toISOString().slice(0, 10);
@@ -7454,7 +7745,9 @@ ENGINE();
     };
     const known = o.known || {};
     const idOf = (e, name, given) => given || voted(e, name) || known[name] || 'name:' + name;
-    const t = new PatioTracker({ players: {} });
+    // Links and "not the same player" answers carry into the rebuild (new ones are made on the way).
+    const copy = (x) => (x ? JSON.parse(JSON.stringify(x)) : undefined);
+    const t = new PatioTracker({ players: {}, same: copy(o.same), notSame: copy(o.notSame), linkLog: copy(o.linkLog) });
     t.rawKeep = 0;
     if (o.setup) o.setup(t);
     const list = entries.filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
@@ -7483,7 +7776,9 @@ ENGINE();
         await new Promise((res) => setTimeout(res, 0));
       }
     }
-    return { db: { players: t.db.players }, replayed: list.length, skipped: entries.length - list.length };
+    const db = { players: t.db.players };
+    for (const k of ['same', 'notSame', 'seen', 'linkLog']) if (t.db[k]) db[k] = t.db[k];
+    return { db, replayed: list.length, skipped: entries.length - list.length };
   }
   PatioTracker.rebuildReads = rebuildReads;
   PatioTracker.predSummary = predSummary;
@@ -7493,6 +7788,7 @@ ENGINE();
   PatioTracker.RAW_KEEP = RAW_KEEP;
   PatioTracker.accuracySummary = accuracySummary;
   PatioTracker.upgradeTally = upgradeTally;
+  PatioTracker.mergeTallies = mergeTallies;
   PatioTracker.cardStr = cardStr;
   if (typeof module !== 'undefined' && module.exports) module.exports = PatioTracker;
   else global.PatioTracker = PatioTracker;
@@ -7617,6 +7913,9 @@ function slim(r) {
   tracker.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally()); };
   tracker.predictor = PokerEngine.makePredictor(function () { return ui.tableStyle; }, function () { return tracker.poolTally(); });
   tracker.fitVersion = PokerEngine.FIT_VERSION;
+  // Reads saved before v1.8.8 don't know who played together: learned from the stored hands.
+  tracker.learnSeats(tracker.db.history || []);
+  var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
 
@@ -7668,6 +7967,8 @@ function slim(r) {
     '.sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#8c968f;margin-bottom:4px}' +
     '.opp{padding:6px 0;border-top:1px solid rgba(255,255,255,.06)}.opp:first-of-type{border-top:0}.nm{font-weight:600}.ty{font-size:11px;padding:1px 6px;border-radius:99px;background:rgba(255,255,255,.1);margin-left:4px}.tip{color:#aab3ad;font-size:12px;margin-top:2px}' +
     '.ft{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:4px}' +
+    '.ask{border-radius:10px;padding:8px 10px;background:rgba(255,204,51,.12);border:1px solid rgba(255,204,51,.35);font-size:13px}.ask .row{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}' +
+    '.lk{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0;border-top:1px solid rgba(255,255,255,.06);font-size:13px}.lk select{max-width:200px}' +
     '.btn,select{background:rgba(255,255,255,.1);color:inherit;border:0;border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}select option{color:#111}' +
     '.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;margin-right:6px;vertical-align:-1px}@keyframes s{to{transform:rotate(360deg)}}' +
     '</style>' +
@@ -7728,11 +8029,37 @@ function slim(r) {
         return;
       }
       // The reads start over; the hand log stays.
-      tracker.db = { players: {}, history: tracker.db.history || [] }; save(DB_KEY, tracker.db); render();
+      tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.learnSeats(tracker.db.history);
+      save(DB_KEY, tracker.db); render();
+    }
+    else if (what === 'links') { ui.showLinks = !ui.showLinks; linkNote = ''; save(UI_KEY, ui); render(); }
+    else if (what === 'linkYes' || what === 'linkNo' || what === 'unlink') {
+      var id = a.getAttribute('data-id'), to = a.getAttribute('data-to');
+      if (what === 'linkYes') {
+        var res = tracker.link(id, to);
+        linkNote = res.ok ? 'Reads joined: ' + res.info.names.join(' / ') + ', ' + handsTxt(res.info.hands) + '.' : res.error;
+      } else if (what === 'linkNo') {
+        tracker.refuseLink(id, to);
+        linkNote = 'Kept apart. You won\'t be asked about these two again.';
+      } else {
+        tracker.unlink(id);
+        linkNote = 'Split: ' + (tracker.namesOf(id)[0] || id) + ' reads on their own again.';
+      }
+      afterLink();
     }
   });
+  // A link changes the reads: advice on the table now was built from the old ones.
+  function afterLink() {
+    save(DB_KEY, tracker.db);
+    if (advice && !advice.stale) requestAdvice(); else render();
+  }
   root.addEventListener('change', function (e) {
-    if (e.target.matches('select')) {
+    if (e.target.matches('select[data-a="linkPick"]')) {
+      if (!e.target.value) return;
+      var res = tracker.link(e.target.getAttribute('data-id'), e.target.value);
+      linkNote = res.ok ? 'Reads joined: ' + res.info.names.join(' / ') + ', ' + handsTxt(res.info.hands) + '.' : res.error;
+      afterLink();
+    } else if (e.target.matches('select')) {
       ui.tableStyle = e.target.value; save(UI_KEY, ui);
       if (advice && !advice.stale) requestAdvice(); else render();
     }
@@ -7745,6 +8072,7 @@ function slim(r) {
       return '<div class="opp"><span class="nm">' + esc(o.name) + '</span><span class="ty">' + esc(o.type) + '</span>' +
         '<div class="muted">' + Math.round(o.hands) + ' hand' + (Math.round(o.hands) === 1 ? '' : 's') + ' · VPIP ' + pct(o.vpip) + ' · PFR ' + pct(o.pfr) + ' · folds to bets ' + pct(o.ftb) + (o.likely ? ' · likely ' + esc(o.likely) : '') + '</div>' +
         (o.summary ? '<div class="muted">' + esc(o.summary) + '</div>' : '') +
+        (o.linked ? '<div class="muted">' + esc(o.linked) + '</div>' : '') +
         (o.bluffChance != null ? '<div class="tip">Bluffing here about ' + pct(o.bluffChance) + ' of the time</div>' : '') +
         (o.tip ? '<div class="tip">' + esc(o.tip) + '</div>' : '') + '</div>';
     }).join('') + '</div>';
@@ -7757,17 +8085,91 @@ function slim(r) {
     Object.keys(h.players).forEach(function (k) {
       var p = h.players[k];
       if (p.id === heroId) return;
-      var r = tracker.db.players[p.auth];
-      var st = PokerEngine.computeStats(Object.assign(PatioTracker.blankTally(), r ? r.tally : {}), ui.tableStyle, tracker.poolTally());
-      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st) });
+      var st = PokerEngine.computeStats(Object.assign(PatioTracker.blankTally(), tracker.readTally(p.auth) || {}), ui.tableStyle, tracker.poolTally());
+      out.push({ name: p.name + (p.folded ? ' (folded)' : ''), type: PokerEngine.classifyPlayer(st).label, hands: st.hands, vpip: st.raw.vpip, pfr: st.raw.pfr, ftb: st.raw.foldToBet, summary: PokerEngine.readSummary(st), linked: linkedTxt(p.auth) });
     });
     return out;
+  }
+
+  // Linked reads (tracker.js): a friend who came back on a new account id. Same-name matches are
+  // asked here and joined only on "Same player"; "Link reads" joins or splits any of them by hand.
+  function day(t) { return t ? new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : ''; }
+  function handsTxt(n) { return Math.round(n) + ' hand' + (Math.round(n) === 1 ? '' : 's'); }
+  function readLabel(g) {
+    var also = g.names.slice(1, 3);
+    return (g.names[0] || '?') + (also.length ? ' (also ' + also.join(', ') + ')' : '') + ' · ' + handsTxt(g.hands) + (g.last ? ' · seen ' + day(g.last) : '');
+  }
+  function authOf(name) {
+    var h = tracker.hand;
+    if (!h) return null;
+    var k = Object.keys(h.players).filter(function (x) { return h.players[x].name === name; })[0];
+    return k ? h.players[k].auth : null;
+  }
+  function linkedTxt(auth) {
+    var ids = auth ? tracker.groupOf(auth) : [];
+    if (ids.length < 2) return '';
+    var names = [];
+    ids.forEach(function (k) { tracker.namesOf(k).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); }); });
+    return 'Reads from ' + ids.length + ' accounts (' + names.join(', ') + ')';
+  }
+  function linkAsksHtml() {
+    var asks = tracker.linkAsks, seen = tracker.db.seen || {}, html = '';
+    if (!asks) return '';
+    Object.keys(asks).forEach(function (k) {
+      var a = asks[k];
+      a.matches.forEach(function (m) {
+        var last = Math.max.apply(null, [0].concat(m.ids.map(function (x) { return (seen[x] && seen[x].last) || 0; })));
+        html += '<div class="ask"><b>' + esc(a.name) + '</b> is on an account the reads haven\'t seen. Same player as the older read ' + esc(readLabel(Object.assign({}, m, { last: last }))) + '?' +
+          '<div class="row"><button class="btn" data-a="linkYes" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Same player</button> ' +
+          '<button class="btn" data-a="linkNo" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Different players</button></div></div>';
+      });
+    });
+    return html;
+  }
+  function linkOptions(auth, groups) {
+    var mine = tracker.groupOf(auth), nm = (tracker.namesOf(auth)[0] || '').toLowerCase();
+    function close(g) {
+      var best = 0;
+      g.names.forEach(function (x) {
+        var n = x.toLowerCase(), k = 0;
+        if (n === nm) best = Math.max(best, 3);
+        while (k < n.length && k < nm.length && n[k] === nm[k]) k++;
+        if (k >= 3) best = Math.max(best, 2);
+      });
+      return best;
+    }
+    return groups.filter(function (g) { return !g.ids.some(function (k) { return mine.indexOf(k) >= 0; }) && !tracker.groupsApart(mine, g.ids, true); })
+      .map(function (g) { return { g: g, c: close(g) }; }).sort(function (a, b) { return b.c - a.c || b.g.last - a.g.last; }).map(function (x) { return x.g; });
+  }
+  function handsOfTally(r) { var t = (r && r.tally) || {}; return (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0); }
+  function linksHtml() {
+    var groups = tracker.readGroups(), h = tracker.hand, heroId = tracker.heroId();
+    var html = '<div><div class="sec">Link reads</div>';
+    var at = h ? Object.keys(h.players).map(function (k) { return h.players[k]; }).filter(function (p) { return p.id !== heroId && p.auth; }) : [];
+    if (!at.length) html += '<div class="muted">Players at the table show here once a hand starts.</div>';
+    at.forEach(function (p) {
+      var opts = linkOptions(p.auth, groups);
+      html += '<div class="lk"><span class="nm">' + esc(p.name) + '</span>' + (opts.length
+        ? '<select data-a="linkPick" data-id="' + esc(p.auth) + '"><option value="">Same player as…</option>' + opts.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(readLabel(g)) + '</option>'; }).join('') + '</select>'
+        : '<span class="muted">no other reads to join</span>') + '</div>';
+    });
+    var linked = groups.filter(function (g) { return g.ids.length > 1; });
+    if (linked.length) {
+      html += '<div class="sec" style="margin-top:6px">Joined</div>';
+      linked.forEach(function (g) {
+        html += '<div class="lk"><span>' + esc(readLabel(g)) + '</span>' + g.ids.map(function (k) {
+          return '<button class="btn" data-a="unlink" data-id="' + esc(k) + '">Split off ' + esc(tracker.namesOf(k)[0] || k) + ' (' + handsTxt(handsOfTally(tracker.db.players[k])) + ')</button>';
+        }).join(' ') + '</div>';
+      });
+    }
+    return html + '<div class="muted">Joined reads add both accounts\' hands together; splitting gives each its own hands back. Two accounts that played the same hand can\'t be joined.</div></div>';
   }
 
   function render() {
     var fresh = advice && !advice.stale;
     var logDue = unexported() >= LOG_REMIND;
-    var logBadge = logDue && !fresh && !thinking ? '<span class="badge">export log</span>' : '';
+    var asking = tracker.linkAsks && Object.keys(tracker.linkAsks).length;
+    var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
     dot.className = 'dot' + (blocked ? '' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
@@ -7814,17 +8216,21 @@ function slim(r) {
         }).join('') + '</table>';
       }
       html += '</div>';
+      html += linkAsksHtml();
       html += readsHtml(r.opponents.map(function (o) {
-        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '), summary: o.summary, bluffChance: o.bluffChance };
+        return { name: o.name, type: o.type.label, tip: o.type.key !== 'unknown' ? o.type.tip : '', hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, ftb: o.stats.foldToBet, likely: o.topClasses.slice(0, 5).join(' '), summary: o.summary, bluffChance: o.bluffChance, linked: linkedTxt(authOf(o.name)) };
       }));
     } else {
       if (!thinking) html += '<div class="status">' + esc(status) + '</div>';
+      html += linkAsksHtml();
       html += readsHtml(liveReads());
     }
-    var n = Object.keys(tracker.db.players).length;
+    if (linkNote) html += '<div class="status">' + esc(linkNote) + '</div>';
+    if (ui.showLinks) html += linksHtml();
+    var n = tracker.readGroups().length;
     html += '<div class="ft"><select>' + ['tight', 'typical', 'loose'].map(function (s) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
-    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
+    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="links">Link reads</button> <button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
     if (sizing.small) html += '<div class="muted">Bets this session under ' + Math.round(SMALL_SIZE * 100) + '% of the advised size: ' + sizing.small + ' of ' + sizing.n + '.</div>';
     if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log to keep them: this phone keeps the newest 150 hands, with raw events for 60.</div>';
@@ -7877,6 +8283,7 @@ function slim(r) {
       else if (advice && !advice.stale) { advice.stale = true; render(); }
     } else if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
     else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
+    else if (type === 'linkAsk') render();
   });
 
   // ---------- reading the game ----------

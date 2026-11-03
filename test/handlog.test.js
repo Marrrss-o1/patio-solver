@@ -287,6 +287,25 @@ test('import: reads rebuilt from the hand log match the reads built at the table
   assert.ok(r4.db.players['name:Vic']);
 });
 
+test('import: linked reads and "different players" answers survive a rebuild', async () => {
+  const swap = (id, name) => JSON.parse(JSON.stringify(sd).replace(/"authUserId":"V"/g, `"authUserId":"${id}"`).replace(/"name":"Vic"/g, `"name":"${name}"`));
+  const live = new T({ players: {} });
+  const feed = (list) => { for (const m of list) { if (m.ev === 'hook:attached') { live.snap = m.snap; continue; } live.handle(m.ev, m.data, m.snap); } };
+  feed(swap('J1', 'Jagger'));
+  feed(swap('J3', 'Jag'));
+  feed(swap('J4', 'Jagger'));
+  assert.ok(live.link('J3', 'J1').ok);
+  live.refuseLink('J4', 'J1');
+  const r = await T.rebuildReads(JSON.parse(JSON.stringify(live.db.history)), { same: live.db.same, notSame: live.db.notSame });
+  assert.strictEqual(r.db.same.J3, 'J1');
+  assert.ok(r.db.seen.J1 && r.db.seen.J3 && r.db.seen.J4);
+  assert.ok(Object.keys(r.db.notSame).some((k) => k.includes('J4')));
+  // The rebuilt reads, linked: J1 and J3 added up.
+  const t2 = new T(r.db);
+  const hands = (x) => x.pfFold + x.pfCall + x.pfRaise;
+  assert.ok(Math.abs(hands(t2.readTally('J3')) - hands(r.db.players.J1.tally) - hands(r.db.players.J3.tally)) < 1e-9);
+});
+
 (async () => {
   let failures = 0;
   for (const [name, fn] of tests) {
