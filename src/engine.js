@@ -1877,8 +1877,11 @@
   // (createAnalysis, input.heroPotTilt). With `learn`, `tilt` is the prior of a tilt learned from the table's own
   // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts, never below `min`: a tilt under 0
   // (hero's pots weaker than the rest) has no support in the logs and came only from a few shows on the bots.
-  // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only).
-  const HERO_POT_TILT = { tilt: 0.3, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3 };
+  // The prior is 0, so there is no tilt until the table's shows ask for one: on the friends' logs it reaches 0.22
+  // after 200 hands and 0.3 from 250 (13 shows in hero's pots). A prior of 0.3 cost -5 +- 4 bb/100 on bots that
+  // don't trap (18 runs) and -20 +- 8 on bots that tighten up in hero's big pots (4 runs); 0 is neutral on both.
+  // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only; that was no better).
+  const HERO_POT_TILT = { tilt: 0, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3 };
   // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
   // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
   // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
@@ -5105,8 +5108,8 @@
     // strength tilt (buildRange's bias, exp(8 x tilt x (q - 0.5))), ramped in from a pot of `from` bb to `to` bb
     // after the flop (`flopAgg` for lines that bet or raised the flop). input.heroPotTilt: false turns it off, a
     // number sets a fixed tilt, an object replaces { tilt, flopAgg, from, to, learn, k, kBase }. By default the tilt
-    // is learned from the table's shows (input.heroPotShows, see heroPotLearned) with `tilt` as its prior; without
-    // them (older trackers, tests) it is `tilt`.
+    // is learned from the table's shows (input.heroPotShows, see heroPotLearned) with `tilt` (0) as its prior; without
+    // them (older trackers, tests) it is `tilt`, so off.
     const hpt = input.heroPotTilt === false ? null : Object.assign({}, HERO_POT_TILT,
       typeof input.heroPotTilt === 'number' ? { tilt: input.heroPotTilt, learn: false } : typeof input.heroPotTilt === 'object' && input.heroPotTilt ? input.heroPotTilt : {});
     const hpLearned = hpt && hpt.learn && input.heroPotShows ? heroPotLearned(input.heroPotShows, hpt) : null;
