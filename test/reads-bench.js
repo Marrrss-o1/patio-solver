@@ -362,6 +362,8 @@ function run(model, hands, tableStyle, o) {
     }
     for (const s of shows(h, dec.pfAgg)) {
       if (s.folded) continue;
+      // SHOWLINE=<regex>: score only shows whose flop line matches (e.g. '^(check)?raise(call)?$').
+      if (process.env.SHOWLINE && !new RegExp(process.env.SHOWLINE).test(s.actions.flop || '')) continue;
       const stats = st(s.name);
       const board = s.board.map(E.parseCard);
       const dead = board.concat(s.dead.map(E.parseCard));
