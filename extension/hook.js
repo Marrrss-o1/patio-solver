@@ -60,15 +60,23 @@
     window.postMessage({ source: 'patio-solver-hook', ev, data: payload, snap: snapshot() }, location.origin);
   }
 
+  // The game's socket. Poker Patio's 3 Nov 2026 update moved it to GameManager.roomConnectionManager.socket
+  // (a new socket on every reconnect); before that it was GameManager.socket.
+  function gameSocket(gm) {
+    const rcm = gm && gm.roomConnectionManager;
+    return (rcm && rcm.socket) || (gm && gm.socket) || null;
+  }
+
   let hooked = null;
+  const onAny = (ev, data) => {
+    if (WANTED.has(ev) || recordOnly(ev, data)) post(ev, data);
+  };
   function attach() {
-    const gm = window.GameManager;
-    const sock = gm && gm.socket;
+    const sock = gameSocket(window.GameManager);
     if (!sock || sock === hooked || typeof sock.onAny !== 'function') return;
+    if (hooked && typeof hooked.offAny === 'function') hooked.offAny(onAny);
     hooked = sock;
-    sock.onAny((ev, data) => {
-      if (WANTED.has(ev) || recordOnly(ev, data)) post(ev, data);
-    });
+    sock.onAny(onAny);
     post('hook:attached', null);
   }
 

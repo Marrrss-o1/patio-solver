@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.10
+// @version      1.8.11
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -8509,14 +8509,19 @@ function slim(r) {
     try { tracker.handle(ev, data, snap); } catch (err) { /* keep the table running */ }
   }
   var hooked = null;
+  // Other table events go to the tracker only for the hand log's raw recorder.
+  function onAnyEvent(ev, data) {
+    if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
+  }
   setInterval(function () {
-    var gm = W.GameManager, sock = gm && gm.socket;
+    // Poker Patio's 3 Nov 2026 update moved the socket to GameManager.roomConnectionManager.socket
+    // (a new socket on every reconnect); before that it was GameManager.socket.
+    var gm = W.GameManager, rcm = gm && gm.roomConnectionManager;
+    var sock = (rcm && rcm.socket) || (gm && gm.socket);
     if (!sock || sock === hooked || typeof sock.onAny !== 'function') return;
+    if (hooked && typeof hooked.offAny === 'function') hooked.offAny(onAnyEvent);
     hooked = sock;
-    // Other table events go to the tracker only for the hand log's raw recorder.
-    sock.onAny(function (ev, data) {
-      if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
-    });
+    sock.onAny(onAnyEvent);
     tracker.snap = snapshot();
     if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
     else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }

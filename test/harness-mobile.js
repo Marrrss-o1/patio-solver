@@ -1,4 +1,5 @@
-// Runs the built userscript on an iPhone-sized fake table with a fake GameManager socket,
+// Runs the built userscript on an iPhone-sized fake table with a fake GameManager socket
+// (GameManager.roomConnectionManager.socket as the game has it since 3 Nov 2026; OLD_SOCKET=1: GameManager.socket),
 // replaying recorded events. Usage: node test/harness-mobile.js <fixture.json> [screenshotIndexes]
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -15,7 +16,7 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
   const ctx = await browser.newContext({ ...devices['iPhone 13'] });
   await ctx.route('https://pokerpatio.com/**', r => r.fulfill({ status: 200, contentType: 'text/html', body:
     `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;height:100vh;background:#111 url(data:image/jpeg;base64,${img}) center top/cover no-repeat">
-    <script>window.__L=[];window.GameManager={data:{tableType:${TABLE_TYPE}},playerData:{id:'H'},state:{players:[],settings:{blind_sizes:[{sb:5,bb:10}]}},socket:{onAny(f){__L.push(f)}}};</script></body></html>` }));
+    <script>window.__L=[];window.GameManager={data:{tableType:${TABLE_TYPE}},playerData:{id:'H'},state:{players:[],settings:{blind_sizes:[{sb:5,bb:10}]}},${process.env.OLD_SOCKET ? "socket:{onAny(f){__L.push(f)}}" : "roomConnectionManager:{socket:{onAny(f){__L.push(f)}}}"}};</script></body></html>` }));
   const page = await ctx.newPage();
   const errs = []; page.on('pageerror', e => errs.push(String(e))); page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   await page.goto('https://pokerpatio.com/mp?game=test');

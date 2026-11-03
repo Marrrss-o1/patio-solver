@@ -21,6 +21,9 @@ src/tracker.js           Socket events -> hand state, opponent tallies, solver i
 src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
+                         The socket is GameManager.roomConnectionManager.socket since the game's 3 Nov 2026 update
+                         (GameManager.socket before; v1.8.10 and older never attach to the new game and the panel
+                         stays on "Connected. Advice starts with the next hand.").
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
   handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
   backup.js              A copy of the reads (and the newest 150 hands, no raw events) in pokerpatio.com's IndexedDB,

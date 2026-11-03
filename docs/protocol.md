@@ -1,8 +1,10 @@
 # Poker Patio socket protocol (as observed, October 2026)
 
 Poker Patio's private lobbies (`https://pokerpatio.com/mp?game=<id>`) run on **socket.io v4**. The page exposes
-`window.GameManager`, and the live socket is `GameManager.socket`. Every table event arrives as a named socket.io
-event. Both builds attach with `socket.onAny(...)`. That listener fires **before** the game's own handlers, so a
+`window.GameManager`, and the live socket is `GameManager.roomConnectionManager.socket` since Poker Patio's update of
+3 Nov 2026 (it was `GameManager.socket` before, which no longer exists; the room connection manager makes a new socket
+on every reconnect, so the hooks check it every 250-300 ms and move their listener over). Every table event arrives as
+a named socket.io event. Both builds attach with `socket.onAny(...)`. That listener fires **before** the game's own handlers, so a
 snapshot of `GameManager.state` taken inside it reflects the state *before* the event is applied.
 
 Everything below was recorded from real hands in a test lobby.
