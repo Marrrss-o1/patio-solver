@@ -1386,8 +1386,9 @@
     // input.foldShrink (simulator option, off by default): postflop fold predictions pulled toward a center in
     // log-odds, logit(q') = c + s (logit(q) - c). Audit 4 Nov: against the friends a fold read's log-odds come true at
     // about 0.57 of their distance from 0.4 (hero's postflop bets, n 213).
-    const sh = stats.foldShrink;
-    return sh && n >= 3 ? clamp(sigmoid(sh.c + sh.s * (logit(clamp(q, 0.01, 0.99)) - sh.c)), 0.02, 0.98) : q;
+    // input.riverFoldShrink (simulator option): the same on the river of heads-up spots only (stats.riverShrink).
+    const sh = n === 5 && stats.riverShrink ? stats.riverShrink : n >= 3 ? stats.foldShrink : null;
+    return sh ? clamp(sigmoid(sh.c + sh.s * (logit(clamp(q, 0.01, 0.99)) - sh.c)), 0.02, 0.98) : q;
   }
   function foldAtSizeRead(stats, f, n) {
     const ftb = streetField(stats, n, 'foldToBet');
@@ -5224,6 +5225,11 @@
       if (typeof input.foldShrink === 'number' && input.foldShrink !== 1) {
         const sh = { s: input.foldShrink, c: logit(typeof input.foldCenter === 'number' ? input.foldCenter : 0.4) };
         stats.foldShrink = sh; if (statsHU) statsHU.foldShrink = sh;
+      }
+      // input.riverFoldShrink: s pulls heads-up river fold reads toward input.riverFoldCenter (0.48). Logs: hero's heads-up
+      // river bets were folded to 48% whatever the read said (calibration slope 0.08 ± 0.48, n 29; v8 bots 0.33).
+      if (typeof input.riverFoldShrink === 'number' && input.riverFoldShrink !== 1 && input.opponents.length === 1) {
+        stats.riverShrink = { s: input.riverFoldShrink, c: logit(typeof input.riverFoldCenter === 'number' ? input.riverFoldCenter : 0.48) };
       }
       // input.afterCall: false turns READ_PRIORS.home.afterCall off, an object replaces it (simulator).
       if (input.afterCall != null) {
