@@ -74,6 +74,12 @@ test('real hand: opponent tally after the hand', () => {
   near(tally.fold, T.DECAY);
 });
 
+test('tracker: preflop raises carry the raise-to and the chips left behind, in big blinds (sizes.preTo / preBehind)', () => {
+  const { turns } = replay(require(path.join(__dirname, 'fixtures/three-hand-150bb.json')));
+  const ann = turns.find((b) => b.input && b.input.board.length === 0).input.opponents.find((o) => o.name === 'Ann');
+  assert.deepStrictEqual(ann.sizes, { pre: 2, preTo: 3, preBehind: 147 });
+});
+
 test('hand log: every action with amount, pot, stack, advice match and result', () => {
   const t = new T({ players: {} });
   t.on((type, p) => {
@@ -2127,6 +2133,39 @@ test('overbetTilt: river bets and raises of 3x pot or more read stronger, not ot
   // It doesn't stack on the hero-pot tilt: the larger of the two applies.
   near(spot(3, { heroPotTilt: 0.2 }).equity.share, on.equity.share);
   near(spot(3, { heroPotTilt: 0.5 }).equity.share, spot(3, { heroPotTilt: 0.5, overbetTilt: false }).equity.share);
+});
+
+test('bigRaiseRange: an open to 30bb+ that keeps chips behind reads as the top 12%, not shoves or re-raises (false: off)', () => {
+  // 4 Nov #390: A9s in the big blind against a 131bb open with 124bb behind. A wide raiser (pfr ~33%).
+  const wide = { pfFold: 40, pfCall: 40, pfRaise: 40, hands: 120 };
+  const spot = (sizes, extra, pre = 'raise') => E.analyzeSync(Object.assign({
+    hero: C('Ah 9h'), board: [], pot: 265, toCall: 260, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
+    opponents: [{ name: 'V', tally: wide, actions: { pre }, sizes, pfAggressor: true, position: 'early', committed: 262, stack: 248, bet: 262, heroIP: true }],
+    iterations: 3000, mix: false, seed: 1,
+  }, extra));
+  const big = { pre: 130, preTo: 131, preBehind: 124 };
+  const on = spot(big), off = spot(big, { bigRaiseRange: false });
+  assert.ok(on.equity.share < off.equity.share - 0.04, `on ${on.equity.share} off ${off.equity.share}`);
+  assert.ok(spot(big, { bigRaiseRange: 0.05 }).equity.share < on.equity.share - 0.02, 'a number sets the width');
+  // Under a quarter of the raise-to behind (a near shove), under 30bb, or no size from the tracker: the usual range.
+  near(spot({ pre: 130, preTo: 131, preBehind: 20 }).equity.share, spot({ pre: 130, preTo: 131, preBehind: 20 }, { bigRaiseRange: false }).equity.share);
+  near(spot({ pre: 24, preTo: 25, preBehind: 124 }).equity.share, spot({ pre: 24, preTo: 25, preBehind: 124 }, { bigRaiseRange: false }).equity.share);
+  near(spot({ pre: 130 }).equity.share, off.equity.share);
+  // Re-raises read narrow already: unchanged.
+  near(spot(big, {}, '3bet').equity.share, spot(big, { bigRaiseRange: false }, '3bet').equity.share);
+});
+
+test('pfCommitCall: a preflop raiser with a third of their stack in calls hero\'s shove (false: old rule)', () => {
+  const spot = (committed, stack, extra) => E.analyzeSync(Object.assign({
+    hero: C('Ah 9h'), board: [], pot: committed + 3, toCall: committed - 2, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, sizes: { pre: committed / 2 - 1 }, pfAggressor: true, position: 'early', committed, stack, bet: committed, heroIP: true }],
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+  }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[0].cont;
+  assert.ok(spot(262, 248) >= 0.95, 'half the stack in: calls');
+  assert.ok(spot(262, 248, { pfCommitCall: false }) < 0.9, 'old rule folds some');
+  assert.ok(spot(60, 450) < 0.9, 'an eighth of the stack in: the usual rule (its biggest raise)');
 });
 
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {

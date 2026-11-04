@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.14
+// @version      1.8.15
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1222,11 +1222,12 @@ function ENGINE() {
   }
 
   const WAR_MIX = 2.2;
-  function preflopRange(stats, action, sizePre) {
+  function preflopRange(stats, action, sizePre, bigWidth) {
     const cw = new Float64Array(169);
     let raiseWidth = 1; // re-raising range width, for the floor below
     if (action === 'raise') {
-      cw.set(topClassWeights(stats.pfr));
+      // A huge raise that keeps chips behind (BIG_RAISE_RANGE): the top `bigWidth` of hands at most.
+      cw.set(topClassWeights(bigWidth != null ? Math.min(stats.pfr, bigWidth) : stats.pfr));
     } else if (action === '3bet' || action === '4bet' || action === '5bet') {
       // Each further re-raise keeps the share of the previous raising range that re-raises again
       // (`fourBet`). A min-reraise (raising by no more than the raise before, `sizePre` <= 1.25)
@@ -1563,9 +1564,15 @@ function ENGINE() {
     return (a === 'bet' || a === 'raise') && !!sizes && sizes[name] >= ob.size;
   }
 
+  // An open or isolation raise to `br.toBB` big blinds or more that keeps at least `br.behind` of the raise-to behind
+  // (BIG_RAISE_RANGE; the tracker passes sizes.preTo / sizes.preBehind since v1.8.15).
+  function bigRaiseLine(sizes, br) {
+    return !!br && !!sizes && sizes.preTo >= br.toBB && sizes.preBehind != null && sizes.preBehind >= br.behind * sizes.preTo;
+  }
+
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
     const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
-    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre);
+    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre, bigRaiseLine(sizes, stats.bigRaise) ? stats.bigRaise.width : null);
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
@@ -1787,6 +1794,13 @@ function ENGINE() {
         const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97);
         return { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
       }
+      // A raiser with a third or more of their stack already in continues (v1.8.15, input.pfCommitCall: false for the old
+      // rule): on #390 Jagger had raised to 131bb of 255bb and needed 24% to call hero's shove, and the rule below had
+      // him folding 23%. Friends with a third or more of their stack in called all 3 such logged spots. It changes no
+      // logged decision (the #390 shove 65 -> 53bb).
+      if (raised && ctx.pfCommitCall !== false && opp.committed != null && opp.behind != null && opp.committed >= (opp.committed + opp.behind) / 3) {
+        return { cont: 0.97, nut: 0.965, reraise: 0.11 };
+      }
       // Callers (mostly limpers) continue at their learned rate against a raise.
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
@@ -1955,6 +1969,18 @@ function ENGINE() {
   // river bet (raise 79 vs call 53 chips): the read had 46% of that range as no pair and 37% as two pair, much of it
   // weaker than hero's, calling the raise. He had trips. With the tilt it calls (call 24, raise -6).
   const OVERBET_TILT = { tilt: 0.3, size: 2.99, street: 5 };
+
+  // Huge preflop raises that keep chips behind read tight (v1.8.15, input.bigRaiseRange: false turns it off, a number
+  // sets the width): an open or isolation raise to 30bb or more with at least a quarter of the raise-to still behind is
+  // read as the player's top 12% of hands (or their raising range, if narrower), whatever their usual opening range.
+  // Friends' shown preflop raises of 30bb+ (31 Oct - 4 Nov): the 9 all-ins were wide (Q2o, T9o, J8o, A2o...; best fit
+  // top 45%), the 5 that kept chips behind were KTo, A9s, AA, AQs and KK (best fit top 12%; 2 opens, 3 re-raises, which
+  // read narrow already). Jagger raised to 50bb+ in about 2.5% of his hands. On 4 Nov's #390 (A9s in the big blind
+  // against his 131bb open, half his stack) the size-blind read gave A9s 60% and the advice shoved; he had KK. With
+  // this it folds. Replaying every logged decision (1,018, reads rebuilt from the exports) it changes two others: 2 Nov's
+  // A4o against his 102bb open (shove -> fold) and 1 Nov's AJo against Dew666's 32bb open (shove -> raise, a tie). The
+  // friend bots never raise that big with chips behind, so the simulator can't judge it; Marwin chose it on the logs.
+  const BIG_RAISE_RANGE = { width: 0.12, toBB: 30, behind: 0.25 };
   // River bettors facing hero's raise fold at least this share of their betting range (riverSolve; off: input.riverRaiseFold
   // true turns it on, a number sets the share). The read's rule folds only the bluffs, 0.9 x (1 - value share), 25-35%.
   // In the logs (31 Oct - 4 Nov) river bettors who got raised folded 14 of 28 (raised by hero 4 of 7, by a friend 10 of
@@ -5227,6 +5253,7 @@ function ENGINE() {
       ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
     const RRF = input.riverRaiseFold === true ? RIVER_RAISE_FOLD : typeof input.riverRaiseFold === 'number' ? input.riverRaiseFold : 0;
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
+    const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5269,6 +5296,8 @@ function ENGINE() {
       if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
       // River overbets read stronger (OVERBET_TILT). input.overbetTilt: false turns it off, a number sets the tilt.
       if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
+      // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
+      if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -5282,7 +5311,7 @@ function ENGINE() {
         name: o.name, stats, statsHU, type: classifyPlayer(stats), actions, pending, aggressor,
         // Raised on this street (after the flop): hero's raise now is a re-raise of a raise.
         raiser: street > 0 && STREET_ACTION_MAP[currentAction] === 'raise',
-        committed: o.committed != null ? +o.committed : null,
+        committed: o.committed != null ? +o.committed : null, behind: o.stack != null && isFinite(+o.stack) ? +o.stack : null,
         // They bet or raised on some street after the flop: from here on their range is strong.
         aggroLine: street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')),
         // Whether the plans and solvers fold them at foldAfterAgg (see AGGRO_FOLD).
@@ -5364,7 +5393,7 @@ function ENGINE() {
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -7355,6 +7384,11 @@ ENGINE();
           const prevInc = h.lastRaiseInc || bb || inc;
           p.preTop = h.preRaises;
           p.sizes.pre = prevInc > 0 ? Math.round((inc / prevInc) * 100) / 100 : 1;
+          // Raise-to and chips left behind, in big blinds (v1.8.15): huge raises that keep chips behind read tight.
+          if (bb > 0) {
+            p.sizes.preTo = Math.round((p.stageBet / bb) * 100) / 100;
+            p.sizes.preBehind = Math.round((Math.max(0, p.start - p.total) / bb) * 100) / 100;
+          }
           h.lastRaiseInc = inc;
         }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
