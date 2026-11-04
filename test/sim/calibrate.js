@@ -2,6 +2,7 @@
 //
 //   node test/sim/calibrate.js <export.json> [more.json ...] [--rounds 14] [--hands 8000] [--players 4]
 //        [--min-hands 15] [--out test/sim/profiles.json] [--names names.json] [--fixed '{"sizeTell":-0.6}']
+//        [--workers 4] [--init <profiles of the same logs>] [--fit-raised] [--fit-husize] [--fit-betw] [--fit-pot]
 //
 // Each friend with enough hands becomes a profile f1, f2, ... (most hands first) plus `pool` (everyone together).
 // Targets are the friend's numbers from profile.js, shrunk toward the pool by sample size. The bots then play
@@ -11,9 +12,40 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const prof = require('./profile.js');
 const bots = require('./bots.js');
 const { playHand, shuffled, keyed } = require('./game.js');
+
+// One block of 100 hands with these parameters (a lineup per block; the pool bot fills in too).
+function playBlock(params, ids, round, blk, NP, BB, STACK) {
+  const hero = params.hero ? bots.homeBot(params.hero) : bots.baseline();
+  const opp = ids.filter((x) => x !== 'hero');
+  const order = opp.map((id, i) => [keyed(round, blk, i, 99), id]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+  const line = order.slice(0, NP - 1);
+  const seats = [hero].concat(line.map((id) => bots.homeBot(params[id])));
+  const nm = [params.hero ? 'hero' : 'Hero'].concat(line);
+  const out = [];
+  for (let h = 0; h < 100; h++) {
+    const d = blk * 100 + h;
+    const deck = shuffled((round * 7919 + d * 104729) >>> 0);
+    const hands = []; for (let i = 0; i < NP; i++) hands.push([deck[2 * i], deck[2 * i + 1]]);
+    const res = playHand({ n: NP, btn: d % NP, hands, boardAll: deck.slice(2 * NP, 2 * NP + 5), stacks: new Array(NP).fill(STACK), sb: BB / 2, bb: BB,
+      seats, hero: 0, names: nm, seed: (round * 1000003 + d) >>> 0, log: true });
+    out.push(res.entry);
+  }
+  return out;
+}
+// --workers n: blocks are played on n threads (the hands are the same as on one).
+if (!isMainThread) {
+  parentPort.on('message', (m) => {
+    const out = [];
+    for (const blk of m.blocks) out.push(...playBlock(m.params, m.ids, m.round, blk, m.NP, m.BB, m.STACK));
+    parentPort.postMessage(out);
+  });
+  return;
+}
 
 const args = process.argv.slice(2);
 const opt = (k, d) => (args.includes('--' + k) ? args[args.indexOf('--' + k) + 1] : d);
@@ -97,6 +129,16 @@ const foldGap = (s) => {
   return (s.vs.medium.fold * s.vs.medium.n + s.vs.large.fold * s.vs.large.n) / big - s.vs.small.fold;
 };
 const SIZE_GAP = foldGap(pool);
+// v8 (--fit-husize): heads-up first answers to bets of 50-110% pot minus 25-50% pot set callHuLog, pooled.
+const huGap = (s) => (s.huAnsSN && s.huAnsLN ? s.huAnsLFold - s.huAnsSFold : null);
+const FIT_HU = args.includes('--fit-husize');
+const HU_GAP = huGap(pool);
+// v8 (--fit-pot): answers to 25-110% pot bets in pots of 20bb+ minus pots under 10bb set potCall, pooled.
+const potGap = (s) => (s.potSN && s.potLN ? s.potLFold - s.potSFold : null);
+const FIT_POT = args.includes('--fit-pot');
+const POT_GAP = potGap(pool);
+// v8 (--fit-betw): how strong river bettors are at showdown sets the softness of betting (w), pooled.
+const FIT_BW = args.includes('--fit-betw');
 // Sizing, pooled over friends (too few raises each): re-raise and postflop raise mix (min-raise / all-in / bigger,
 // and how big the bigger ones are), min-bets and the spread of bet sizes. Real friends: about 4 in 5 re-raises are
 // min-raises, postflop raises are a little over half min-raises with some all-ins, and bet sizes shrink as the pot grows
@@ -114,6 +156,8 @@ const SIZING = [
   ['betSizeResid', 'sizeSd', 0.6, 8, 0.8, 0.1, 1.2],
   // Raised after betting on the same street: friends re-raise 3 of 21 (the bots, before this was fitted, 26%).
   ['vsRaiseRe', 'reRaise', 0.2, 8, 3, 0.1, 1.5],
+  // ... and fold: friends 19% (all logs to 4 Nov), the v7 bots 33% (not fitted before v8; --fit-raised turns it on).
+  ...(args.includes('--fit-raised') ? [['vsRaiseFold', 'raisedCut', 0.25, 8, 1, -0.4, 0.4]] : []),
   // Answering a first bet multiway (25-110% pot): friends answer a bet nobody has called about as heads-up and fold
   // more once someone has called; the bots with one shift per opponent did the opposite.
   ['mwFirstFold', 'callMw', 0.55, 4, 1, -0.3, 0.4, null, 0],
@@ -129,11 +173,13 @@ const SIZING = [
   ['openCalledRiver', 'lineBet', 0.3, 8, 1, -6, 2, 'logit', 2],
   ['openAggrRiver', 'lineBet', 0.5, 8, 1, -6, 2, 'logit', 3],
 ];
-const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN', mwFirstFold: 'mwFirstN', mwLastFoldedFold: 'mwLastFoldedN', mwLastStayedFold: 'mwLastStayedN', huAnsFold: 'huAnsN', openCalledTurn: 'openCalledTurnN', openAggrTurn: 'openAggrTurnN', openCalledRiver: 'openCalledRiverN', openAggrRiver: 'openAggrRiverN' };
+const sizingN = { rrMinShare: 'rrN', rrShoveShare: 'rrN', raiseMinShare: 'raiseN', raiseShoveShare: 'raiseN', raiseOtherRatio: 'raiseN', minBetShare: 'betN', betSizeSlope: 'betLogN', betSizeResid: 'betLogN', vsRaiseRe: 'vsRaiseN', vsRaiseFold: 'vsRaiseN', mwFirstFold: 'mwFirstN', mwLastFoldedFold: 'mwLastFoldedN', mwLastStayedFold: 'mwLastStayedN', huAnsFold: 'huAnsN', openCalledTurn: 'openCalledTurnN', openAggrTurn: 'openAggrTurnN', openCalledRiver: 'openCalledRiverN', openAggrRiver: 'openAggrRiverN' };
 const SIZING_T = {};
 for (const [k, , prior, K] of SIZING) SIZING_T[k] = shrink(pool[k], pool[sizingN[k]], prior, K);
 // River callers' strength at showdown, pooled over friends (shrunk toward the old bots' 0.76).
 const SD_CALL = pool.sdRiverCall == null ? null : (pool.sdRiverCallN * pool.sdRiverCall + 10 * 0.76) / (pool.sdRiverCallN + 10);
+// River bettors' strength at showdown, pooled (shrunk toward the v7 bots' 0.79), for --fit-betw.
+const SD_BET = pool.sdRiverBet == null ? null : (pool.sdRiverBetN * pool.sdRiverBet + 10 * 0.79) / (pool.sdRiverBetN + 10);
 
 // ---------- parameters ----------
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -145,6 +191,12 @@ for (const id of ids) {
   p.openBB = t.openSize; p.betSize = t.betPct; p.openShove = t.openShove;
   if (id !== 'hero') { p.callMw = [0, 0, 0]; p.lineBet = [0, 0, 0, 0]; p.callHu = 0; Object.assign(p, FIXED); }
   params[id] = p;
+}
+// --init <profiles.json>: start from a fit of the same logs (same ids), with the small steps of a late round.
+const INIT = opt('init', null);
+if (INIT) {
+  const init = JSON.parse(fs.readFileSync(INIT, 'utf8'));
+  for (const id of ids) if (init[id]) params[id] = Object.assign(clone(bots.HOME_DEFAULT), init[id].params, id !== 'hero' ? FIXED : {});
 }
 // [stat, param, index or null, direction, step, lo, hi, mode]
 const CTRL = [
@@ -166,26 +218,21 @@ const CTRL = [
 });
 
 // ---------- simulate and measure ----------
-function measure(round) {
-  const nb = NP - 1;
-  const entriesSim = [];
-  const hero = params.hero ? bots.homeBot(params.hero) : bots.baseline();
-  const seatNames = [params.hero ? 'hero' : 'Hero'];
-  const opp = ids.filter((x) => x !== 'hero');
-  for (let blk = 0; blk < Math.ceil(HANDS / 100); blk++) {
-    // A lineup per block of 100 hands; the pool bot fills in too.
-    const order = opp.map((id, i) => [keyed(round, blk, i, 99), id]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
-    const line = order.slice(0, nb);
-    const seats = [hero].concat(line.map((id) => bots.homeBot(params[id])));
-    const nm = seatNames.concat(line);
-    for (let h = 0; h < 100; h++) {
-      const d = blk * 100 + h;
-      const deck = shuffled((round * 7919 + d * 104729) >>> 0);
-      const hands = []; for (let i = 0; i < NP; i++) hands.push([deck[2 * i], deck[2 * i + 1]]);
-      const res = playHand({ n: NP, btn: d % NP, hands, boardAll: deck.slice(2 * NP, 2 * NP + 5), stacks: new Array(NP).fill(STACK), sb: BB / 2, bb: BB,
-        seats, hero: 0, names: nm, seed: (round * 1000003 + d) >>> 0, log: true });
-      entriesSim.push(res.entry);
-    }
+const WORKERS = Math.max(1, +opt('workers', 1));
+const workers = WORKERS > 1 ? Array.from({ length: WORKERS }, () => new Worker(__filename)) : null;
+async function measure(round) {
+  const nBlk = Math.ceil(HANDS / 100);
+  let entriesSim = [];
+  if (!workers) for (let blk = 0; blk < nBlk; blk++) entriesSim.push(...playBlock(params, ids, round, blk, NP, BB, STACK));
+  else {
+    const parts = await Promise.all(workers.map((w, i) => new Promise((res) => {
+      w.once('message', res);
+      w.postMessage({ params, ids, round, NP, BB, STACK, blocks: Array.from({ length: nBlk }, (_, b) => b).filter((b) => b % WORKERS === i) });
+    })));
+    // Back in block order, as on one thread.
+    const byBlk = [];
+    parts.forEach((p, i) => { let j = 0; for (let b = i; b < nBlk; b += WORKERS) { byBlk[b] = p.slice(j * 100, j * 100 + 100); j++; } });
+    entriesSim = byBlk.flat();
   }
   const t = prof.profileEntries(entriesSim, { includeHero: true });
   const out = {};
@@ -200,11 +247,12 @@ const statVal = (s, k) => {
 };
 
 let last = null;
+(async () => {
 for (let round = 1; round <= ROUNDS; round++) {
-  const m = measure(round);
+  const m = await measure(round);
   last = m;
   let err = 0, cnt = 0;
-  const damp = round <= 3 ? 1 : round <= 8 ? 0.7 : 0.45;
+  const damp = INIT ? 0.45 : round <= 3 ? 1 : round <= 8 ? 0.7 : 0.45;
   for (const id of ids) {
     if (!m[id]) continue;
     const p = params[id], t = targets[id];
@@ -234,6 +282,26 @@ for (let round = 1; round <= ROUNDS; round++) {
     const cs = Math.max(0, Math.min(1.5, params[ids[0]].callSlope + 2 * damp * (SIZE_GAP - gSim)));
     for (const id of ids) if (id !== 'hero') params[id].callSlope = cs;
   }
+  const simPS = prof.summarize(simVs), gHu = huGap(simPS);
+  if (FIT_HU && HU_GAP != null && gHu != null) {
+    const cl = Math.max(-0.4, Math.min(0.2, (params[ids[0]].callHuLog || 0) + 0.5 * damp * (HU_GAP - gHu)));
+    for (const id of ids) if (id !== 'hero') params[id].callHuLog = cl;
+  }
+  if (FIT_HU) process.stderr.write(`round ${round}: heads-up fold 50-110% minus 25-50% pot ${gHu == null ? '-' : gHu.toFixed(3)} (real ${HU_GAP == null ? '-' : HU_GAP.toFixed(3)}), callHuLog ${(params[ids[0]].callHuLog || 0).toFixed(3)}\n`);
+  const gPot = potGap(simPS);
+  if (FIT_POT && POT_GAP != null && gPot != null) {
+    const pc = Math.max(-0.2, Math.min(0.3, (params[ids[0]].potCall || 0) + 0.4 * damp * (POT_GAP - gPot)));
+    for (const id of ids) if (id !== 'hero') params[id].potCall = pc;
+  }
+  if (FIT_POT) process.stderr.write(`round ${round}: fold in 20bb+ pots minus under 10bb ${gPot == null ? '-' : gPot.toFixed(3)} (real ${POT_GAP == null ? '-' : POT_GAP.toFixed(3)}), potCall ${(params[ids[0]].potCall || 0).toFixed(3)}\n`);
+  // Pool-wide: river bettors' strength at showdown sets the betting softness (softer: weaker hands bet, some strong ones don't).
+  const simBet = Object.keys(m).filter((id) => id !== 'hero').map((id) => [m[id].sdRiverBet, m[id].sdRiverBetN]).filter((x) => x[0] != null);
+  const sb = simBet.reduce((a, x) => a + x[0] * x[1], 0) / Math.max(1, simBet.reduce((a, x) => a + x[1], 0));
+  if (FIT_BW && SD_BET != null && simBet.length) {
+    const w = Math.max(0.03, Math.min(0.3, params[ids[0]].w * Math.exp(6 * damp * (sb - SD_BET))));
+    for (const id of ids) if (id !== 'hero') params[id].w = w;
+  }
+  if (FIT_BW) process.stderr.write(`round ${round}: river bettors at showdown ${sb.toFixed(3)} (real ${SD_BET == null ? '-' : SD_BET.toFixed(3)}), w ${params[ids[0]].w.toFixed(3)}\n`);
   // Pool-wide sizing parameters, each toward the friends' pooled number.
   const simPoolS = prof.summarize(simVs);
   for (const [k, key, , , step, lo, hi, mode, idx] of SIZING) {
@@ -291,3 +359,5 @@ for (const id of ids) {
     .map(([k, e]) => `${k} ${(e * 100).toFixed(1)}${/Size|Pct/.test(k) ? '%' : 'pt'}`);
   console.log(`${id.padEnd(5)} ${o.hands} hands: ${o.style}; worst fits: ${worst.join(', ')}; WTSD real ${o.real.wtsd} sim ${o.simulated.wtsd}`);
 }
+if (workers) for (const w of workers) w.terminate();
+})();
