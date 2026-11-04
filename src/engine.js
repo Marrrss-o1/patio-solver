@@ -1939,6 +1939,13 @@
   // river bet (raise 79 vs call 53 chips): the read had 46% of that range as no pair and 37% as two pair, much of it
   // weaker than hero's, calling the raise. He had trips. With the tilt it calls (call 24, raise -6).
   const OVERBET_TILT = { tilt: 0.3, size: 2.99, street: 5 };
+  // River bettors facing hero's raise fold at least this share of their betting range (riverSolve, input.riverRaiseFold:
+  // false drops it, a number replaces it). The read's rule folded only the bluffs, 0.9 x (1 - value share), about 25-35%.
+  // In the logs (31 Oct - 4 Nov) river bettors who got raised folded 14 of 28 (raised by hero 4 of 7, by a friend 10 of
+  // 21, one re-raise), where flop and turn bettors folded 3 of 38 and 3 of 17. The v7 friend bots fold 32 of 46
+  // and re-raise 10. Against them hero's river raises (eq 0.55-0.8) were valued 10.3 bb over calling and brought
+  // -3.8 ± 9.6 (test/sim/river-check.js).
+  const RIVER_RAISE_FOLD = 0.5;
   // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
   // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
   // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
@@ -2896,8 +2903,9 @@
         } else {
           let pCont;
           if (vsRaise && toCall > 0) {
-            // Their range here is their betting range: fold the weakest (1 - valueShare) of it.
-            pCont = sigmoid((q - 0.9 * (1 - vrB)) / 0.04);
+            // Their range here is their betting range: fold the weakest (1 - valueShare) of it, and at least
+            // cfg.raiseFold of it against a pot-size raise (RIVER_RAISE_FOLD), less for a smaller (all-in) raise.
+            pCont = sigmoid((q - Math.max(0.9 * (1 - vrB), (cfg.raiseFold || 0) * Math.min(1, facingFrac))) / 0.04);
           } else if (vsRaise) {
             // They bet inside the tree: value hands continue, bluffs mostly fold.
             pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
@@ -5173,6 +5181,7 @@
     if (hpLearned) hpt.tilt = hpLearned.tilt;
     const heroPotRamp = hpt && street > 0 && street >= (hpt.street || 3)
       ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
+    const RRF = input.riverRaiseFold === false ? 0 : typeof input.riverRaiseFold === 'number' ? input.riverRaiseFold : RIVER_RAISE_FOLD;
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
@@ -5998,7 +6007,7 @@
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1,
+        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
@@ -6142,7 +6151,7 @@
             return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
           },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1,
+          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1, raiseFold: RRF,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,
