@@ -16,11 +16,11 @@ for (const d of R.deals) {
     const net = rot[3], diag = rot[4];
     if (!Array.isArray(diag)) continue;
     diag.forEach((x, k) => {
-      const [st, facing, kind, amt, solver, Q, put, pot, nOpp] = x;
+      const [st, facing, kind, amt, solver, Q, put, pot, nOpp, eq] = x;
       if (Q == null) return;
       const nx = diag[k + 1];
       const td = nx ? nx[5] - (nx[6] - put) - Q : net + put - Q;
-      rows.push({ hand, st, facing, kind, amt, solver, Q, put, pot, nOpp, td, next: nx ? nx[0] : -1, last: !nx });
+      rows.push({ hand, st, facing, kind, amt, solver, Q, put, pot, nOpp, eq, td, next: nx ? nx[0] : -1, last: !nx });
     });
   }
 }
@@ -45,6 +45,12 @@ for (const k of ['check', 'call', 'raise', 'allin']) for (const hu of [1, 2]) {
 }
 summ('pre raise (any next)', rows.filter((r) => r.st === 0 && r.kind === 'raise'));
 summ('pre raise pot<5bb', rows.filter((r) => r.st === 0 && r.kind === 'raise' && r.pot < 5));
+if (rows.some((r) => r.eq != null)) {
+  console.log('--- postflop by hero equity (runs from 4 Nov on record it)');
+  for (const k of ['check', 'call', 'bet', 'raise']) for (const [lo, hi, nm] of [[0, 0.3, 'air'], [0.3, 0.55, 'mid'], [0.55, 0.8, 'good'], [0.8, 1.01, 'strong']]) {
+    summ(`post ${k} ${nm}`, rows.filter((r) => r.st > 0 && r.kind === k && r.eq != null && r.eq >= lo && r.eq < hi));
+  }
+}
 console.log('--- to-go: what came back from the decision on, minus its EV');
 const togo = new Map();
 for (const r of rows) (togo.get(r.hand) || togo.set(r.hand, []).get(r.hand)).push(r);
