@@ -4,6 +4,7 @@
 //
 //   node test/sim/validate.js <export.json> ... --names <private id->name file> [--profiles test/sim/profiles.json]
 //        [--hands 40000] [--json out.json] [--friends]      (--friends: one line per friend and stat as well)
+//        [--bot-params '{"rel":1}']                           (overrides every friend bot's parameters, e.g. v8 switches)
 //
 // Held-out check: fit on some logs (calibrate.js --out <p> --names <n>), then run this on the other logs with
 // --profiles <p> --names <n>. "per-friend vs pool" is the log-likelihood gain per observation of the held-out counts
@@ -21,6 +22,7 @@ const files = args.filter((a, i) => !a.startsWith('--') && !(args[i - 1] || '').
 const HANDS = +opt('hands', 40000), NP = 4, BB = 2, STACK = 300;
 const profiles = JSON.parse(fs.readFileSync(opt('profiles', path.join(__dirname, 'profiles.json')), 'utf8'));
 const idName = JSON.parse(fs.readFileSync(opt('names'), 'utf8'));
+const botParams = JSON.parse(opt('bot-params', '{}'));
 
 const seenT = new Set();
 const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8'))).filter((h) => (h.t == null || !seenT.has(h.t)) && (seenT.add(h.t), true));
@@ -33,7 +35,7 @@ const simEntries = [];
   const hero = profiles.hero ? bots.homeBot(profiles.hero.params) : bots.baseline();
   for (let blk = 0; blk < Math.ceil(HANDS / 100); blk++) {
     const order = ids.map((id, i) => [keyed(blk, i, 4711), id]).sort((a, b) => a[0] - b[0]).map((x) => x[1]).slice(0, NP - 1);
-    const seats = [hero].concat(order.map((id) => bots.homeBot(profiles[id].params)));
+    const seats = [hero].concat(order.map((id) => bots.homeBot(Object.assign({}, profiles[id].params, botParams))));
     for (let h = 0; h < 100; h++) {
       const d = blk * 100 + h;
       const deck = shuffled((d * 2654435761 + 12345) >>> 0);

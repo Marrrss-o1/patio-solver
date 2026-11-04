@@ -17,6 +17,9 @@ node test/sim/validate.js <hand-log.json> ... --names <private file> --sizes  # 
 node test/sim/selftest.js                                                      # checks the simulator itself (~40 s)
 node test/sim/profile.js <hand-log.json> ...                                   # a player's numbers from an export
 node test/sim/calibrate.js <hand-log.json> ... --names <private file>         # refits profiles.json from logs
+node test/sim/range-test.js <hand-log.json> ...                              # do they fold by absolute or range-relative strength?
+node test/sim/range-test.js --bots test/sim/profiles-v8.json                 # ... the same test on bots
+node test/sim/v8-ref.js --out test/sim/v8-ref.json                           # the v8 bots' usual ranges (BOTPROFILES=...)
 ```
 
 The summary (JSON on stdout, per-deal results in `test/out/sim-<tag>.json`) gives, for each variant, bb/100 won with
@@ -126,6 +129,61 @@ bots, seed and block size), so a third arm can be added later without replaying 
   `pfCommit` (preflop chips-in lifts the cliff) and the hero-pot options `hpCall`, `hpWc`, `hpDraw`, `hpBluff`, `hpPut`,
   `hpFlop`, which tried to reproduce the friends' strong hands in hero's big pots after a passive flop (0.74 of the
   read's range, n 23) and never got the bots above about 0.59.
+* Friend bots v8 (4 Nov night; `BOTPROFILES=test/sim/profiles-v8.json`): refit on all 519 logged hands (31 Oct to
+  4 Nov, the audit's all.json) with answers judged partly by strength within their own range, plus four pooled habits
+  the v7 bots lacked. Why: on all logs the v7 bots fold too much (river 64% vs the friends' 53%, heads-up first answers
+  65% vs 47%), and against the solver they folded 81% of its heads-up bets of 0.85 pot or more where the friends fold
+  49% (audit-2026-11-04/NOTES.md). The pieces, all off by default (a profile without them is a v7 bot, hand for hand):
+  - `rel` (v8: 0.5): each bot rebuilds its own range from its line this hand (its own policy replayed over every
+    combo; game.js passes `hist` to seats with `rangeAware`), finds its hand's quantile q in that range by made-hand
+    percentile, and calls and raises with hp + rel x (REF(q) - hp), where REF(q) is the percentile at quantile q of its
+    usual range in that spot (`test/sim/v8-ref.json`, by street and spot: checked to, facing a bet, re-raised; measured on
+    the bots' own ranges by `v8-ref.js`). rel 1 answers by the range alone; 0 by absolute strength, as in v7. `relBet`
+    does the same for betting when checked to (REF by the bot's line on the street before); unused in v8.
+  - `potCall` (0.08): the continue cut moves by potCall x ln(pot / 10bb). At the same fraction of the pot the friends
+    fold a little more in bigger pots (25-110% pot: 43% under 10bb, 48% at 20bb+); absolute-strength bots fold less
+    there (55% / 41%), because ranges in big pots are strong.
+  - `callHuLog` (-0.28): heads-up from the start of the street, the cut also moves by callHuLog x ln(size / 0.5).
+    Heads-up first answers to 25-50% pot bets: friends fold 37%, v7-style bots 24%; to 50-110%: 53% and 54%.
+  - `w` (0.14, was 0.05): the betting softness, fitted to river bettors' strength at showdown (friends 0.74, v7 bots
+    0.80): the bots' bets were too honest, so hero's river calls against them looked good (solver equity 0.27, real share
+    0.16).
+  - `raisedCut` (-0.06): re-raised after betting or raising on the street (friends fold 19-24%, v7 bots 33%).
+  `calibrate.js --fit-raised --fit-husize --fit-betw --fit-pot --fixed '{"sizeTell":-0.6,"commitCut":-1.8,"pfCommit":1,
+  "rel":0.5}' --workers 4` (bigCall back to 0), then `--init` for a polish pass. Names: sim-profile-names-v8.json in the
+  project folder.
+  Why half range-relative: `range-test.js` replays the logs with puppet seats and rebuilds each answerer's range with the
+  pooled bot's policy at all 1,013 answers to bets after the flop, then fits fold on size, street, heads-up, re-raised,
+  pot size and the range's mean percentile. Friends: range -0.25 ± 0.08 per 0.1 of mean percentile, pot +0.30 ± 0.09
+  (log-odds); absolute-strength bots (v7-style refit) -0.50 ± 0.04 and +0.02; fully relative bots -0.04 ± 0.04 and
+  -0.06. Without the pot term the friends fold 51/48/45% from the weakest to the strongest third of ranges (bets of
+  25-110% pot), absolute bots 63/49/35%, relative 55/49/45%.
+  Results. `validate.js` on all 519 hands (RMS z of the fitted / pooled / unfitted stats): v7 0.94 / 1.25 / 1.37, v7
+  refit on the same logs without the new pieces 0.81 / 1.20 / 1.16, v8 0.80 / 1.17 / 1.12 (v7 on these logs: river
+  fold 64% against 53%, heads-up first answers 65% against 47%, re-raised 33% against 19%). `range-test.js --bots`
+  on 3,000 v8 hands: range -0.31 ± 0.04, pot +0.35 ± 0.05, terciles 52/50/42%. Against the solver (4-handed, seed 7,
+  default budget; act / pred = the share of the solver's bets everyone folded / the solver's predicted all-fold, and
+  the slope of a logistic recalibration of pred, 1 = calibrated; logs = the friends against Marwin's live advice):
+  | | logs | v7 | v8 |
+  |---|---|---|---|
+  | slope, all postflop bets | 0.57 ± 0.16 | 1.05 ± 0.15 | 0.76 ± 0.13 |
+  | slope, heads-up flop + turn | 0.96 ± 0.36 | 1.21 ± 0.28 | 0.79 ± 0.26 |
+  | slope, heads-up river | 0.08 ± 0.48 | 0.73 ± 0.66 | 0.33 ± 0.61 |
+  | slope, multiway | 0.33 ± 0.32 | 1.15 ± 0.30 | 1.36 ± 0.30 |
+  | heads-up, under 0.45 pot | .39 / .35 | .25 / .42 | .24 / .35 |
+  | heads-up, 0.45-0.85 pot | .40 / .49 | .52 / .62 | .32 / .49 |
+  | heads-up, 0.85 pot+ | .49 / .50 | .79 / .62 | .34 / .45 |
+  | heads-up river, 0.85 pot+ | .55 / .61 | .92 / .72 | .31 / .45 |
+  | river raises | .57 / .32 | .83 / .34 | .42 / .32 |
+  | flop raises | .16 / .15 | .38 / .31 | .19 / .20 |
+  | all postflop bets | .36 / .35 | .34 / .43 | .23 / .30 |
+  So v8 bots no longer over-fold to the solver's big bets, and the slope is closer to the friends'. What it does not
+  reproduce: against the solver's heads-up flop and turn bets v8 bots fold 27-29% where the read says 39-43% (the
+  friends fold about as read). Among themselves they fold to the same seat's heads-up flop bets 43% (the friends to
+  Marwin 48%), so this is probably where the solver bets against bots (into ranges stronger than the friends', mean
+  percentile 0.55-0.61 against 0.53-0.56 in the logs, river pots 65bb against 41bb), not a misfit everywhere. Read v8
+  results on flop and turn bets as pessimistic and on river calls as about right (hero's heads-up river calls: solver
+  equity 0.38, share won 0.26; v7 0.37 / 0.21). Scripts and tables: sims/2026-11-04-v8bots/ in the project folder.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
