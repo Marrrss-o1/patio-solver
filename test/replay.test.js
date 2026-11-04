@@ -2077,6 +2077,26 @@ test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10b
   assert.strictEqual(flop({ heroPotTilt: { street: 4 } }), 0);
 });
 
+test('overbetTilt: river bets and raises of 3x pot or more read stronger, not other streets or sizes (false: off)', () => {
+  // 4 Nov #382: sevens and fives on a paired board facing a 21x-pot river bet (the tracker caps sizes at 3).
+  const spot = (size, extra, street = 5) => E.analyzeSync(Object.assign({
+    hero: C('Qc 7h'), board: C(street === 5 ? 'Jh 5s 7s 3d 5h' : 'Jh 5s 7s 3d'), pot: 132, toCall: 126, stack: 420, bigBlind: 2, inPosition: false,
+    tableStyle: 'typical', heroActions: { pre: 'check', flop: 'check', turn: 'check', river: street === 5 ? 'check' : '' }, heroSizes: {},
+    heroPosition: 'blinds', heroPfAggressor: false, heroPotTilt: false,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check', turn: street === 5 ? 'check' : 'bet', river: street === 5 ? 'bet' : '' },
+      sizes: street === 5 ? { river: size } : { turn: size }, position: 'early', committed: 64, stack: 293, bet: 126 }],
+    iterations: 4000, riverIterations: 200, mix: false, seed: 1,
+  }, extra));
+  const on = spot(3), off = spot(3, { overbetTilt: false });
+  assert.ok(on.equity.share < off.equity.share - 0.05, `3x: on ${on.equity.share} off ${off.equity.share}`);
+  assert.ok(spot(3, { overbetTilt: 0.5 }).equity.share < on.equity.share - 0.02);
+  near(spot(2, {}).equity.share, spot(2, { overbetTilt: false }).equity.share); // 2x pot: no tilt
+  near(spot(3, {}, 4).equity.share, spot(3, { overbetTilt: false }, 4).equity.share); // a turn overbet: no tilt
+  // It doesn't stack on the hero-pot tilt: the larger of the two applies.
+  near(spot(3, { heroPotTilt: 0.2 }).equity.share, on.equity.share);
+  near(spot(3, { heroPotTilt: 0.5 }).equity.share, spot(3, { heroPotTilt: 0.5, overbetTilt: false }).equity.share);
+});
+
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {
   const run = (hps) => E.analyzeSync({
     hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot: 60, toCall: 0, stack: 300, bigBlind: 2,
