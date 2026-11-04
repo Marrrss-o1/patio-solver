@@ -722,12 +722,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (+0.14 of the flop pot after a raise, +0.20-0.30 after a call) with the postflop side on target against what came
   back, so the leaves miss that hero's postflop play exploits the reads. Simulator, live budget, v7 bots, B - A
   (pfFlopEdge 0.06 vs 0, `raisePrice` off in both): 4-handed +68.2 ± 24.6 and +40.3 ± 27.9, 5-handed +74.7 ± 19.7,
-  6-handed +45.4 ± 18.6 (pooled +58 ± 11; mostly hands B plays that A folds, +63 ± 12 of the 5-handed run, button and
-  blinds, weak to good hands; strong and premium about -3). 0.10: 4-handed +94.0 ± 30.0; 0.15: +107.0 ± 35.2 with
+  6-handed +45.4 ± 18.6, 3-handed +50.2 ± 25.8, heads-up +42.0 ± 24.7 (pooled +55 ± 9; mostly hands B plays that A
+  folds, +63 ± 12 of the 5-handed run, button and blinds, weak to good hands; strong and premium about -3). Fresh seeds,
+  v1.8.13 against main (B {} vs A `{"raisePrice":false,"pfFlopEdge":false}`): 5-handed -7.2 ± 24.3 and +28.9 ± 23.1,
+  4-handed +40.1 ± 21.2, 6-handed +46.1 ± 19.7 (v7 live pooled +30 ± 11), 4-handed phone -4.4 ± 24.9, 4-handed on the
+  v6 bots +81.5 ± 24.5; all twelve runs pooled about +44 ± 7. The short-raise change alone (below) changed 1 of 1,000
+  simulated hands. 0.10: 4-handed +94.0 ± 30.0; 0.15: +107.0 ± 35.2 with
   hero's VPIP / PFR 45 / 33% -> 76 / 65% (0.06 at 5-handed: 35 / 25% -> 43 / 32%). The bigger sizes are not taken: bots
   never adapt to a hero who raises two hands in three, the friends might. On the logs 0.06 changes 76 of 499 preflop
   decisions (fold -> raise 25, call -> raise 11, fold -> call 10, check -> bet 8; folds 51% -> 43%), 0.10 150. Tried:
-  implied odds at the leaves (`pfImplied`, simulator only; s -> s + implied x t x (s - 0.5)).
+  implied odds at the leaves (`pfImplied`, simulator only; s -> s + implied x t x (s - 0.5)): 0.5 lost -55.3 ± 18.0
+  (4-handed) and the preflop gap did not close. At 4-handed the edge moves hero's VPIP / PFR 44 / 33% -> 54 / 42%.
 - Short raises (v1.8.13, `input.raisePrice`: false for the old rule): an opponent facing hero's raise that costs them
   under a quarter of the pot over the call (an all-in a chip over the call) folds no more of their range than to a bet of
   that price, in the river, turn and flop solvers' fixed strategies. The 4 Nov log had QQ facing 40 into 208 with 41
