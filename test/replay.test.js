@@ -991,30 +991,25 @@ test('river solver: runs on the river only, heads-up and multiway', () => {
 test('river solver: raises the nuts-ish hand, folds the bluff-catcher that cannot win', () => {
   const big = E.analyzeSync(riverSpot('As Kc'));
   assert.strictEqual(big.best.kind, 'raise');
-  const weakSpot = riverSpot('7c 6d', { opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 1.5 } }] });
-  const weak = E.analyzeSync(weakSpot);
-  // It never calls. Against an unread player (exploit weight 0.3) a pot-size bluff raise is about break-even once
-  // bettors fold half their range to a river raise (riverRaiseFold), so folding or raising both pass here.
-  assert.notStrictEqual(weak.best.kind, 'call');
-  assert.ok(Math.max(...weak.ranked.map((s) => s.ev)) < 0.05 * 320);
-  assert.strictEqual(E.analyzeSync(Object.assign({}, weakSpot, { riverRaiseFold: false })).best.kind, 'fold');
+  const weak = E.analyzeSync(riverSpot('7c 6d', { opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 1.5 } }] }));
+  assert.strictEqual(weak.best.kind, 'fold');
   const total = big.ranked.reduce((a, s) => a + s.freq, 0);
   assert.ok(Math.abs(total - 1) < 1e-6);
 });
 
-test('river solver: a bettor facing a pot-size raise folds at least half its range, less to a small all-in (riverRaiseFold)', () => {
+test('river solver: riverRaiseFold (off): a bettor facing a pot-size raise folds at least half its range, less to a small all-in', () => {
   const ev = (r, kind) => r.ranked.find((s) => s.kind === kind).ev;
-  const on = E.analyzeSync(riverSpot('As Kc')), off = E.analyzeSync(riverSpot('As Kc', { riverRaiseFold: false }));
+  const on = E.analyzeSync(riverSpot('As Kc', { riverRaiseFold: true })), off = E.analyzeSync(riverSpot('As Kc'));
   // Value raises get paid less; calling is unchanged.
   assert.ok(ev(on, 'raise') < ev(off, 'raise') - 0.1 * 320, `${ev(on, 'raise')} vs ${ev(off, 'raise')}`);
   assert.ok(Math.abs(ev(on, 'call') - ev(off, 'call')) < 1e-6);
   // A second pair that raised before (K-Q on K-8-2-3-A) now calls by a clear margin.
-  const kq = E.analyzeSync(riverSpot('Kh Qh'));
+  const kq = E.analyzeSync(riverSpot('Kh Qh', { riverRaiseFold: true }));
   assert.strictEqual(kq.best.kind, 'call');
   assert.ok(ev(kq, 'call') > ev(kq, 'raise') + 0.1 * 320);
   // An all-in for under the pot is scaled down: 300 into 320 moves little.
   const short = (o) => E.analyzeSync(riverSpot('As Kc', Object.assign({ stack: 300 }, o)));
-  assert.ok(ev(short({ riverRaiseFold: false }), 'allin') - ev(short({}), 'allin') < 0.03 * 320);
+  assert.ok(ev(short({}), 'allin') - ev(short({ riverRaiseFold: true }), 'allin') < 0.03 * 320);
 });
 
 test('river solver: checking it down is worth equity x pot (showdown math with blockers)', () => {
