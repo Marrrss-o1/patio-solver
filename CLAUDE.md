@@ -633,6 +633,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   +9.6 ± 11.4 (pooled +1.4 ± 2.3); riverbluff 4-handed -3.3 ± 13.8, 5-handed -6.1 ± 6.8, heads-up +12.7 ± 23.1
   (pooled -4.4 ± 5.9, the cost if a friend's overbets were bluffier than the shows). So the simulator is neutral; it is on for the log evidence.
   Files: /mnt/project-files/patio-solver/sims/2026-11-04-overbet/.
+- Huge preflop raises read tight (v1.8.15, `BIG_RAISE_RANGE` {width 0.12, toBB 30, behind 0.25}; `input.bigRaiseRange:
+  false` turns it off, a number sets the width): an open or isolation raise to 30bb+ that keeps at least a quarter of the
+  raise-to behind is read as the top 12% of hands (or the raiser's range, if narrower). The tracker passes the raise-to
+  and the chips behind in big blinds (`sizes.preTo`, `sizes.preBehind`); older inputs have neither, so it is off for them.
+  Friends' shown preflop raises of 30bb+ (31 Oct - 4 Nov): the 9 all-ins were wide (Q2o, T9o, J8o, A2o...; best fit top
+  45%, A9s 60% against them), the 5 that kept chips behind were KTo, A9s, AA, AQs, KK (best fit top 12%, A9s 36%; 2 opens,
+  3 re-raises, which read narrow already). Jagger raised to 50bb+ in about 2.5% of his hands (opens to 117, 102, 51, 50
+  and 131bb, a 135bb shove with A2s). 4 Nov's #390 (A9s in the big blind vs his 131bb open, half his stack; he had KK)
+  goes from all-in +65bb to fold; 2 Nov's A4o vs his 102bb open from all-in to fold; 1 Nov's AJo vs Dew666's 32bb open
+  from all-in to a raise (a tie); no other of 1,018 logged decisions changes. The bots never raise that big with chips
+  behind, so the simulator can't judge it; Marwin chose it on the logs (4 Nov).
+  With it, a preflop raiser with a third or more of their stack in continues against hero's raise at 0.97
+  (`input.pfCommitCall: false` for the old rule; continueRule's `opp.behind` is the input's `stack`): #390's rule had
+  Jagger folding 23% to the shove with 131 of 255bb in and needing 24%; friends with a third of their stack in called all
+  3 logged spots. It changes no logged decision on its own (#390's shove +65 -> +53bb). The bots don't model it (their
+  `pfCommit` is opt-in), so a sim would score them folding where friends call. Files: analysis/2026-11-04-session.md
+  ("Your two questions"), scripts/2026-11-04-session/questions/.
 - River raise fold (`RIVER_RAISE_FOLD` 0.5, off: `input.riverRaiseFold: true` turns it on, a number sets it): in
   riverSolve's fixed strategy a bettor facing hero's root raise folds at least that share of its betting range, x
   min(1, raise / pot). The read folds only the bluffs, 0.9 x (1 - value share), about 25-35%; in the logs river bettors

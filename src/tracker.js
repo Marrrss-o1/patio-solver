@@ -697,6 +697,11 @@
           const prevInc = h.lastRaiseInc || bb || inc;
           p.preTop = h.preRaises;
           p.sizes.pre = prevInc > 0 ? Math.round((inc / prevInc) * 100) / 100 : 1;
+          // Raise-to and chips left behind, in big blinds (v1.8.15): huge raises that keep chips behind read tight.
+          if (bb > 0) {
+            p.sizes.preTo = Math.round((p.stageBet / bb) * 100) / 100;
+            p.sizes.preBehind = Math.round((Math.max(0, p.start - p.total) / bb) * 100) / 100;
+          }
           h.lastRaiseInc = inc;
         }
         const rank = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2 }[kind];
