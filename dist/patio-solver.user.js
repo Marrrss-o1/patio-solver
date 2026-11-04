@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.12
+// @version      1.8.13
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -2883,7 +2883,10 @@ function ENGINE() {
       // Everything that does not depend on the hand, worked out once per decision.
       const vr = valueShare(oppStats, oppBetFrac);
       const foldCut = facingFrac != null && !vsRaise ? (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5) : 0;
-      const raiseCut = 1 - clamp(st5.raiseFreq, 0.02, 0.3);
+      // Only short raises (they owe under a quarter of the pot: an all-in a little over the call); the
+      // fold-to-bet curve is not a betting range's answer to a full raise.
+      const raiseCut = facingFrac != null && facingFrac < 0.25 && vsRaise && cfg.raisePrice !== false ? (cfg.aggScale || 1) * foldAtSize(oppStats, facingFrac, 5) : null;
+      const raiseQ = 1 - clamp(st5.raiseFreq, 0.02, 0.3);
       const hasRaise = acts.some((a) => a.kind === 'raise');
       const kinds = acts.map((a) => a.kind);
       const pr = new Float64Array(nA);
@@ -2903,8 +2906,11 @@ function ENGINE() {
           } else {
             pCont = sigmoid((q - foldCut) / 0.04);
           }
+          // A short raise folds no more of the range than a bet of the same price would: an all-in for a chip
+          // more than the call (4 Nov log, QQ facing 40 into 208 with 41 behind) was folded to like a full raise.
+          if (vsRaise && raiseCut != null) pCont = Math.max(pCont, sigmoid((q - raiseCut) / 0.04));
           if (ties && ties[idx[i]]) pCont = 1;
-          const pRaise = sigmoid((q - raiseCut) / 0.03);
+          const pRaise = sigmoid((q - raiseQ) / 0.03);
           for (let j = 0; j < nA; j++) {
             if (kinds[j] === 'fold') pr[j] = 1 - pCont;
             else if (kinds[j] === 'raise') pr[j] = pCont * pRaise;
@@ -3412,6 +3418,8 @@ function ENGINE() {
           if (rootRaise) pCont = sigmoid((qi - 0.9 * (1 - vr)) / 0.04);
           else if (vsRaise) pCont = qi >= 1 - bf * vr ? 1 : qi < bf * (1 - vr) ? 0.1 : 0.5;
           else pCont = sigmoid((qi - foldQ) / 0.04);
+          // A short raise (an all-in a chip over the call) folds no more of the range than a bet of that price.
+          if ((rootRaise || vsRaise) && facingFrac < 0.25 && cfg.raisePrice !== false) pCont = Math.max(pCont, sigmoid((qi - foldQ) / 0.04));
           if (ties && ties[i]) pCont = 1;
           const pRaise = sigmoid((qi - rq) / 0.03);
           for (let j = 0; j < nA; j++) {
@@ -4088,6 +4096,8 @@ function ENGINE() {
           if (rootRaise) pCont = sigmoid((qi - 0.9 * (1 - vr)) / 0.04);
           else if (vsRaise) pCont = qi >= 1 - bf * vr ? 1 : qi < bf * (1 - vr) ? 0.1 : 0.5;
           else pCont = sigmoid((qi - foldQ) / 0.04);
+          // A short raise (an all-in a chip over the call) folds no more of the range than a bet of that price.
+          if ((rootRaise || vsRaise) && facingFrac < 0.25 && cfg.raisePrice !== false) pCont = Math.max(pCont, sigmoid((qi - foldQ) / 0.04));
           const pRaise = sigmoid((qi - rq) / 0.03);
           for (let j = 0; j < nA; j++) {
             const a = acts[j];
@@ -4658,6 +4668,16 @@ function ENGINE() {
     return { K, kappa, kCall: Math.max(1, kCall), kRaise, samples: got };
   }
 
+  // Hero's postflop edge at the preflop solver's flop leaves (input.pfFlopEdge: false turns it off, a number replaces
+  // it): hero's realized share of the pot at a flop leaf gains this much x t (t = min(1, spr / 4), floor 0.15), for every
+  // hand pair. The audit (4 Nov, all logs, reads from earlier hands only) found the postflop solver values the flops
+  // hero sees above these leaves: EV at hero's first flop decision minus chips put in minus the preflop EV was
+  // +4.7 +- 1.2 bb on opens and isolation raises (z 3.8, n 86), about 0.25 of the flop pot (median), and about half that
+  // on the friend bots (+0.14 of the flop pot after a raise, +0.20-0.30 after a call), where the postflop side is on
+  // target with what came back. The leaves split the pot by realized equity against the read's player and don't see
+  // that hero's postflop play exploits the reads.
+  const PF_FLOP_EDGE = 0.06;
+
   function preflopSolve(cfg) {
     const { heroW, oppW, heroClass, pot: P0, toCall, stack: E, bigBlind, heroIP, rootActs, option, p } = cfg;
     const NC = 169;
@@ -4679,10 +4699,16 @@ function ENGINE() {
       const Rh = new Float64Array(NC), Rv = new Float64Array(NC);
       for (let c = 0; c < NC; c++) { Rh[c] = R(c, heroIP ? 1 : -1); Rv[c] = R(c, heroIP ? -1 : 1); }
       const S = new Float32Array(NC * NC);
+      // Hero plays the flop better than the read's player (flopEdge x t of the pot; PF_FLOP_EDGE). Simulator option
+      // (off): with stacks behind, the better hand also wins chips the flop leaf doesn't see (implied odds: share
+      // s -> s + implied x t x (s - 0.5), so it can pass 1 or go below 0).
+      const amp = (cfg.implied || 0) * t, edge = (cfg.flopEdge || 0) * t;
       for (let a = 0; a < NC; a++) {
         for (let b = 0; b < NC; b++) {
           const e = EQ[a * NC + b], x = e * Rh[a], y = (1 - e) * Rv[b];
-          S[a * NC + b] = M[a * NC + b] * (x + y > 0 ? x / (x + y) : e);
+          let sh = x + y > 0 ? x / (x + y) : e;
+          if (amp || edge) sh += amp * (sh - 0.5) + edge;
+          S[a * NC + b] = M[a * NC + b] * sh;
         }
       }
       return (shareCache[key] = S);
@@ -5989,7 +6015,7 @@ function ENGINE() {
       const o = opps[0], oi = input.opponents[0];
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call', turn: 'call' }, input.heroActions || {});
-      solved = riverSolve({
+      solved = riverSolve({ raisePrice: input.raisePrice !== false,
         board, heroCombo, strengths: strengths[5], bigBlind,
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
@@ -6008,7 +6034,7 @@ function ENGINE() {
       const heroStats = computeStats({}, HERO_STYLE);
       const heroActs = Object.assign({ pre: 'call', flop: 'call' }, input.heroActions || {});
       const aggS = aggScaleOf(o.stats);
-      const ts = turnSolve({
+      const ts = turnSolve({ raisePrice: input.raisePrice !== false,
         board, heroCombo, strengths4: strengths[4], bigBlind,
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
@@ -6036,7 +6062,7 @@ function ENGINE() {
         if (pick < 0) { pick = 0; for (let i = 1; i < opps.length; i++) if (opps[i].stats.foldToBet < opps[pick].stats.foldToBet) pick = i; }
         const o = opps[pick];
         const aggS = aggScaleOf(o.stats);
-        const ts = turnSolve({
+        const ts = turnSolve({ raisePrice: input.raisePrice !== false,
           board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
           oppStats: fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats)), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
           aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
@@ -6079,7 +6105,7 @@ function ENGINE() {
       }
       if (ok) {
         const aggS = aggScaleOf(o.stats);
-        const fs = flopSolve({
+        const fs = flopSolve({ raisePrice: input.raisePrice !== false,
           board, heroCombo, strengths3: strengths[3], bigBlind, heroW, oppW, oppStats, p,
           aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
           pot: potWin, toCall, stack: opps.length > 1 ? mwStackF : isFinite(stack) ? stack : 100 * bigBlind + pot,
@@ -6127,7 +6153,7 @@ function ENGINE() {
         const o = opps[pick];
         const heroStats = computeStats({}, HERO_STYLE);
         const heroActs = Object.assign({ pre: 'call', flop: 'call', turn: 'call' }, input.heroActions || {});
-        solved = riverSolve({
+        solved = riverSolve({ raisePrice: input.raisePrice !== false,
           board, heroCombo, strengths: strengths[5], bigBlind,
           heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
           oppW: W,
@@ -6197,6 +6223,7 @@ function ENGINE() {
         raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
+        implied: +input.pfImplied || 0, flopEdge: input.pfFlopEdge === false ? 0 : input.pfFlopEdge != null ? +input.pfFlopEdge : PF_FLOP_EDGE,
       });
       if (pf) {
         // Name each action as the matching option in the list.

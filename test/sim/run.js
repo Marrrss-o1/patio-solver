@@ -234,7 +234,11 @@ function playBlock(cfg, block) {
         const dl = deal(d, rot, 1);
         onHand(cfg.warm + (d - start) * rots + rot);
         const diag = cfg.diag ? [] : null;
-        if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '']);
+        // Each decision: street, facing a bet, kind, chips (bb), solver; then (for TD checks of the EVs, audit thread 4 Nov)
+        // the chosen action's EV, hero's chips in the pot before acting, the pot and the number of opponents (bb).
+        if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '',
+          Math.round((res.best.ev || 0) / cfg.bb * 1000) / 1000, Math.round(vw.put / cfg.bb * 1000) / 1000, Math.round(vw.pot / cfg.bb * 1000) / 1000, vw.nOpp,
+          res.equity ? Math.round(res.equity.share * 1000) / 1000 : null]);
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
           aivat: cfg.aivat, parts: cfg.parts, flopinfo: cfg.flopinfo, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;

@@ -152,7 +152,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `preflopCompat`, O(169) blocker totals in `classMass`. Tree: hero's scenario sizes at the root, then pot-size
   raises and all-ins, up to 4 raises. Leaves: fold, all-in (table equity), flop (pot split by realized shares,
   `shares`: equity x 0.92 + strength, suited/connected/pair bonus, +-0.06 position, faded toward raw equity below SPR
-  4). The opponent's fixed strategy uses the Monte Carlo's `sc.opp` cont rates at the first response and
+  4, plus hero's postflop edge `PF_FLOP_EDGE` x t of the pot since v1.8.13, see Preflop flop edge). The opponent's fixed strategy uses the Monte Carlo's `sc.opp` cont rates at the first response and
   `continueRule` deeper; 3-bets from `stats.threeBet`. Phone 300 iterations, computer 1,200 / 0.8 s (4,800 / 2.5 s
   until v1.7.6: on all 103 logged preflop spots 600-2,400 iterations pick the same action as 4,800 and 300 differs on
   one near-tie, while 4,800 takes about 1.2 s against 0.33 s, so the full read now arrives before he acts).
@@ -712,6 +712,46 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   draws, so the two costly profiles are not tonight's table; they are what a friend who changes style would cost
   until something reads size or raise strength per player faster than showdowns do. Logs (419 hands, 765 hero turns):
   the tracker never lost the chips. Short stacks (12bb): hero shoves or folds almost always.
+- Preflop flop edge (v1.8.13, `PF_FLOP_EDGE` 0.06, `input.pfFlopEdge`: false turns it off, a number replaces it): at the
+  preflop solver's flop leaves hero's realized share of the pot gains 0.06 x t (t = min(1, spr / 4), floor 0.15) for
+  every pair of hands. Audit thread, 4 Nov: every hero decision of all logs replayed with reads from earlier hands only
+  (/mnt/project-files/patio-solver/audit-2026-11-04/, NOTES.md, scripts/). TD error = EV at hero's next decision (or
+  what came back) minus chips put in minus the EV of the action taken. Main's EVs are on target overall (+0.21 ± 0.68 bb
+  a decision, 1,018 decisions), but preflop raises sit below the flops they lead to: opens and isolation raises
+  +4.7 ± 1.2 bb (z 3.8, n 86), median 0.25 of the flop pot. On the v7 bots (`--diag`, test/sim/td.js) about half that
+  (+0.14 of the flop pot after a raise, +0.20-0.30 after a call) with the postflop side on target against what came
+  back, so the leaves miss that hero's postflop play exploits the reads. Simulator, live budget, v7 bots, B - A
+  (pfFlopEdge 0.06 vs 0, `raisePrice` off in both): 4-handed +68.2 ± 24.6 and +40.3 ± 27.9, 5-handed +74.7 ± 19.7,
+  6-handed +45.4 ± 18.6, 3-handed +50.2 ± 25.8, heads-up +42.0 ± 24.7 (pooled +55 ± 9; mostly hands B plays that A
+  folds, +63 ± 12 of the 5-handed run, button and blinds, weak to good hands; strong and premium about -3). Fresh seeds,
+  v1.8.13 against main (B {} vs A `{"raisePrice":false,"pfFlopEdge":false}`): 5-handed -7.2 ± 24.3 and +28.9 ± 23.1,
+  4-handed +40.1 ± 21.2, 6-handed +46.1 ± 19.7 (v7 live pooled +30 ± 11), 4-handed phone -4.4 ± 24.9, 4-handed on the
+  v6 bots +81.5 ± 24.5; all twelve runs pooled about +44 ± 7. The short-raise change alone (below) changed 1 of 1,000
+  simulated hands. 0.10: 4-handed +94.0 ± 30.0; 0.15: +107.0 ± 35.2 with
+  hero's VPIP / PFR 45 / 33% -> 76 / 65% (0.06 at 5-handed: 35 / 25% -> 43 / 32%). The bigger sizes are not taken: bots
+  never adapt to a hero who raises two hands in three, the friends might. On the logs 0.06 changes 76 of 499 preflop
+  decisions (fold -> raise 25, call -> raise 11, fold -> call 10, check -> bet 8; folds 51% -> 43%), 0.10 150. Tried:
+  implied odds at the leaves (`pfImplied`, simulator only; s -> s + implied x t x (s - 0.5)): 0.5 lost -55.3 ± 18.0
+  (4-handed) and the preflop gap did not close. At 4-handed the edge moves hero's VPIP / PFR 44 / 33% -> 54 / 42%.
+- Short raises (v1.8.13, `input.raisePrice`: false for the old rule): an opponent facing hero's raise that costs them
+  under a quarter of the pot over the call (an all-in a chip over the call) folds no more of their range than to a bet of
+  that price, in the river, turn and flop solvers' fixed strategies. The 4 Nov log had QQ facing 40 into 208 with 41
+  behind: the 1-chip all-in was folded to like a full raise, so it read +1.7 against -25.4 for the call and advised the
+  shove (now: fold). 2 of 1,017 logged decisions change. A first version without the size limit broke the "calls a known
+  bluffer more often" river test (polarized betting ranges over-continued against full raises).
+- Audit findings not fixed (4 Nov, NOTES.md): (1) fold predictions are too extreme against the friends: logistic
+  calibration slope 0.57 ± 0.16 on hero's postflop bets (n 213), preflop 0.58 ± 0.20; heads-up flop and turn fine
+  (0.96 ± 0.37), heads-up river 0.08 ± 0.48 (n 29), multiway 0.33 ± 0.32; on the bots 1.33 ± 0.14 (the other way), so
+  the simulator can't judge a fix. (2) The solver's river bluffs against the friends: 5 since 2 Nov, predicted folds
+  .41-.77, all called (second pair, top pair twice, ace-high on a trips board, two pair); all river bets with under 30%
+  equity 0 of 9 folded, predicted .43 (z -3.0). On the bots river bluffs make 7.5 bb more than read. (3) Hero's raises
+  are overvalued on the bots on every street (river -9.9 ± 2.9, turn -6.5 ± 3.3, flop -2.8 to -10.8 chips TD) because
+  the bots fold to them far more than read (river 12 of 13, predicted .40; flop .47 vs .31); the friends fold to flop and
+  turn raises 8-13% (n 55) and to hero's flop raises as read (.16 vs .15, n 19).
+- Simulator caveat (4 Nov audit): the v7 bots continue by absolute hand strength, so where their range is weak they fold
+  far more than any read of their average rate. Hero's heads-up bets of 0.85 pot or more: bots fold 81% (predicted 57%,
+  river 96% vs 67%, n 26), friends 49% (50%; river 55% vs 61%, n 11); small bets the other way (bots 28% vs 42%). The
+  simulator flatters big bets, river bluffs and anything that wins by bots folding to raises.
 - Ideas: hero's story (`credibility`) is measured against uniform random hands, so the shift is almost always
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
