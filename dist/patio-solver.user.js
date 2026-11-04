@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.13
+// @version      1.8.14
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1557,6 +1557,12 @@ function ENGINE() {
     return s;
   }
 
+  // A bet or raise of ob.size x the pot or more on street ob.street (OVERBET_TILT).
+  function overbetLine(actions, sizes, ob) {
+    const name = STREET_KEYS[ob.street], a = STREET_ACTION_MAP[actions[name]];
+    return (a === 'bet' || a === 'raise') && !!sizes && sizes[name] >= ob.size;
+  }
+
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
     const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
     let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre);
@@ -1598,7 +1604,9 @@ function ENGINE() {
     const learned = aggLine ? stats.tiltAgg : stats.tiltPas;
     // Without a learned tilt for betting lines, only a weaker-than-expected average is used:
     // showdowns after bets are the ones that got called, so they look stronger than the bets were.
-    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + (stats.tiltHero || 0);
+    // The overbet tilt doesn't stack on the hero-pot one: the shows it was fitted on carry both.
+    const over = stats.tiltOver && overbetLine(actions, sizes, stats.tiltOver) ? stats.tiltOver.tilt : 0;
+    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -1938,6 +1946,24 @@ function ENGINE() {
   // don't trap (18 runs) and -20 +- 8 on bots that tighten up in hero's big pots (4 runs); 0 is neutral on both.
   // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only; that was no better).
   const HERO_POT_TILT = { tilt: 0, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3 };
+  // River overbets read stronger (v1.8.14, input.overbetTilt): a river bet or raise of `size` x the pot or more (the
+  // tracker caps sizes at 3, so 3 means 300% or more) gets an extra strength tilt (buildRange's bias). In the logs
+  // (31 Oct - 4 Nov) the 9 shown river bets and raises of 3x pot or more sat at 0.68 of the read's range (0.5 = on
+  // target): 7 were two pair or better (quads, full houses, a set of aces, straights), one top pair, one bluff; best
+  // tilt 0.3 (+1.85 nats over none). Flop and turn overbets of 3x+ were on target (0.56, n 10, best tilt 0), and so
+  // were 1.5-3x bets (0.42, n 20). On 4 Nov (#382) Q7 made sevens and fives on Jh 5s 7s 3d 5h and raised a 21x-pot
+  // river bet (raise 79 vs call 53 chips): the read had 46% of that range as no pair and 37% as two pair, much of it
+  // weaker than hero's, calling the raise. He had trips. With the tilt it calls (call 24, raise -6).
+  const OVERBET_TILT = { tilt: 0.3, size: 2.99, street: 5 };
+  // River bettors facing hero's raise fold at least this share of their betting range (riverSolve; off: input.riverRaiseFold
+  // true turns it on, a number sets the share). The read's rule folds only the bluffs, 0.9 x (1 - value share), 25-35%.
+  // In the logs (31 Oct - 4 Nov) river bettors who got raised folded 14 of 28 (raised by hero 4 of 7, by a friend 10 of
+  // 21, one re-raise), where flop and turn bettors folded 3 of 38 and 3 of 17. The v7 friend bots fold 32 of 46
+  // and re-raise 10. Against them hero's river raises (eq 0.55-0.8) were valued 10.3 bb over calling and brought
+  // -3.8 ± 9.6 (test/sim/river-check.js). Off: it changes none of the 54 logged river decisions facing a bet, and the
+  // simulator (live budget, v7 bots, on vs off) was flat: 4-handed -4.9 ± 15.3 and +5.5 ± 15.6, 5-handed +2.6 ± 8.6,
+  // heads-up -11.9 ± 17.3; the raises it turns into calls, valued on the bots' real hands, +1.1 ± 3.2 bb/100.
+  const RIVER_RAISE_FOLD = 0.5;
   // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
   // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
   // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
@@ -2898,8 +2924,9 @@ function ENGINE() {
         } else {
           let pCont;
           if (vsRaise && toCall > 0) {
-            // Their range here is their betting range: fold the weakest (1 - valueShare) of it.
-            pCont = sigmoid((q - 0.9 * (1 - vrB)) / 0.04);
+            // Their range here is their betting range: fold the weakest (1 - valueShare) of it, and at least
+            // cfg.raiseFold of it against a pot-size raise (RIVER_RAISE_FOLD), less for a smaller (all-in) raise.
+            pCont = sigmoid((q - Math.max(0.9 * (1 - vrB), (cfg.raiseFold || 0) * Math.min(1, facingFrac))) / 0.04);
           } else if (vsRaise) {
             // They bet inside the tree: value hands continue, bluffs mostly fold.
             pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
@@ -5198,6 +5225,8 @@ function ENGINE() {
     if (hpLearned) hpt.tilt = hpLearned.tilt;
     const heroPotRamp = hpt && street > 0 && street >= (hpt.street || 3)
       ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
+    const RRF = input.riverRaiseFold === true ? RIVER_RAISE_FOLD : typeof input.riverRaiseFold === 'number' ? input.riverRaiseFold : 0;
+    const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5238,6 +5267,8 @@ function ENGINE() {
       }
       const heroPotTilt = heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpt.tilt || 0) : 0;
       if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
+      // River overbets read stronger (OVERBET_TILT). input.overbetTilt: false turns it off, a number sets the tilt.
+      if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -6020,7 +6051,7 @@ function ENGINE() {
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1,
+        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
@@ -6164,7 +6195,7 @@ function ENGINE() {
             return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
           },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1,
+          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1, raiseFold: RRF,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,

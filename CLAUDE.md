@@ -629,9 +629,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (call +12, raise -3 bb; he had trips); replaying every log (1,225 hero decisions) it changes no other decision. The
   friend bots never bet over 2x the pot, so plain runs are identical; red-team presets `xp:riverover` (overbets 3-10x
   with strong hands half the time, air 5%, like the shows) and `xp:riverbluff` (air 30%). Live budget, v7 bots, on vs
-  off: riverover 4-handed +3.3 ± 3.3, 5-handed +6.1 ± 6.5, heads-up +10.0 ± 14.9, 3-handed +9.6 ± 11.4 (pooled
-  +4.4 ± 2.8); riverbluff 4-handed -3.3 ± 13.8, 5-handed -6.1 ± 6.8 (pooled -5.6 ± 6.1, the cost if a friend's
-  overbets were bluffier than the shows). Files: /mnt/project-files/patio-solver/sims/2026-11-04-overbet/.
+  off: riverover 4-handed +3.3 ± 3.3 and -4.4 ± 3.9, 5-handed +6.1 ± 6.5, heads-up +10.0 ± 14.9, 3-handed
+  +9.6 ± 11.4 (pooled +1.4 ± 2.3); riverbluff 4-handed -3.3 ± 13.8, 5-handed -6.1 ± 6.8 (pooled -5.6 ± 6.1, the cost
+  if a friend's overbets were bluffier than the shows). So the simulator is neutral; it is on for the log evidence.
+  Files: /mnt/project-files/patio-solver/sims/2026-11-04-overbet/.
 - River raise fold (`RIVER_RAISE_FOLD` 0.5, off: `input.riverRaiseFold: true` turns it on, a number sets it): in
   riverSolve's fixed strategy a bettor facing hero's root raise folds at least that share of its betting range, x
   min(1, raise / pot). The read folds only the bluffs, 0.9 x (1 - value share), about 25-35%; in the logs river bettors
