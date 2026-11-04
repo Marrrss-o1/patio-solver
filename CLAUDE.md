@@ -619,6 +619,30 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   10bb+ pots (a 44 turn barrel into AA becomes a check, QQ stops betting and calling into AA, three losing calls
   fold; an AK river value bet halves, an A4 turn raise that won becomes a call). Fold rates don't move, so a few
   river checks become bluffs. Scripts and tables: /mnt/project-files/patio-solver/sims/2026-11-03-night/heropottilt/.
+- River overbets read stronger (v1.8.14, `OVERBET_TILT` {tilt 0.3, size 2.99, street 5}; `input.overbetTilt: false`
+  turns it off, a number sets the tilt): a river bet or raise of 3x the pot or more (the tracker caps sizes at 3, so
+  `sizes.river` 3 is 3x+) adds 0.3 of strength tilt to that player's range in buildRange. It does not stack with the
+  hero-pot tilt (the larger applies), because the shows it was fitted on carry both. Logs (31 Oct - 4 Nov): all 9 shown
+  river bets and raises of 3x+ sat at 0.68 of the read's range (7 two pair or better, one top pair, one bluff); best
+  tilt 0.3, 1.85 nats over none. Flop and turn overbets of 3x+ are on target (0.56, n 10), and so are 1.5-3x bets
+  (0.42, n 20). On 4 Nov's #382 (Q7o on Jh 5s 7s 3d 5h, Jagger bets 21x the pot) it calls instead of raising to 192bb
+  (call +12, raise -3 bb; he had trips); replaying every log (1,225 hero decisions) it changes no other decision. The
+  friend bots never bet over 2x the pot, so plain runs are identical; red-team presets `xp:riverover` (overbets 3-10x
+  with strong hands half the time, air 5%, like the shows) and `xp:riverbluff` (air 30%). Live budget, v7 bots, on vs
+  off: riverover 4-handed +3.3 ± 3.3 and -4.4 ± 3.9, 5-handed +6.1 ± 6.5, heads-up +10.0 ± 14.9, 3-handed
+  +9.6 ± 11.4 (pooled +1.4 ± 2.3); riverbluff 4-handed -3.3 ± 13.8, 5-handed -6.1 ± 6.8, heads-up +12.7 ± 23.1
+  (pooled -4.4 ± 5.9, the cost if a friend's overbets were bluffier than the shows). So the simulator is neutral; it is on for the log evidence.
+  Files: /mnt/project-files/patio-solver/sims/2026-11-04-overbet/.
+- River raise fold (`RIVER_RAISE_FOLD` 0.5, off: `input.riverRaiseFold: true` turns it on, a number sets it): in
+  riverSolve's fixed strategy a bettor facing hero's root raise folds at least that share of its betting range, x
+  min(1, raise / pot). The read folds only the bluffs, 0.9 x (1 - value share), about 25-35%; in the logs river bettors
+  who got raised folded 14 of 28 (hero's raises 4 of 7), flop and turn bettors 3 of 38 and 3 of 17; the v7 bots fold
+  32 of 46. On the bots hero's river raises with 55-80% equity were valued 10.3 bb over calling and brought -3.8 ± 9.6
+  (river-check.js). It changes none of the 54 logged river decisions facing a bet; live budget on vs off: 4-handed
+  -4.9 ± 15.3 and +5.5 ± 15.6, 5-handed +2.6 ± 8.6, heads-up -11.9 ± 17.3; the raises it turns into calls, valued on
+  the bots' real hands, +1.1 ± 3.2 bb/100. So it stays off. The same dump has river calls overvalued against the bots
+  (solver eq 0.295, real share 0.167, n 93, mostly facing bets under 0.6 pot), where friends' river bets show on
+  target in the logs, so that reads as a bot artifact.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,

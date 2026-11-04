@@ -997,6 +997,21 @@ test('river solver: raises the nuts-ish hand, folds the bluff-catcher that canno
   assert.ok(Math.abs(total - 1) < 1e-6);
 });
 
+test('river solver: riverRaiseFold (off): a bettor facing a pot-size raise folds at least half its range, less to a small all-in', () => {
+  const ev = (r, kind) => r.ranked.find((s) => s.kind === kind).ev;
+  const on = E.analyzeSync(riverSpot('As Kc', { riverRaiseFold: true })), off = E.analyzeSync(riverSpot('As Kc'));
+  // Value raises get paid less; calling is unchanged.
+  assert.ok(ev(on, 'raise') < ev(off, 'raise') - 0.1 * 320, `${ev(on, 'raise')} vs ${ev(off, 'raise')}`);
+  assert.ok(Math.abs(ev(on, 'call') - ev(off, 'call')) < 1e-6);
+  // A second pair that raised before (K-Q on K-8-2-3-A) now calls by a clear margin.
+  const kq = E.analyzeSync(riverSpot('Kh Qh', { riverRaiseFold: true }));
+  assert.strictEqual(kq.best.kind, 'call');
+  assert.ok(ev(kq, 'call') > ev(kq, 'raise') + 0.1 * 320);
+  // An all-in for under the pot is scaled down: 300 into 320 moves little.
+  const short = (o) => E.analyzeSync(riverSpot('As Kc', Object.assign({ stack: 300 }, o)));
+  assert.ok(ev(short({}), 'allin') - ev(short({ riverRaiseFold: true }), 'allin') < 0.03 * 320);
+});
+
 test('river solver: checking it down is worth equity x pot (showdown math with blockers)', () => {
   const spot = riverSpot('Ah Qd', { toCall: 0, pot: 200, inPosition: true, iterations: 20000,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'check' } }] });
@@ -2092,6 +2107,26 @@ test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10b
     iterations: 500, mix: false, seed: 1 }, extra)).heroPot.ramp;
   assert.strictEqual(flop({}), 1);
   assert.strictEqual(flop({ heroPotTilt: { street: 4 } }), 0);
+});
+
+test('overbetTilt: river bets and raises of 3x pot or more read stronger, not other streets or sizes (false: off)', () => {
+  // 4 Nov #382: sevens and fives on a paired board facing a 21x-pot river bet (the tracker caps sizes at 3).
+  const spot = (size, extra, street = 5) => E.analyzeSync(Object.assign({
+    hero: C('Qc 7h'), board: C(street === 5 ? 'Jh 5s 7s 3d 5h' : 'Jh 5s 7s 3d'), pot: 132, toCall: 126, stack: 420, bigBlind: 2, inPosition: false,
+    tableStyle: 'typical', heroActions: { pre: 'check', flop: 'check', turn: 'check', river: street === 5 ? 'check' : '' }, heroSizes: {},
+    heroPosition: 'blinds', heroPfAggressor: false, heroPotTilt: false,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check', turn: street === 5 ? 'check' : 'bet', river: street === 5 ? 'bet' : '' },
+      sizes: street === 5 ? { river: size } : { turn: size }, position: 'early', committed: 64, stack: 293, bet: 126 }],
+    iterations: 4000, riverIterations: 200, mix: false, seed: 1,
+  }, extra));
+  const on = spot(3), off = spot(3, { overbetTilt: false });
+  assert.ok(on.equity.share < off.equity.share - 0.05, `3x: on ${on.equity.share} off ${off.equity.share}`);
+  assert.ok(spot(3, { overbetTilt: 0.5 }).equity.share < on.equity.share - 0.02);
+  near(spot(2, {}).equity.share, spot(2, { overbetTilt: false }).equity.share); // 2x pot: no tilt
+  near(spot(3, {}, 4).equity.share, spot(3, { overbetTilt: false }, 4).equity.share); // a turn overbet: no tilt
+  // It doesn't stack on the hero-pot tilt: the larger of the two applies.
+  near(spot(3, { heroPotTilt: 0.2 }).equity.share, on.equity.share);
+  near(spot(3, { heroPotTilt: 0.5 }).equity.share, spot(3, { heroPotTilt: 0.5, overbetTilt: false }).equity.share);
 });
 
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {

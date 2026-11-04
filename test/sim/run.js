@@ -239,8 +239,27 @@ function playBlock(cfg, block) {
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '',
           Math.round((res.best.ev || 0) / cfg.bb * 1000) / 1000, Math.round(vw.put / cfg.bb * 1000) / 1000, Math.round(vw.pot / cfg.bb * 1000) / 1000, vw.nOpp,
           res.equity ? Math.round(res.equity.share * 1000) / 1000 : null]);
+        // Env RIVERDUMP=<file>: every heads-up river decision of hero's facing a bet, with the solver input, its options,
+        // every seat's hole cards and the hand's log afterwards (what the bettor did after hero's raise), one JSON line
+        // each, for checking the river solver's raise and call EVs against the bots' real hands (test/sim/river-check.js).
+        const rdump = process.env.RIVERDUMP && hero.tracker ? [] : null;
+        if (rdump) {
+          const prev = diag ? hero.onDecision : null;
+          hero.onDecision = (vw, input, res) => {
+            if (prev) prev(vw, input, res);
+            if (vw.street === 5 && input.toCall > 0 && input.opponents.length === 1) {
+              rdump.push({ v: v.name, d, rot, input, best: res.best && { kind: res.best.kind, amount: res.best.amount, ev: res.best.ev },
+                ranked: (res.ranked || []).map((o) => ({ kind: o.kind, amount: o.amount, ev: o.ev, freq: o.freq })), solver: res.solver ? res.solver.kind || 'river' : null,
+                eq: res.equity ? res.equity.share : null, hands: dl.hands, names: NAMES.slice(0, n) });
+            }
+          };
+        }
         const res = playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [hero].concat(botSets[vi]), hero: 0, names: NAMES, uidBase: 1000 + rot * 100,
           aivat: cfg.aivat, parts: cfg.parts, flopinfo: cfg.flopinfo, emit: hero.onEvent ? (ev, data, snapFn) => hero.onEvent(ev, data, snapFn) : null, watchers: watchersOf(botSets[vi]) }, dl));
+        if (rdump && rdump.length) {
+          const hist = hero.tracker.db.history || [], last = hist[hist.length - 1];
+          for (const x of rdump) { x.log = last ? last.log : null; x.board = last ? last.board : null; x.net = res.net; fs.appendFileSync(process.env.RIVERDUMP, JSON.stringify(x) + '\n'); }
+        }
         r.net += res.net / rots / cfg.bb; r.adj += res.adj / rots / cfg.bb;
         r.chance += res.chance / rots / cfg.bb; r.action += res.action / rots / cfg.bb;
         // Per rotation: hero's hand (preflop-order rank), position (0 = button, 1 = next seat, ...), corrected result.
