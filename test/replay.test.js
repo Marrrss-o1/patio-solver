@@ -1155,14 +1155,15 @@ const pfSpot = (h, extra) => E.analyzeSync(Object.assign({ hero: C(h), board: []
   iterations: 2000, preflopIterations: 200, opponents: [{ name: 'V', tally: {}, actions: { pre: 'pending' } }], heroActions: { pre: 'pending' } }, extra));
 
 test('preflop solver: heads-up spots are solved range against range', () => {
-  // A solid opponent: against the home game's passive big blind the solver limps 7-2 for a sliver.
-  const aa = pfSpot('Ah As'), junk = pfSpot('7c 2d', { tableStyle: 'solid' });
+  // A solid opponent: against the home game's passive big blind the solver limps 7-2 for a sliver. Without hero's flop
+  // edge (pfFlopEdge, below) 7-2 folds; with it the heads-up button opens everything.
+  const aa = pfSpot('Ah As'), junk = pfSpot('7c 2d', { tableStyle: 'solid', pfFlopEdge: false });
   assert.strictEqual(aa.solver.kind, 'preflop');
   assert.notStrictEqual(aa.best.kind, 'fold');
   assert.strictEqual(junk.best.kind, 'fold');
   assert.ok(aa.ranked.every((x) => isFinite(x.ev) && x.freq >= 0 && x.freq <= 1));
   // Big blind facing a raise: aces re-raise, 7-2 folds.
-  const bb = (h) => pfSpot(h, { pot: 3.5, toCall: 1.5, stack: 99, inPosition: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] });
+  const bb = (h) => pfSpot(h, { pot: 3.5, toCall: 1.5, stack: 99, inPosition: false, pfFlopEdge: false, opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' } }] });
   assert.ok(['raise', 'allin'].includes(bb('Ad Ac').best.kind));
   assert.strictEqual(bb('7h 2s').best.kind, 'fold');
   // Facing a shove the solve is plain equity against the shoving range, as the Monte Carlo says.
@@ -1187,6 +1188,22 @@ test('preflop solver: an open with several players behind is solved against the 
   assert.strictEqual(limped.solver.field, 2);
   assert.ok(['raise', 'allin'].includes(limped.best.kind));
   assert.strictEqual(pfSpot('Ks Kd', Object.assign({ preflopMultiway: false }, limpedIn)).solver, null);
+});
+
+test('preflop solver: hero\'s flop edge (pfFlopEdge) makes marginal opens worth playing, not junk', () => {
+  // The flop leaves give hero PF_FLOP_EDGE x t of the pot on top of the realized share (audit, 4 Nov: the postflop
+  // solver values the flops hero sees above the old leaves). K9o first in with three players behind folds without it.
+  const open = (h, extra) => pfSpot(h, Object.assign({ toCall: 1, stack: 100, inPosition: false, opponents: [1, 2, 3].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'pending' } })) }, extra));
+  const k9 = open('Ks 9h'), k9off = open('Ks 9h', { pfFlopEdge: false });
+  assert.strictEqual(k9off.best.kind, 'fold');
+  assert.ok(['raise', 'allin'].includes(k9.best.kind), k9.best.kind);
+  const ev = (r) => Math.max(...r.ranked.filter((x) => x.kind === 'raise').map((x) => x.ev));
+  assert.ok(ev(k9) > ev(k9off) + 0.2, ev(k9) + ' vs ' + ev(k9off));
+  assert.strictEqual(open('7c 2d').best.kind, 'fold');
+  assert.strictEqual(open('9s 4d', { opponents: [1, 2, 3, 4, 5].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'pending' } })) }).best.kind, 'fold');
+  // A number replaces the default; 0 and false are the old leaves.
+  assert.strictEqual(ev(open('Ks 9h', { pfFlopEdge: 0 })), ev(k9off));
+  assert.ok(ev(open('Ks 9h', { pfFlopEdge: 0.15 })) > ev(k9));
 });
 
 test('preflop solver: limped and raised multiway pots use multiway equity', () => {
