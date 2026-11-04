@@ -4652,6 +4652,16 @@
     return { K, kappa, kCall: Math.max(1, kCall), kRaise, samples: got };
   }
 
+  // Hero's postflop edge at the preflop solver's flop leaves (input.pfFlopEdge: false turns it off, a number replaces
+  // it): hero's realized share of the pot at a flop leaf gains this much x t (t = min(1, spr / 4), floor 0.15), for every
+  // hand pair. The audit (4 Nov, all logs, reads from earlier hands only) found the postflop solver values the flops
+  // hero sees above these leaves: EV at hero's first flop decision minus chips put in minus the preflop EV was
+  // +4.7 +- 1.2 bb on opens and isolation raises (z 3.8, n 86), about 0.25 of the flop pot (median), and about half that
+  // on the friend bots (+0.14 of the flop pot after a raise, +0.20-0.30 after a call), where the postflop side is on
+  // target with what came back. The leaves split the pot by realized equity against the read's player and don't see
+  // that hero's postflop play exploits the reads.
+  const PF_FLOP_EDGE = 0.06;
+
   function preflopSolve(cfg) {
     const { heroW, oppW, heroClass, pot: P0, toCall, stack: E, bigBlind, heroIP, rootActs, option, p } = cfg;
     const NC = 169;
@@ -4673,10 +4683,9 @@
       const Rh = new Float64Array(NC), Rv = new Float64Array(NC);
       for (let c = 0; c < NC; c++) { Rh[c] = R(c, heroIP ? 1 : -1); Rv[c] = R(c, heroIP ? -1 : 1); }
       const S = new Float32Array(NC * NC);
-      // Simulator options (audit thread, 4 Nov; off by default): with stacks behind, the better hand also wins chips
-      // the flop leaf doesn't see (implied odds: share s -> s + implied x t x (s - 0.5), so it can pass 1 or go
-      // below 0), and hero plays the flop better than the read's player (flopEdge x t of the pot). The logs' TD
-      // check found the postflop solver values the flops hero sees well above these leaves.
+      // Hero plays the flop better than the read's player (flopEdge x t of the pot; PF_FLOP_EDGE). Simulator option
+      // (off): with stacks behind, the better hand also wins chips the flop leaf doesn't see (implied odds: share
+      // s -> s + implied x t x (s - 0.5), so it can pass 1 or go below 0).
       const amp = (cfg.implied || 0) * t, edge = (cfg.flopEdge || 0) * t;
       for (let a = 0; a < NC; a++) {
         for (let b = 0; b < NC; b++) {
@@ -6198,7 +6207,7 @@
         raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
-        implied: +input.pfImplied || 0, flopEdge: +input.pfFlopEdge || 0,
+        implied: +input.pfImplied || 0, flopEdge: input.pfFlopEdge === false ? 0 : input.pfFlopEdge != null ? +input.pfFlopEdge : PF_FLOP_EDGE,
       });
       if (pf) {
         // Name each action as the matching option in the list.
