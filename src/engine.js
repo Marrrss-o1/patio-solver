@@ -1382,7 +1382,12 @@
     if (stats.fieldOf) return clamp(stats.fieldOf.reduce((a, x) => a * foldAtSize(Object.assign({}, x, { foldShift: 0 }), f, n), 1), 0.01, 0.98);
     const p = foldAtSizeRead(stats, f, n);
     // Part of their stack already in the pot (stats.commitOdds, set per decision in createAnalysis): they fold less.
-    return stats.commitOdds != null && stats.commitOdds !== 1 ? clamp(oddsScale(p, stats.commitOdds), 0.02, 0.98) : p;
+    const q = stats.commitOdds != null && stats.commitOdds !== 1 ? clamp(oddsScale(p, stats.commitOdds), 0.02, 0.98) : p;
+    // input.foldShrink (simulator option, off by default): postflop fold predictions pulled toward a center in
+    // log-odds, logit(q') = c + s (logit(q) - c). Audit 4 Nov: against the friends a fold read's log-odds come true at
+    // about 0.57 of their distance from 0.4 (hero's postflop bets, n 213).
+    const sh = stats.foldShrink;
+    return sh && n >= 3 ? clamp(sigmoid(sh.c + sh.s * (logit(clamp(q, 0.01, 0.99)) - sh.c)), 0.02, 0.98) : q;
   }
   function foldAtSizeRead(stats, f, n) {
     const ftb = streetField(stats, n, 'foldToBet');
@@ -5215,6 +5220,11 @@
         if (beta && c > 0 && statsHU) statsHU.commitOdds = Math.exp(beta * c);
       }
       if (input.bigBetMedium === false) { stats.bigBetMedium = null; if (statsHU) statsHU.bigBetMedium = null; }
+      // input.foldShrink: s (0-1) pulls postflop fold reads toward input.foldCenter (0.4) in log-odds (foldAtSize).
+      if (typeof input.foldShrink === 'number' && input.foldShrink !== 1) {
+        const sh = { s: input.foldShrink, c: logit(typeof input.foldCenter === 'number' ? input.foldCenter : 0.4) };
+        stats.foldShrink = sh; if (statsHU) statsHU.foldShrink = sh;
+      }
       // input.afterCall: false turns READ_PRIORS.home.afterCall off, an object replaces it (simulator).
       if (input.afterCall != null) {
         const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
