@@ -323,7 +323,7 @@ if (require.main === module) {
   const files = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--json');
   const jsonOut = args.includes('--json') ? args[args.indexOf('--json') + 1] : null;
   const anon = args.includes('--anon');
-  const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+  const entries = require('../merge-logs.js').loadHands(files);
   const prof = profileEntries(entries);
   const names = Object.keys(prof).sort((a, b) => prof[b].hands - prof[a].hands);
   const out = {};

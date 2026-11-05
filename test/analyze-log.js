@@ -1,7 +1,6 @@
 // Summarizes an exported hand log: hero's results by kind of spot, and advice followed vs not.
-// Usage: node test/analyze-log.js patio-hand-log.json
-const fs = require('fs');
-const hands = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+// Usage: node test/analyze-log.js <exports or folders...>  (merged by test/merge-logs.js)
+const hands = require('./merge-logs.js').loadHands(process.argv.slice(2));
 const groups = {};
 const add = (k, h) => { const g = groups[k] || (groups[k] = { n: 0, bb: 0 }); g.n++; g.bb += h.heroNetBB || 0; };
 let withNet = 0;

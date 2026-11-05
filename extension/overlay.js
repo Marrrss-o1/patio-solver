@@ -59,7 +59,7 @@
   };
 
   let tracker = null;
-  let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true, showLinks: false };
+  let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true, showLinks: false, showLog: false };
   let status = 'Connecting to the table…';
   let importNote = '', importing = false, restored = false;
   let linkNote = ''; // the last link answer (or why a link was refused)
@@ -177,7 +177,7 @@
       <span class="muted">Table</span>
       <select data-a="style"><option value="tight">Tight</option><option value="typical">Typical</option><option value="loose">Loose</option></select>
       <span class="sp" style="flex:1"></span>
-      <button class="btn" data-a="log">Hand log</button>
+      <button class="btn" data-a="log" title="Download the hands since your last export, one session, or every stored hand">Hand log</button>
       <button class="btn" data-a="links" title="Join the reads of a friend who came back on a new account, or split them again">Link reads</button>
       <button class="btn" data-a="import" title="Load hand-log exports (from an older install) and rebuild the reads from every stored hand">Import</button>
       <button class="btn" data-a="reset">Reset reads</button>
@@ -223,14 +223,10 @@
       ui.collapsed = !ui.collapsed; store.set(UI_KEY, ui); render();
     } else if (what === 'log') {
       if (!tracker) return;
-      // Every stored hand (up to 1,000), not only the 150 the page keeps.
-      handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
-        const url = URL.createObjectURL(new Blob([JSON.stringify(hands, null, 1)], { type: 'application/json' }));
-        const link = document.createElement('a');
-        link.href = url; link.download = 'patio-hand-log.json';
-        root.appendChild(link); link.click(); link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-      });
+      ui.showLog = !ui.showLog; logNote = ''; store.set(UI_KEY, ui);
+      if (ui.showLog) { logView = null; refreshLog(); } else render();
+    } else if (what === 'logNew' || what === 'logAll' || what === 'logSession') {
+      exportLog(what, +a.getAttribute('data-from'), +a.getAttribute('data-to'));
     } else if (what === 'import') {
       if (!tracker || importing) return;
       fileIn.value = '';
@@ -325,6 +321,10 @@
       }
       tracker.absorbLinks(res.db);
       await saveDb();
+      // The imported hands are in files already: "New hands" starts after them (where they cover
+      // every stored hand up to there).
+      await moveMark(got).catch(() => null);
+      if (ui.showLog) refreshLog();
       importNote = `Imported ${add.added} new hand${add.added === 1 ? '' : 's'} (${got.length - fresh.length} already here). Reads rebuilt from ${res.replayed} hands` +
         (res.skipped ? `; ${res.skipped} without raw events only went into the log` : '') + (kept ? `; ${kept} reads with more history kept as they were` : '') + '.';
     } catch (e) {
@@ -332,6 +332,75 @@
     }
     importing = false;
     render();
+  }
+
+  // ---------- hand log export ----------
+  // "Hand log" opens a short list: the hands since the last export, one session, or every stored
+  // hand. Each export used to be every stored hand (612 hands, 20 MB on 5 Nov). The export mark
+  // (handlog.js nextMark) is kept on its own key, apart from the reads.
+  const MARK_KEY = 'patioSolverLogMark';
+  let logView = null; // { times, mark } while the list is open
+  let logNote = '';
+  let exporting = false;
+  const markOf = (m) => (m && typeof m.to === 'number' ? m.to : null);
+  async function refreshLog() {
+    if (!tracker) return;
+    const [times, m] = await Promise.all([handLog.times(tracker.db).catch(() => null), store.get(MARK_KEY)]);
+    logView = times ? { times, mark: markOf(m) } : { error: true };
+    render();
+  }
+  function download(hands) {
+    const name = PatioHandLog.fileName(hands);
+    const url = URL.createObjectURL(new Blob([PatioHandLog.toFile(hands)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = name;
+    root.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return name;
+  }
+  // Moves the mark past the hands just exported or imported, as far as they cover every hand.
+  // Returns the mark (null: none yet).
+  async function moveMark(entries, from) {
+    const [times, m] = await Promise.all([handLog.times(tracker.db), store.get(MARK_KEY)]);
+    const cur = markOf(m);
+    if (!times) return cur;
+    const to = PatioHandLog.nextMark(cur, times, entries, Date.now(), from);
+    if (to != null && to !== cur) await store.set(MARK_KEY, { to, at: Date.now() });
+    return to;
+  }
+  async function exportLog(what, from, to) {
+    if (!tracker || exporting) return;
+    exporting = true; logNote = 'Preparing the file…'; render();
+    try {
+      if (what !== 'logSession') {
+        const mark = what === 'logNew' ? markOf(await store.get(MARK_KEY)) : null;
+        from = mark != null ? mark : -Infinity;
+        to = Infinity;
+      }
+      let hands = await handLog.exportRange(tracker.db, from, to).catch(() => null);
+      let note = '';
+      if (!hands) {
+        hands = (tracker.db.history || []).filter((e) => e.t > from && e.t <= to);
+        note = " The stored hands couldn't be read, so this has only the page's newest 150.";
+      }
+      if (!hands.length) logNote = 'No hands to export.';
+      else {
+        const name = download(hands);
+        const mark = note ? null : await moveMark(hands, from);
+        // The newest hand gets its result when the next hand starts (and shown cards just after
+        // it ends), so until then it goes into the next export too.
+        const last = hands[hands.length - 1].t;
+        const newest = logView && logView.times ? logView.times[logView.times.length - 1] : last;
+        if (!note && (what !== 'logSession' || last === newest) && !(mark >= last)) {
+          note = ' The last hand will be in the next export too, in case its result or shown cards still come in.';
+        }
+        logNote = `Saved ${name}: ${handsTxt(hands.length)}.${note}`;
+      }
+    } catch (e) {
+      logNote = 'Export failed: ' + ((e && e.message) || e);
+    }
+    exporting = false;
+    await refreshLog();
   }
 
   styleSel.addEventListener('change', () => {
@@ -415,6 +484,32 @@
     }
     html += '<div class="muted">Joined reads add both accounts\' hands together; splitting gives each its own hands back. Two accounts that played the same hand can\'t be joined.</div></div>';
     return html;
+  }
+  const when = (t) => new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const hhmm = (t) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  function logHtml() {
+    let html = '<div><div class="sec">Hand log</div>';
+    if (!logView) return html + '<div class="muted">Reading the stored hands…</div></div>';
+    if (logView.error) return html + '<div class="status neg">The stored hands couldn\'t be read. Reload the page.</div></div>';
+    const { times, mark } = logView;
+    const fresh = mark == null ? times.length : times.filter((t) => t > mark).length;
+    html += `<div class="muted">${handsTxt(times.length)} stored on this computer (it keeps the newest ${PatioHandLog.KEEP.toLocaleString('en-US')}).` +
+      (mark == null ? ' Nothing exported with this version yet, so “New hands” is every stored hand. If you already have those, export just the session you\'re missing; new hands start after it.'
+        : ` Exported up to the hand at ${esc(when(mark))}.`) + '</div>';
+    html += '<div class="lk">' + (fresh ? `<button class="btn" data-a="logNew">New hands (${fresh})</button>` : '<span class="muted">No new hands since the last export.</span>') +
+      `<button class="btn" data-a="logAll">Everything (${times.length})</button></div>`;
+    const ss = PatioHandLog.sessions(times).slice(-6).reverse();
+    if (ss.length) {
+      html += '<div class="sec" style="margin-top:6px">Sessions</div>';
+      for (const s of ss) {
+        const end = day(s.from) === day(s.to) ? hhmm(s.to) : day(s.to) + ' ' + hhmm(s.to);
+        const done = mark != null && s.to <= mark ? ' · exported' : '';
+        html += `<div class="lk"><span>${esc(day(s.from) + ' ' + hhmm(s.from) + '–' + end)} · ${handsTxt(s.n)}${done}</span><span style="flex:1"></span>` +
+          `<button class="btn" data-a="logSession" data-from="${s.from - 1}" data-to="${s.to}">Export</button></div>`;
+      }
+    }
+    if (logNote) html += `<div class="status${/failed|couldn't/.test(logNote) ? ' neg' : ''}">${esc(logNote)}</div>`;
+    return html + '</div>';
   }
   const handsOfTally = (r) => { const t = (r && r.tally) || {}; return (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0); };
 
@@ -520,6 +615,7 @@
     }
     if (linkNote) html += `<div class="status">${esc(linkNote)}</div>`;
     if (ui.showLinks) html += linksHtml();
+    if (ui.showLog) html += logHtml();
     const n = tracker ? tracker.readGroups().length : 0;
     html += `<div class="muted">Tracking ${n} player${n === 1 ? '' : 's'}. Reads sharpen as hands pile up.</div>`;
     if (sizing.small) html += `<div class="muted">Bets this session under ${Math.round(SMALL_SIZE * 100)}% of the advised size: ${sizing.small} of ${sizing.n}.</div>`;
@@ -578,6 +674,7 @@
     tracker.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => tracker.poolTally());
     tracker.fitVersion = PokerEngine.FIT_VERSION;
     if (restored) saveDb();
+    if (ui.showLog) refreshLog();
     // Shows saved before v1.8.9 don't say whether hero was in the pot, which the learned hero-pot tilt needs: they
     // are filled in once from every stored hand, so the tilt starts from the table's history instead of from 0.
     if (!tracker.db.hpTagged) {
@@ -592,6 +689,7 @@
       if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }
       if (type === 'turn') { /* handled below with payload */ }
       if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }
+      if (type === 'handEnd' && ui.showLog && local.keys) refreshLog();
       if (type === 'action') checkSize();
       if (type === 'action' || type === 'street' || type === 'cards' || type === 'linkAsk') render();
     });
