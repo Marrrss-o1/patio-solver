@@ -485,7 +485,7 @@ test('reads: vsOpen counts the response to a single open by its size', () => {
   assert.ok(st.vsOpen.large.cont < 0.2 && st.vsOpen.small.cont > 0.5, JSON.stringify(st.vsOpen));
 });
 
-test('reads: answers to 8bb+ opens and shoves are kept apart from 4bb opens (vsOpenSplit, v1.8.20)', () => {
+test('reads: answers to 8bb+ opens and shoves are kept apart from 4bb opens (vsOpenSplit, v1.8.20, off by default)', () => {
   // A 10bb shove answered: counted in 'huge', not in 'large'.
   const t = new T({ players: {} });
   const snap = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
@@ -505,11 +505,14 @@ test('reads: answers to 8bb+ opens and shoves are kept apart from 4bb opens (vsO
   const f = (n) => ({ fold: n, call: 0, raise: 0 }), c = (n) => ({ fold: 0, call: n, raise: 0 });
   const tally = Object.assign(T.blankTally(), { pfBigOpp: 20, pfBigCall: 0, vsOpen: { small: f(0), medium: f(0), large: c(20), huge: f(20) } });
   const st = E.computeStats(tally, 'typical');
-  const open4 = E.predictAction(st, { kind: 'vo', toBB: 4 }), shove = E.predictAction(st, { kind: 'vo', toBB: 15 });
+  const open4 = E.predictAction(st, { kind: 'vo', toBB: 4, vsOpenSplit: true }), shove = E.predictAction(st, { kind: 'vo', toBB: 15, vsOpenSplit: true });
   assert.ok(open4.fold < 0.25, JSON.stringify(open4));
   assert.ok(shove.fold > 0.75, JSON.stringify(shove));
-  // The old single bucket ('largeAll', input.vsOpenSplit: false) mixes the two.
+  // The old single bucket ('largeAll', the default) mixes the two.
   assert.ok(st.vsOpen.largeAll.cont > 0.35 && st.vsOpen.largeAll.cont < 0.65, JSON.stringify(st.vsOpen.largeAll));
+  const off4 = E.predictAction(st, { kind: 'vo', toBB: 4 }), offFalse = E.predictAction(st, { kind: 'vo', toBB: 4, vsOpenSplit: false });
+  assert.deepStrictEqual(off4, offFalse);
+  assert.ok(off4.fold > open4.fold + 0.2, JSON.stringify(off4));
 });
 
 test('reads: a bet that then calls a raise reads stronger than a plain bet', () => {

@@ -746,7 +746,7 @@ function ENGINE() {
     };
     const voX = (key) => Object.assign({ fold: 0, call: 0, raise: 0 }, vo[key] || {});
     for (const key of ['small', 'medium', 'large']) stats.vsOpen[key] = voRate(voX(key), key);
-    // 'large' with the 8bb+ answers added back: the bucket as it was before v1.8.20 (input.vsOpenSplit: false).
+    // 'large' with the 8bb+ answers added back: the bucket as it was before v1.8.20, read by default (vsOpenSplit off).
     const lg = voX('large'), hg = voX('huge');
     stats.vsOpen.largeAll = voRate({ fold: lg.fold + hg.fold, call: lg.call + hg.call, raise: lg.raise + hg.raise }, 'large');
 
@@ -973,7 +973,7 @@ function ENGINE() {
     }
     if (d.kind === 'vo') {
       // First response to an open raise to d.toBB big blinds, as the preflop solver reads it.
-      const r = vsOpenRead(stats, d.toBB) || { cont: stats.vpip, threeBet: stats.threeBet };
+      const r = vsOpenRead(stats, d.toBB, d.vsOpenSplit) || { cont: stats.vpip, threeBet: stats.threeBet };
       return { fold: 1 - r.cont, call: r.cont - r.threeBet, raise: r.threeBet };
     }
     const bs = stats.byStreet[d.n] || stats;
@@ -1784,16 +1784,18 @@ function ENGINE() {
   // A player's learned response to an open raise to `toBB` big blinds (stats.vsOpen, when the
   // reads have it: { small, medium, large } by raise-to size, each { cont, threeBet }), with
   // big raises still called at least at callBig. Null when there is no such read.
-  // split (input.vsOpenSplit, on unless false, v1.8.20): opens of 8bb or more (shoves included) are read with callBig,
+  // split (input.vsOpenSplit: true, off by default, v1.8.20): opens of 8bb or more (shoves included) are read with callBig,
   // the big-raise call rate, and the 'large' bucket holds only opens under 8bb. Friends answer them very differently
   // (all logs to 5 Nov, first answers: 3.5-5bb fold 49%, n 205; 5-8bb 54%, n 67; 8-15bb 65%, n 17; 15-30bb 71%, n 14;
   // 30bb+ 89%, n 28), and with one bucket a heads-up session's shoves and 4bb opens averaged out (5 Nov: 4bb opens read
   // as folded 69%, actual 51%; shoves 68%, actual 88%). From 5bb the large rate blends into callBig, all callBig at 8bb.
-  // Reads benchmark, every log: vs-open log-loss 0.932 -> 0.923. split false: the old single bucket ('largeAll').
+  // Reads benchmark, every log: vs-open log-loss 0.932 -> 0.923; simulator neutral (pooled +1.0 ± 2.3 over five runs,
+  // the bots re-raise big opens as often as small ones, the friends don't), so it is off. Off: the old single bucket
+  // ('largeAll', bit-identical to v1.8.19).
   function vsOpenRead(stats, toBB, split) {
     const vo = stats && stats.vsOpen;
     if (!vo || !(toBB > 0)) return null;
-    const old = split === false;
+    const old = split !== true;
     const b = toBB <= 2.5 ? vo.small : toBB <= 3.5 ? vo.medium : old && vo.largeAll ? vo.largeAll : vo.large;
     if (!b || b.cont == null) return null;
     const big = clamp((toBB - 4) / 4, 0, 1), callBig = stats.callBig != null ? stats.callBig : 0.25;
