@@ -1206,7 +1206,7 @@
   }
 
   const WAR_MIX = 2.2;
-  function preflopRange(stats, action, sizePre, bigWidth) {
+  function preflopRange(stats, action, sizePre, bigWidth, shoveWidth) {
     const cw = new Float64Array(169);
     let raiseWidth = 1; // re-raising range width, for the floor below
     if (action === 'raise') {
@@ -1233,6 +1233,12 @@
         const v = Math.max(0.05, stats.vpip), ord = topClassWeights(v);
         const mix = clamp(WAR_MIX * stats.pfr / v, 0.1, 1);
         for (let i = 0; i < 169; i++) cw[i] = Math.min(1, cw[i] + mix * (w / v) * ord[i]);
+      }
+      // All-in re-raises (SHOVE_RANGE): the narrow range plus everything in the shove width.
+      if (shoveWidth != null && shoveWidth > w) {
+        const wide = topClassWeights(shoveWidth);
+        for (let i = 0; i < 169; i++) cw[i] = Math.max(cw[i], wide[i]);
+        raiseWidth = shoveWidth;
       }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
@@ -1553,10 +1559,15 @@
   function bigRaiseLine(sizes, br) {
     return !!br && !!sizes && sizes.preTo >= br.toBB && sizes.preBehind != null && sizes.preBehind >= br.behind * sizes.preTo;
   }
+  // A preflop re-raise that puts the player all-in, or leaves under SHOVE_RANGE.behind of the raise-to behind.
+  function reraiseShove(pre, sizes, sr) {
+    return !!sr && /^\dbet$/.test(pre || '') && !!sizes && sizes.preTo > 0 && sizes.preBehind != null && sizes.preBehind <= sr.behind * sizes.preTo;
+  }
 
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
     const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
-    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre, bigRaiseLine(sizes, stats.bigRaise) ? stats.bigRaise.width : null);
+    const shove = reraiseShove(actions.pre, sizes, stats.shoveRange) ? Math.max(pre.vpip * stats.shoveRange.vpip, stats.shoveRange.min) : null;
+    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre, bigRaiseLine(sizes, stats.bigRaise) ? stats.bigRaise.width : null, shove);
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
@@ -1772,12 +1783,24 @@
       // raiser faces a re-raise in a hand (45 spots), they fold 3% below 35bb (n 39) and call or re-raise about half each
       // (min-raise wars). The reads' foldTo3bet / fourBet (home prior 13% / 50%) carry that; the rule below had them
       // folding 30-45% and re-raising about 12%. Bigger re-raises keep the rule below: letting the read fade with the size
-      // (friends folded all 6 re-raises above 35bb) had the preflop solver open 95% of hands and 4-bet bluff to 35bb+
-      // against bots that never adapt.
-      if (raised && ctx.raisedRead && s.foldTo3bet != null && kind.amount + (ctx.heroBet || 0) <= 30 * ctx.bigBlind + 1e-9) {
+      // all the way down (to 22% at 50bb+) had the preflop solver open 95% of hands and 4-bet bluff to 35bb+ against bots
+      // that never adapt.
+      // input.pfRaisedReadBB (v1.8.17; PF_RAISED_READ_BB, 30 = the step at 30bb) above 30 fades the read into the rule
+      // below from 30bb, gone at that raise-to. The step moves 4-bet EVs by up to 8bb a chip either side of it (multiway
+      // AKo on 1 Nov: a re-raise to 29.5bb +55.6, to 30.5bb +38.7 chips, as the raiser went from continuing 93% /
+      // re-raising 36% to 72% / 11%). Friends continued against all 5 re-raises to 30-45bb (2 re-raised) and folded to 7
+      // of 9 above 45bb. With 45, 22 of 1,017 logged decisions change, all preflop and nearly all near-ties among open sizes
+      // (through the solver's 4-bets deeper in the tree); it waits for the simulator.
+      let readR = null, wRead = 0;
+      const raiseToBB = (kind.amount + (ctx.heroBet || 0)) / ctx.bigBlind;
+      const readHi = ctx.raisedReadBB != null ? Math.max(30, +ctx.raisedReadBB) : PF_RAISED_READ_BB;
+      if (raised && ctx.raisedRead && s.foldTo3bet != null && raiseToBB < readHi + 1e-9) {
         const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97);
-        return { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
+        readR = { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
+        wRead = raiseToBB <= 30 + 1e-9 || readHi <= 30 ? 1 : clamp((readHi - raiseToBB) / (readHi - 30), 0, 1);
+        if (wRead >= 1) return readR;
       }
+      const withRead = (r) => (readR && wRead > 0 ? { cont: wRead * readR.cont + (1 - wRead) * r.cont, nut: r.nut, reraise: wRead * readR.reraise + (1 - wRead) * r.reraise } : r);
       // A player with a third or more of their stack already in continues (input.pfCommitCall: false for the old rule):
       // raisers since v1.8.15, callers since v1.8.16. On #390 Jagger had raised to 131bb of 255bb and needed 24% to call
       // hero's shove, and the rule below had him folding 23%; on 1 Nov he had called Dew666's 32bb open with 92bb (a
@@ -1793,15 +1816,15 @@
         const lo = ctx.pfCommitRamp === false ? 1 / 3 : PF_COMMIT_RAMP[0], hi = PF_COMMIT_RAMP[1];
         commitW = c >= hi - 1e-12 ? 1 : lo < hi && c > lo ? (c - lo) / (hi - lo) : 0;
       }
-      if (commitW >= 1) return { cont: 0.97, nut: 0.965, reraise: 0.11 };
+      if (commitW >= 1) return withRead({ cont: 0.97, nut: 0.965, reraise: 0.11 });
       // Callers (mostly limpers) continue at their learned rate against a raise.
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const fadeC = fade + (1 - fade) * inW;
       const floor = Math.max(big * fadeC * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6)), 0.75 * inW);
       const cont0 = clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), rr0 = 0.2 * base;
-      if (commitW > 0) return { cont: Math.max(cont0, cont0 + commitW * (0.97 - cont0)), nut: 0.965, reraise: rr0 + commitW * (0.11 - rr0) };
-      return { cont: cont0, nut: 0.965, reraise: rr0 };
+      if (commitW > 0) return withRead({ cont: Math.max(cont0, cont0 + commitW * (0.97 - cont0)), nut: 0.965, reraise: rr0 + commitW * (0.11 - rr0) });
+      return withRead({ cont: cont0, nut: 0.965, reraise: rr0 });
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
     let fold = foldAtSize(s, f, ctx.street);
@@ -1976,6 +1999,19 @@
   // A4o against his 102bb open (shove -> fold) and 1 Nov's AJo against Dew666's 32bb open (shove -> raise, a tie). The
   // friend bots never raise that big with chips behind, so the simulator can't judge it; Marwin chose it on the logs.
   const BIG_RAISE_RANGE = { width: 0.12, toBB: 30, behind: 0.25 };
+  // All-in preflop re-raises read wide (v1.8.17, SHOVE_RANGE; input.shoveRange: false turns it off, a number sets the share
+  // of the player's VPIP): a 3-bet, 4-bet or 5-bet that leaves under a tenth of the raise-to behind is read as the narrow
+  // re-raise range plus the top `vpip` x VPIP of hands (at least `min`). Friends' shown all-in re-raises (31 Oct - 4 Nov,
+  // reads from earlier hands): Jagger Q6o (25bb), Dew666 J8o (39bb) and T9o (17.5bb), etestraight A2s (36.5bb),
+  // jamaleatkid ATo (50bb), each at about the 0.04-0.06 quantile of the re-raise read; log-likelihood against a random
+  // guess -7.1 nats over the five, +1.8 at 0.7 x VPIP (the best of 0.3-1.5). Hero calls those shoves with the read's
+  // equity: heads-up after a late open, with a 0.65-VPIP player shoving from the big blind, the narrow read cost about
+  // 1.0 / 1.6 / 2.1 / 3.2 / 4.8bb a shove faced at 15 / 25 / 40 / 60 / 100bb (folds that should call). It changes none of
+  // the 7 logged hero decisions facing an all-in re-raise. The friend bots re-raise by hand strength, so the simulator
+  // would score their shoves as tight as the old read.
+  const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
+  // Raise-to (bb) where a raiser's own read of re-raises has faded into continueRule's old rule (see continueRule).
+  const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
   // River bettors facing hero's raise fold at least this share of their betting range (riverSolve; off: input.riverRaiseFold
@@ -4834,7 +4870,7 @@
           cont = r.cont; raise = r.raise;
         } else {
           const mdf = (potNow - facing) / potNow;
-          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead }, mdf, { amount: hIn });
+          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead, raisedReadBB: cfg.raisedReadBB }, mdf, { amount: hIn });
           cont = rule.cont; raise = Math.min(rule.reraise, rule.cont);
         }
       }
@@ -5251,6 +5287,7 @@
     const RRF = input.riverRaiseFold === true ? RIVER_RAISE_FOLD : typeof input.riverRaiseFold === 'number' ? input.riverRaiseFold : 0;
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
+    const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5295,6 +5332,7 @@
       if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
+      if (shr) { stats.shoveRange = shr; if (statsHU) statsHU.shoveRange = shr; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -5350,8 +5388,12 @@
       scenarios.push(s);
     };
 
+    // Preflop all-in is on the menu up to input.pfShoveBB (25bb) or 3 pots (v1.8.17 option, for the simulator). The step
+    // is big where it bites: 2 Nov, TT in late position with 25.5bb behind a limper, best raise +9.5 chips; with a chip less
+    // the shove is offered at +23.0. 15 of 499 logged preflop decisions had 25-40bb and no all-in on the menu.
+    const pfShoveBB = input.pfShoveBB != null ? +input.pfShoveBB : 25;
     const shoveMakesSense = isFinite(stack) && (street === 0
-      ? stack <= 25 * bigBlind || stack <= 3 * (pot + toCall)
+      ? stack <= pfShoveBB * bigBlind || stack <= 3 * (pot + toCall)
       : stack <= 2.5 * (pot + toCall));
 
     if (toCall <= 0) {
@@ -5390,7 +5432,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -6277,7 +6319,7 @@
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false,
+        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
         implied: +input.pfImplied || 0, flopEdge: input.pfFlopEdge === false ? 0 : input.pfFlopEdge != null ? +input.pfFlopEdge : PF_FLOP_EDGE,
