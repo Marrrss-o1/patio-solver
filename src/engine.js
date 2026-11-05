@@ -1976,6 +1976,15 @@
   // simulator (live budget, v7 bots, on vs off) was flat: 4-handed -4.9 ± 15.3 and +5.5 ± 15.6, 5-handed +2.6 ± 8.6,
   // heads-up -11.9 ± 17.3; the raises it turns into calls, valued on the bots' real hands, +1.1 ± 3.2 bb/100.
   const RIVER_RAISE_FOLD = 0.5;
+  // Made hands call hero's river bets (input.riverMadeCall: false turns it off, a number sets the strength): facing a
+  // bet from hero on the river, a hand that beats at least this share of all hands on the board continues, whatever its
+  // place in the read's range. Friends' river folds against each other follow the read (heads-up n 154, predicted .47,
+  // folded .46; where the read needs made hands to fold, .57 vs .64), but against hero they fold by absolute strength:
+  // heads-up n 30, read .51 vs .47 overall, .57 vs .29 where made hands had to fold (n 17), .44 vs .69 where folding the
+  // weak hands was enough (n 13); size does not move them (under 45% pot .54, 45-85% .43, 85%+ .40; read .37/.54/.67).
+  // Every heads-up caller shown had a hand beating 59%+ of all hands (second pair or better). Fit on those 30: the read's
+  // rule AIC 43.5, the read with this floor at 0.55-0.6 31.7, folding exactly the hands under 0.55 26.8.
+  const RIVER_MADE_CALL = 0.55;
   // The tilt the table's shows ask for. hps (the tracker's heroPotShows): summed TILTS log-likelihoods (scoreShow's
   // tl) of shows after a flop the player did not bet or raise, by players who put 15bb+ in: `hi` in hero's pots, `ho`
   // in pots hero had left. The tilt that fits hero's pots is measured on top of the one that fits the rest (`base`,
@@ -2849,6 +2858,13 @@
 
     // Opponent's strength quantile inside their own range (for the read's strategy).
     const qO = rangeQuantiles(oppW, strengths.hs);
+    // Share of all hands on this board that each hand beats (cfg.madeCall, RIVER_MADE_CALL).
+    let qAll = null;
+    if (cfg.madeCall > 0) {
+      const U = new Float64Array(NUM_COMBOS);
+      for (const k of idx) U[k] = 1;
+      qAll = rangeQuantiles(U, strengths.hs);
+    }
     const ties = boardPlayers(board);
 
     // Blocker-aware showdown masses: for each hand, the other side's reach that is below,
@@ -2944,6 +2960,8 @@
             pCont = q >= 1 - bf * vrB ? 1 : q < bf * (1 - vrB) ? 0.1 : 0.5;
           } else {
             pCont = sigmoid((q - foldCut) / 0.04);
+            // Facing hero's bet, made hands call whatever the read's cut (RIVER_MADE_CALL).
+            if (qAll) pCont = 1 - (1 - pCont) * sigmoid((cfg.madeCall - qAll[idx[i]]) / 0.03);
           }
           // A short raise folds no more of the range than a bet of the same price would: an all-in for a chip
           // more than the call (4 Nov log, QQ facing 40 into 208 with 41 behind) was folded to like a full raise.
@@ -3201,12 +3219,31 @@
     const norm = tot[h0] > 0 ? tot[h0] : 1;
     let t = 0;
     for (let a = 0; a < root.acts.length; a++) t += root.sum[a * S + h0];
+    // The opponent's chance to fold to each of hero's root bets (their average strategy over
+    // their range, without hands that share a card with hero's): a readout, not used by the advice.
+    const foldOf = (kid) => {
+      if (!kid || kid.term || kid.player !== 1) return null;
+      const fi = kid.acts.findIndex((a) => a.kind === 'fold');
+      if (fi < 0) return null;
+      const nA = kid.acts.length, sum = kid.sum;
+      let w = 0, f = 0;
+      for (let i = 0; i < N; i++) {
+        if (hi[i] === hi[h0] || hi[i] === lo[h0] || lo[i] === hi[h0] || lo[i] === lo[h0]) continue;
+        const r = wO[i];
+        if (!(r > 0)) continue;
+        let tt = 0;
+        for (let a = 0; a < nA; a++) tt += sum[a * S + i];
+        w += r; f += r * (tt > 0 ? sum[fi * S + i] / tt : 1 / nA);
+      }
+      return w > 0 ? f / w : null;
+    };
     return {
       iterations,
       actions: root.acts.map((a, j) => ({
         kind: a.kind, amount: a.amount, frac: a.frac,
         freq: t > 0 ? root.sum[j * S + h0] / t : 1 / root.acts.length,
         ev: root.vals[j][h0] / norm,
+        foldP: foldOf(root.kids[j]),
       })),
     };
   }
@@ -5238,6 +5275,7 @@
     const heroPotRamp = hpt && street > 0 && street >= (hpt.street || 3)
       ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
     const RRF = input.riverRaiseFold === true ? RIVER_RAISE_FOLD : typeof input.riverRaiseFold === 'number' ? input.riverRaiseFold : 0;
+    const RMC = input.riverMadeCall === false ? 0 : typeof input.riverMadeCall === 'number' ? input.riverMadeCall : RIVER_MADE_CALL;
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
@@ -6055,6 +6093,8 @@
 
     // Heads-up river: solve range against range instead of trusting the Monte Carlo alone.
     // (Parallel runs can hand in solves done by the workers instead: input.solvedMerge.)
+    // Analysis scripts (test/river-folds.js): input.inspect sees each opponent's read and range. Not used by the advice.
+    if (typeof input.inspect === 'function') input.inspect({ opps, strengths, board, potWin, aggScaleOf, rangeQuantiles, COMBO_HI, COMBO_LO });
     let solved = mergeSolved(input.solvedMerge);
     if (solved) target = Math.min(target, 6000);
     if (!solved && street === 5 && opps.length === 1 && input.riverSolver !== false && stack > 0) {
@@ -6066,7 +6106,7 @@
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF,
+        aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF, madeCall: RMC,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
         iterations: input.riverIterations,
@@ -6210,7 +6250,7 @@
             return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
           },
           p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1, raiseFold: RRF,
+          aggScale: opps.some((x) => x.aggroFold) ? aggScaleOf(o.stats) : 1, raiseFold: RRF, madeCall: RMC,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending),
           iterations: input.riverIterations,
@@ -6468,7 +6508,7 @@
         }
       }
       const acts = solvedActs.map((a) => ({
-        kind: a.kind, amount: a.amount, ev: a.ev, se: 0, freq: a.freq,
+        kind: a.kind, amount: a.amount, ev: a.ev, se: 0, freq: a.freq, foldP: a.foldP,
         label: a.label || (a.kind === 'allin' ? (a.amount <= toCall + 1e-9 ? 'Call all-in' : 'All-in') : name[a.kind]),
         sizeLabel: a.sizeLabel != null ? a.sizeLabel : a.frac && a.kind !== 'allin'
           ? (a.kind === 'raise' ? (a.frac < 0.8 ? 'small raise' : a.frac > 1.25 ? 'big raise' : 'pot-size raise') : Math.round(a.frac * 100) + '% pot') : '',

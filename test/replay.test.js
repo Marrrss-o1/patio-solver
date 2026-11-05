@@ -1044,7 +1044,8 @@ test('river solver: a player who bet earlier and then checks folds like anyone e
   // street and then check fold more than their read, not less, so the old fold-after-aggression scale
   // ('all') no longer applies once they checked on this street.
   const betEV = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet').map((s) => s.ev));
-  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3, heroPotTilt: false,
+  // riverMadeCall off: with it, made hands call whatever the scale, so the scale only moves the weakest hands.
+  const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3, heroPotTilt: false, riverMadeCall: false,
     opponents: [Object.assign({ name: 'V', tally: {}, pfAggressor: true }, opp)], heroActions }, extra));
   const gaveUp = (extra) => spot({ actions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, sizes: { flop: 0.5 } },
     { pre: 'call', flop: 'call', turn: 'check' }, Object.assign({ inPosition: true }, extra));
@@ -2113,6 +2114,27 @@ test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10b
     iterations: 500, mix: false, seed: 1 }, extra)).heroPot.ramp;
   assert.strictEqual(flop({}), 1);
   assert.strictEqual(flop({ heroPotTilt: { street: 4 } }), 0);
+});
+
+test('riverMadeCall: made hands call hero\'s river bets, so bluffs into a strong range lose their folds (false: off)', () => {
+  // A player who check-called the flop and the turn: most of their range has a pair or better by the river.
+  const spot = (hero, extra) => riverSpot(hero, Object.assign({ toCall: 0, pot: 200, seed: 5, heroPotTilt: false, inPosition: true,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'checkcall', river: 'check' }, sizes: {} }],
+    heroActions: { pre: 'raise', flop: 'bet', turn: 'bet' }, riverIterations: 300 }, extra));
+  const pot = (r) => r.ranked.find((s) => s.kind === 'bet' && s.amount === 200) || r.ranked.find((s) => s.kind === 'bet' || s.kind === 'allin');
+  const on = E.analyzeSync(spot('Qs Js')), off = E.analyzeSync(spot('Qs Js', { riverMadeCall: false }));
+  assert.ok(pot(off).foldP > pot(on).foldP + 0.1, `fold ${pot(off).foldP} -> ${pot(on).foldP}`);
+  assert.ok(pot(on).ev < pot(off).ev - 0.05 * 200, `bluff EV ${pot(off).ev} -> ${pot(on).ev}`);
+  // A bar no hand reaches (nothing counts as made) is the read as before.
+  const strict = E.analyzeSync(spot('Qs Js', { riverMadeCall: 2 }));
+  assert.ok(Math.abs(pot(strict).foldP - pot(off).foldP) < 1e-9 && Math.abs(pot(strict).ev - pot(off).ev) < 1e-9);
+  // Value: the same made hands pay off, so a strong hand's bet is worth more.
+  const vOn = E.analyzeSync(spot('Ah Ad')), vOff = E.analyzeSync(spot('Ah Ad', { riverMadeCall: false }));
+  assert.ok(pot(vOn).ev > pot(vOff).ev, `value ${pot(vOff).ev} -> ${pot(vOn).ev}`);
+  // Facing a bet (hero's raise is a raise, not a bet): the made-hand floor does not apply to the raised bettor.
+  const facing = (extra) => E.analyzeSync(riverSpot('Qs Js', Object.assign({ seed: 5, heroPotTilt: false }, extra)));
+  const rOn = facing().ranked.find((s) => s.kind === 'raise' || s.kind === 'allin'), rOff = facing({ riverMadeCall: false }).ranked.find((s) => s.kind === 'raise' || s.kind === 'allin');
+  assert.ok(Math.abs(rOn.foldP - rOff.foldP) < 1e-9, `${rOn.foldP} ${rOff.foldP}`);
 });
 
 test('overbetTilt: river bets and raises of 3x pot or more read stronger, not other streets or sizes (false: off)', () => {
