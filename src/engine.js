@@ -1784,15 +1784,24 @@
       // third in) and was read folding 56-73% to hero's re-raise, then called it with Q5o. Friends with a third or more
       // of their stack in called all 3 such logged spots. Raisers change no logged decision on their own (the #390 shove
       // 65 -> 53bb); callers change one (that 1 Nov AJo: raise to 128bb, tied with the shove -> all-in +46bb vs +29bb).
-      if (ctx.pfCommitCall !== false && opp.committed != null && opp.behind != null && opp.committed >= (opp.committed + opp.behind) / 3) {
-        return { cont: 0.97, nut: 0.965, reraise: 0.11 };
+      // Since v1.8.18 the rule ramps in from a fifth of the stack in (PF_COMMIT_RAMP; input.pfCommitRamp: false for the
+      // old step at a third): the step moved a logged re-raise's EV by 14.6bb for one chip (leak hunt, 5 Nov). Friends
+      // with 15-20% in continued 1 of 3 times, 20-33% 1 of 1, a third or more 3 of 3.
+      let commitW = 0;
+      if (ctx.pfCommitCall !== false && opp.committed != null && opp.behind != null && opp.committed + opp.behind > 0) {
+        const c = opp.committed / (opp.committed + opp.behind);
+        const lo = ctx.pfCommitRamp === false ? 1 / 3 : PF_COMMIT_RAMP[0], hi = PF_COMMIT_RAMP[1];
+        commitW = c >= hi - 1e-12 ? 1 : lo < hi && c > lo ? (c - lo) / (hi - lo) : 0;
       }
+      if (commitW >= 1) return { cont: 0.97, nut: 0.965, reraise: 0.11 };
       // Callers (mostly limpers) continue at their learned rate against a raise.
       const base = raised ? 0.55 : s.limpFold != null ? clamp(1 - s.limpFold, 0.15, 0.85) : 0.5;
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const fadeC = fade + (1 - fade) * inW;
       const floor = Math.max(big * fadeC * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6)), 0.75 * inW);
-      return { cont: clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), nut: 0.965, reraise: 0.2 * base };
+      const cont0 = clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), rr0 = 0.2 * base;
+      if (commitW > 0) return { cont: Math.max(cont0, cont0 + commitW * (0.97 - cont0)), nut: 0.965, reraise: rr0 + commitW * (0.11 - rr0) };
+      return { cont: cont0, nut: 0.965, reraise: rr0 };
     }
     const f = 1 / Math.max(0.05, mdf) - 1;
     let fold = foldAtSize(s, f, ctx.street);
@@ -1967,6 +1976,8 @@
   // A4o against his 102bb open (shove -> fold) and 1 Nov's AJo against Dew666's 32bb open (shove -> raise, a tie). The
   // friend bots never raise that big with chips behind, so the simulator can't judge it; Marwin chose it on the logs.
   const BIG_RAISE_RANGE = { width: 0.12, toBB: 30, behind: 0.25 };
+  // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
+  const PF_COMMIT_RAMP = [0.2, 1 / 3];
   // River bettors facing hero's raise fold at least this share of their betting range (riverSolve; off: input.riverRaiseFold
   // true turns it on, a number sets the share). The read's rule folds only the bluffs, 0.9 x (1 - value share), 25-35%.
   // In the logs (31 Oct - 4 Nov) river bettors who got raised folded 14 of 28 (raised by hero 4 of 7, by a friend 10 of
@@ -5379,7 +5390,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }

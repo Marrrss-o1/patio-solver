@@ -594,6 +594,7 @@ test('preflop: a player with a quarter of the raise-to in is not faded by the bi
     hero: C('As 5s'), board: [], pot: 103, toCall: 60, stack: 280, bigBlind: 2, inPosition: true,
     opponents: [{ name: 'V', tally, actions: { pre: '3bet' }, committed: 80, stack: 220, bet: 80, position: 'late' }],
     heroActions: { pre: 'raise' }, heroBet: 20, heroCommitted: 20, iterations: 4000, preflopSolver: false, mix: false, seed: 1,
+    pfCommitRamp: false, // a quarter of their stack in: the ramp (v1.8.18) would already move "off" halfway
   }, extra || {});
   const shove = (r) => r.ranked.find((s) => s.kind === 'allin');
   const on = E.analyzeSync(input({ pfCommit: true })), off = E.analyzeSync(input());
@@ -2178,6 +2179,24 @@ test('pfCommitCall: a preflop raiser or caller with a third of their stack in ca
   assert.ok(caller(64, 120) >= 0.95, 'a caller with a third of the stack in calls');
   assert.ok(caller(64, 120, { pfCommitCall: false }) < 0.9);
   assert.ok(caller(64, 900) < 0.9, 'a deep caller: the usual rule');
+});
+
+test('pfCommitRamp: between a fifth and a third of the stack in, the call rate ramps up to the committed one (false: the old step)', () => {
+  const spot = (committed, stack, extra) => E.analyzeSync(Object.assign({
+    hero: C('Ah 9h'), board: [], pot: committed + 3, toCall: committed - 2, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, sizes: { pre: committed / 2 - 1 }, pfAggressor: true, position: 'early', committed, stack, bet: committed, heroIP: true }],
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+  }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[0].cont;
+  // A quarter in: above the old rule, below a committed player's call.
+  const q = spot(120, 360), qOld = spot(120, 360, { pfCommitRamp: false });
+  assert.ok(q > qOld + 0.1 && q < 0.95, `quarter ${q} old ${qOld}`);
+  // Just under a third: nearly the committed rate, where the old rule jumped from qOld-like to 0.97.
+  const t = spot(120, 250), tOld = spot(120, 250, { pfCommitRamp: false });
+  assert.ok(t > 0.9 && t < 0.97 && tOld < 0.9, `third ${t} old ${tOld}`);
+  // Under a fifth, or a third and more: as before.
+  near(spot(60, 450), spot(60, 450, { pfCommitRamp: false }));
+  near(spot(262, 248), spot(262, 248, { pfCommitRamp: false }));
 });
 
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {
