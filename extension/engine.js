@@ -1244,12 +1244,29 @@
         for (let i = 0; i < 169; i++) cw[i] = Math.max(cw[i], wide[i]);
         raiseWidth = shoveWidth;
       }
-      // Deep all-in re-raises (DEEP_SHOVE, off by default): blended by deep.g toward the part of the range inside the
-      // top deep.width of hands.
+      // Deep all-in re-raises (DEEP_SHOVE, off by default): blended by deep.g (the depth ramp) toward the part of the
+      // range inside the top deep.width of hands. deep.t (the player's trust, deepShoveTrust) is the chance that this
+      // player's deep shoves are that tight kind: the range is the mix of the two reads as hand distributions (each
+      // normalized), so a trust of 0.35 gives the tight read 35% of the range's mass, not 35% of its weights.
       if (deep && deep.g > 0) {
-        const cap = topClassWeights(deep.width);
-        for (let i = 0; i < 169; i++) cw[i] = (1 - deep.g) * cw[i] + deep.g * Math.min(cw[i], cap[i]);
-        raiseWidth = (1 - deep.g) * raiseWidth + deep.g * Math.min(raiseWidth, deep.width);
+        const cap = topClassWeights(deep.width), t = deep.t != null ? clamp(deep.t, 0, 1) : 1;
+        const rwT = (1 - deep.g) * raiseWidth + deep.g * Math.min(raiseWidth, deep.width);
+        if (t >= 1) {
+          for (let i = 0; i < 169; i++) cw[i] = (1 - deep.g) * cw[i] + deep.g * Math.min(cw[i], cap[i]);
+          raiseWidth = rwT;
+        } else if (t > 0) {
+          const tw = new Float64Array(169);
+          let mW = 0, mT = 0;
+          for (let i = 0; i < 169; i++) {
+            tw[i] = (1 - deep.g) * cw[i] + deep.g * Math.min(cw[i], cap[i]);
+            mW += CLASS_COMBO_COUNT[i] * cw[i]; mT += CLASS_COMBO_COUNT[i] * tw[i];
+          }
+          const k = mT > 0 ? t * mW / mT : 0;
+          let mx = 0;
+          for (let i = 0; i < 169; i++) { cw[i] = (1 - t) * cw[i] + k * tw[i]; if (cw[i] > mx) mx = cw[i]; }
+          if (mx > 1) for (let i = 0; i < 169; i++) cw[i] /= mx;
+          raiseWidth = (1 - t) * raiseWidth + t * rwT;
+        }
       }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
@@ -1660,11 +1677,11 @@
   // How far a deep all-in re-raise has moved toward DEEP_SHOVE's tight read: 0 up to ds.from big blinds, 1 from ds.to.
   // The depth is the raise-to, capped by the most chips any other player still in had at the start of the hand
   // (sizes.preCover, from the tracker since v1.8.23): a big stack shoving into short ones risks only theirs.
-  // ds.trust (deepShoveTrust) scales it per player.
+  // ds.trust (deepShoveTrust) is how likely this player's deep shoves are the tight kind (preflopRange's deep.t).
   const deepRamp = (to, cover, ds) => clamp(((cover != null ? Math.min(to, cover) : to) - ds.from) / Math.max(1e-9, ds.to - ds.from), 0, 1);
   function deepShoveBlend(sizes, ds) {
-    const g = deepRamp(sizes.preTo, sizes.preCover, ds) * (ds.trust != null ? ds.trust : 1);
-    return g > 0 ? { g, width: ds.width } : null;
+    const g = deepRamp(sizes.preTo, sizes.preCover, ds), t = ds.trust != null ? ds.trust : 1;
+    return g > 0 && t > 0 ? { g, width: ds.width, t } : null;
   }
   // How far a player's own shown all-in re-raises (tally.jamShows, from the tracker since v1.8.26) say their deep ones
   // are the tight kind: the prior odds (ds.prior) times, for each of the newest 10 shows deep enough to count, the
