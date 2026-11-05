@@ -64,6 +64,8 @@ function answers(H) {
     const queue = P.map((p) => log.filter((e) => e.who === p.name && e.act !== 'sb' && e.act !== 'bb'));
     // Raises before the flop (0: limped or checked, 1: one raise, 2: re-raised).
     const pfRaises = log.filter((e) => e.st === 'pre' && KIND[e.act] === 'raise').length;
+    // The last raiser before the flop (a bet by them after the flop is a continuation bet).
+    const pfAgg = (log.filter((e) => e.st === 'pre' && KIND[e.act] === 'raise').pop() || {}).who || null;
     const mine = [];
     let fail = false;
     const seats = P.map((p, i) => ({ rangeAware: true, policy(v) {
@@ -78,7 +80,7 @@ function answers(H) {
         const bp = bettor && h.players.find((x) => x.name === bettor);
         mine.push({ st, fold: e.act === 'fold' ? 1 : 0, f: v.toCall / Math.max(1, v.pot - v.toCall), hu: v.nOpp === 1, raised: v.raises >= 2,
           own: (v.seq[st] || []).some((x) => x === 'bet' || x === 'raise'), rangeHp: m / tot, potBB: v.pot / v.bb,
-          pf: pfRaises, vsHero: !!(bp && bp.hero), checked: (v.seq[st] || []).includes('check') });
+          pf: pfRaises, vsHero: !!(bp && bp.hero), checked: (v.seq[st] || []).includes('check'), cb: !!bettor && bettor === pfAgg });
       }
       return [{ t: KIND[e.act], to: e.to, p: 1 }];
     } }));

@@ -319,6 +319,7 @@ const HOME_DEFAULT = {
   potCall: 0,
   heroRiverAbs: 0, heroRiverW: 0.02, heroRiverHU: 0,   // v9: answers to hero's river bets by absolute strength (0: off)
   jam: 0, jamK: 1.52, jamTop: 0.7, jamMax: 0.3,        // v10: wide all-in re-raises over one raise, by stack depth (0: off)
+  heroHuCut: 0,                                       // v11: heads-up flop and turn answers to hero's bets fold more (0: off)
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
@@ -455,6 +456,10 @@ function homeBot(params) {
       if (P.bigCall && pot >= P.bigPot * bb) tc += P.bigCall;
       if (P.raisedCut && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise')) tc += P.raisedCut;
       if (P.potCall) tc += P.potCall * Math.log(Math.max(2, pot / bb) / 10);
+      // v11: the first heads-up answer to hero's flop or turn bet folds more (heroHuCut on the cut). Friends fold to
+      // Marwin's heads-up flop and turn bets 46% (n 110), about as the read says, and to each other's 41% (n 187); v10
+      // bots facing the solver's folded 33% (n 1,191) where its read said 43%; with 0.12, 43% against 46%.
+      if (P.heroHuCut && (v.street === 3 || v.street === 4) && v.nOpp === 1 && v.raises === 1 && v.lastAgg === v.heroSeat) tc += P.heroHuCut;
       let pCont = sig((hpC - tc) / (P.wc * (hpNow ? P.hpWc : 1)));
       const dc = P.drawCall * (hpNow ? P.hpDraw : 1);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? dc : dc / 2);
