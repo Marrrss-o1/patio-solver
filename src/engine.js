@@ -1391,7 +1391,10 @@
   function foldAtSize(stats, f, n) {
     // The field (several players as one): it folds only if every one of them folds.
     if (stats.fieldOf) return clamp(stats.fieldOf.reduce((a, x) => a * foldAtSize(Object.assign({}, x, { foldShift: 0 }), f, n), 1), 0.01, 0.98);
-    const p = foldAtSizeRead(stats, f, n);
+    let p = foldAtSizeRead(stats, f, n);
+    // Hero's multiway bets of about half the pot or more, first answers (stats.betOdds, MW_BET_FOLD; this street only).
+    const bo = stats.betOdds;
+    if (bo && n === bo.street && f > bo.from) p = clamp(oddsScale(p, Math.pow(bo.odds, clamp((f - bo.from) / (bo.to - bo.from), 0, 1))), 0.02, 0.98);
     // Part of their stack already in the pot (stats.commitOdds, set per decision in createAnalysis): they fold less.
     return stats.commitOdds != null && stats.commitOdds !== 1 ? clamp(oddsScale(p, stats.commitOdds), 0.02, 0.98) : p;
   }
@@ -1462,6 +1465,15 @@
     5: { aggr: 1.9, lead: 0.4, stab: 0.52, none: 1.22 },
   };
   const AGGR_ACT = /^(bet|raise|\dbet)$/;
+  // Hero's multiway bets after the flop (input.mwBetFold, off): the first players to answer (heads-up reads, before
+  // anyone has stayed) fold more than read to bets of about half the pot or more. Every hero bet into 2+ friends in the
+  // logs to 5 Nov, re-solved at the live budget with reads from earlier hands (113 bets, 251 answers): at 40%+ of the
+  // pot the first answers folded 70% where the solver's heads-up reads said 52% (n 99; flop 64% vs 50%, turn 80% vs 52%,
+  // river 75% vs 60%; two opponents 67% vs 53%, three 75% vs 52%), fold odds x2.2 +- 0.5; under 40% on target (43% vs
+  // 42%, n 136); after someone stayed 50% vs 62% (n 16). Friends' answers to each other's multiway bets of that size are
+  // on target against the multiway read (64% vs 64%, n 323), hero's are not (73% vs 63%, n 67). Ramped in from 30% to
+  // 45% of the pot; it applies to the current street's answers only (Monte Carlo, the multiway turn and river solvers).
+  const MW_BET_FOLD = { odds: 2.0, from: 0.3, to: 0.45 };
   // Roles from the hand's action history (input.history: { st, who, act } in order): roles[name][street] = the role at
   // their first action on that street; now(name, street) = their role if they acted next on `street`.
   function initiativeRoles(history) {
@@ -5539,6 +5551,8 @@
     const INIT = street > 0 && input.initiative && Array.isArray(input.history)
       ? (typeof input.initiative === 'object' ? input.initiative : INITIATIVE) : null;
     const initR = INIT ? initiativeRoles(input.history) : null;
+    // Multiway bet folds (MW_BET_FOLD), off: input.mwBetFold true turns it on, a number sets the odds.
+    const MWBF = input.mwBetFold === true ? MW_BET_FOLD : typeof input.mwBetFold === 'number' ? Object.assign({}, MW_BET_FOLD, { odds: input.mwBetFold }) : null;
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -5602,6 +5616,8 @@
       const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position, untilted);
       // Not acted on this street yet: what they bet after hero's check (the lookahead's current street, the river,
       // turn and flop solvers' fixed strategies) follows their role then. Past streets are in the range already.
+      // Hero's multiway bets get more folds from the first answers (MW_BET_FOLD), on this street only.
+      if (MWBF && statsHU && street >= 3) statsHU.betOdds = Object.assign({ street }, MWBF);
       if (INIT && pending) {
         const role = initR.now(o.name, street, input.heroName);
         const mult = role && INIT[street] ? INIT[street][role] : null;
