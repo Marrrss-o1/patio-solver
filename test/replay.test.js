@@ -1339,17 +1339,21 @@ test('multiway: the field folds only when every player folds', () => {
 test('multiway: until someone stays, everyone folds as often as each heads-up read folds, multiplied', () => {
   // #39: a bet into two players is answered with each one's heads-up read until one of them stays,
   // so the chance that both fold is the product of their heads-up fold rates (same pot, same bet).
+  // The multiway first answers' extra folds (mwBetFold, v1.8.28) are off for that; with them on, bets of
+  // 45% of the pot or more get folded more than the product, and a third of the pot about as often.
   const T2 = { bet: 10, check: 20, call: 14, raise: 2, fold: 6 };
   const A = { name: 'A', tally: {}, actions: { pre: 'call', flop: '' }, committed: 6, stack: 300 };
   const B = { name: 'B', tally: T2, actions: { pre: 'raise', flop: '' }, committed: 6, stack: 300 };
-  const spot = (opponents) => E.analyzeSync({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 18, toCall: 0, stack: 300, bigBlind: 2,
-    inPosition: false, mix: false, seed: 7, iterations: 6000, lookahead: false, opponents });
-  const ra = spot([A]), rb = spot([B]), rab = spot([A, B]);
+  const spot = (opponents, extra) => E.analyzeSync(Object.assign({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 18, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: false, mix: false, seed: 7, iterations: 6000, lookahead: false, mwBetFold: false, opponents }, extra));
+  const ra = spot([A]), rb = spot([B]), rab = spot([A, B]), rabOn = spot([A, B], { mwBetFold: true });
   const fold = (r, amt) => r.ranked.find((s) => s.kind === 'bet' && s.amount === amt).foldPct;
   for (const amt of [6, 14, 27]) {
     const want = fold(ra, amt) * fold(rb, amt), got = fold(rab, amt);
     assert.ok(Math.abs(got - want) < 0.02, `bet ${amt}: both fold ${got}, heads-up rates multiplied ${want}`);
   }
+  assert.ok(Math.abs(fold(rabOn, 6) - fold(rab, 6)) < 0.04, `mwBetFold, bet 6: both fold ${fold(rabOn, 6)} vs ${fold(rab, 6)}`);
+  for (const amt of [14, 27]) assert.ok(fold(rabOn, amt) > fold(rab, amt) + 0.08, `mwBetFold, bet ${amt}: both fold ${fold(rabOn, amt)} vs ${fold(rab, amt)}`);
 });
 
 test("multiway: hero's story moves every player's folds, as heads-up", () => {
@@ -1463,12 +1467,18 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
     assert.ok(ev(r, 'raise') < 0, k + ': raise EV ' + ev(r, 'raise'));
   }
   // A strong hand still wins a lot, and betting it is about as good as anything (the lookahead alone: with
-  // heroPotTilt the bet is about 93% of checking here).
-  const qq = run({ hero: C('Qs Qc'), board: C('Qh 8d 3c'), pot: 24, toCall: 0, stack: 250, bigBlind: 2, inPosition: false, heroPotTilt: false,
+  // heroPotTilt the bet is about 93% of checking here). With the multiway first answers' extra folds (mwBetFold,
+  // v1.8.28: in the logs everyone folded to hero's multiway bets of 40%+ of the pot 47% of the time, read 28%)
+  // the pot-and-a-half bet is everyone-folded 56% of the time instead of 35%, so checking to let them bet comes out
+  // ahead (the bet about 77% of checking); top set still wins about as much.
+  const qqSpot = (extra) => run(Object.assign({ hero: C('Qs Qc'), board: C('Qh 8d 3c'), pot: 24, toCall: 0, stack: 250, bigBlind: 2, inPosition: false, heroPotTilt: false,
     heroActions: { pre: 'call', flop: '' }, heroCommitted: 8,
-    opponents: [0, 1].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: i ? 'call' : 'raise', flop: '' }, committed: 8, stack: 250 })) });
+    opponents: [0, 1].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: i ? 'call' : 'raise', flop: '' }, committed: 8, stack: 250 })) }, extra));
+  const qq = qqSpot({ mwBetFold: false }), qqOn = qqSpot({});
   assert.ok(qq.ranked[0].ev > 50, 'top set EV ' + qq.ranked[0].ev);
   assert.ok(ev(qq, 'bet') >= 0.95 * qq.ranked[0].ev, 'top set bet EV ' + ev(qq, 'bet') + ' vs best ' + qq.ranked[0].ev);
+  assert.ok(qqOn.ranked[0].ev > 0.95 * qq.ranked[0].ev, 'mwBetFold: top set EV ' + qqOn.ranked[0].ev + ' vs ' + qq.ranked[0].ev);
+  assert.ok(ev(qqOn, 'bet') >= 0.7 * qqOn.ranked[0].ev, 'mwBetFold: top set bet EV ' + ev(qqOn, 'bet') + ' vs best ' + qqOn.ranked[0].ev);
 });
 
 test('multiway stabs from the logs: a stab alone loses, and the lookahead adds only a small edge', () => {
@@ -1481,15 +1491,22 @@ test('multiway stabs from the logs: a stab alone loses, and the lookahead adds o
   // on the spot, or the lookahead's edge grows past a small one, this fails. The limit was 1.2 chips;
   // overcall folds (v1.7.7: players still to act fold more once someone has called, logs 54% vs 47%)
   // put the flop king-high stab at 1.34 through more heads-up river bluffs, so it is 1.5 now.
+  // The multiway first answers' extra folds (mwBetFold, v1.8.28) are fitted on all of hero's multiway bets in the logs
+  // to 5 Nov: at 40%+ of the pot everyone folded 47% of the time (n 34), the read without it said 28%, with it 46%.
+  // With it the stabs alone are about even (flop king-high -0.01, the turns -0.2 and +0.16, flop seven-high -1.0) and
+  // the king-high half-pot stab comes out 0.6 over checking with the lookahead; without it the old limits still hold.
   const spots = require('./fixtures/real-multiway-stabs.json');
   for (const [name, x] of Object.entries(spots)) {
     const run = (extra) => E.analyzeSync(Object.assign({}, x, { mix: false, seed: 1, iterations: 6000 }, extra));
     const gap = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet' || s.kind === 'allin').map((s) => s.ev)) - r.ranked.find((s) => s.kind === 'check').ev;
-    const now = run({ lookahead: false }), later = run({});
-    assert.ok(gap(now) < -1, `${name}: without the lookahead the best stab is ${gap(now).toFixed(2)} chips over checking`);
-    assert.ok(gap(later) < 1.5, `${name}: with the lookahead the best stab is ${gap(later).toFixed(2)} chips over checking`);
-    for (const s of later.ranked.filter((b) => b.kind === 'bet' && b.amount <= 0.5 * x.pot)) {
-      assert.ok(s.foldPct < 0.35, `${name}: everyone folds ${s.foldPct} to ${s.amount} into ${x.pot}`);
+    for (const mwBetFold of [false, true]) {
+      const now = run({ lookahead: false, mwBetFold }), later = run({ mwBetFold });
+      const tag = mwBetFold ? ' (mwBetFold)' : '';
+      assert.ok(gap(now) < (mwBetFold ? 0.5 : -1), `${name}${tag}: without the lookahead the best stab is ${gap(now).toFixed(2)} chips over checking`);
+      assert.ok(gap(later) < 1.5, `${name}${tag}: with the lookahead the best stab is ${gap(later).toFixed(2)} chips over checking`);
+      for (const s of later.ranked.filter((b) => b.kind === 'bet' && b.amount <= 0.5 * x.pot)) {
+        assert.ok(s.foldPct < 0.35, `${name}${tag}: everyone folds ${s.foldPct} to ${s.amount} into ${x.pot}`);
+      }
     }
   }
 });
