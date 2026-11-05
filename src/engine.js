@@ -1772,8 +1772,11 @@
     const big = clamp((toBB - 4) / 4, 0, 1), callBig = stats.callBig != null ? stats.callBig : 0.25;
     // Opens above 30bb (shoves): the learned 'large' rate fades with the size too.
     const fade = bigFade(toBB, 1);
-    const cont = clamp(Math.max(b.cont * fade, big * callBig * fade), 0.02, 0.98);
-    return { cont, threeBet: clamp(b.threeBet != null ? b.threeBet : 0.05, 0.005, cont) };
+    const w = clamp((toBB - 5) / 3, 0, 1);
+    const base = (1 - w) * b.cont + w * callBig;
+    const cont = clamp(Math.max(base * fade, big * callBig * fade), 0.02, 0.98);
+    const tb = (1 - w) * (b.threeBet != null ? b.threeBet : 0.05) + w * 0.02;
+    return { cont, threeBet: clamp(tb, 0.005, cont) };
   }
 
   function continueRule(opp, ctx, mdf, kind) {
