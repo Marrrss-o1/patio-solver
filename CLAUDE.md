@@ -660,6 +660,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shove) to all-in (+46 vs +29bb), the only one of 1,018 logged decisions that changes. The bots don't model it (their
   `pfCommit` is opt-in), so a sim would score them folding where friends call. Files: analysis/2026-11-04-session.md
   ("Your two questions"), scripts/2026-11-04-session/questions/.
+  Since v1.8.18 it ramps in from a fifth of the stack in (`PF_COMMIT_RAMP` [0.2, 1/3]: continue and re-raise move
+  linearly from the usual rule to 0.97 / 0.11; `input.pfCommitRamp: false` keeps the old step at a third). The step
+  moved a logged re-raise's EV by 14.6bb for one chip (leak hunt). Friends with 15-20% in continued 1 of 3 times, 20-33%
+  1 of 1, a third or more 3 of 3. Example, a raiser facing hero's shove: 0.43 continue at a fifth in, 0.63 at a quarter,
+  0.93 just under a third, 0.97 from a third. On the 18 logged preflop spots with an opponent 15-40% in no decision
+  changes (88 at #62: all-in EV 49.7 -> 40.9, still the pick).
 - All-in preflop re-raises read wide (v1.8.17, `SHOVE_RANGE` {behind 0.1, vpip 0.7, min 0.15}; `input.shoveRange: false`
   turns it off, a number sets the share of VPIP): a 3-bet, 4-bet or 5-bet that leaves under a tenth of the raise-to
   behind (`sizes.preTo` / `preBehind`) is read as the narrow re-raise range plus the top 0.7 x VPIP of hands. Friends'
@@ -673,7 +679,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Leak hunt (5 Nov, /mnt/project-files/patio-solver/leakhunt-2026-11-05/, REPORT.md, scripts/): every logged decision
   re-solved with 1-chip changes (pot, stack, a bet, an opponent's stack) and with bet-size, preflop-size and depth
   sweeps, against seed-to-seed noise, plus shown hands against the read by line. Steps found: pfRaisedRead at 30bb
-  (above), the 1/3-committed rule (pfCommitCall: 0.55 -> 0.97 continue), the 25bb preflop shove-menu gate
+  (above), the 1/3-committed rule (pfCommitCall: 0.55 -> 0.97 continue; a ramp since v1.8.18), the 25bb preflop shove-menu gate
   (shoveMakesSense), bigBetMedium at 0.9 pot, and the 2.6x raise dropped above pfRaiseCapBB. The first two that the
   simulator can judge are options, off by default: `pfRaisedReadBB` (above) and `input.pfShoveBB` (25: all-in is on the
   preflop menu up to that stack or 3 pots). 15 of 499 logged preflop decisions had 25-40bb and no all-in offered; 2 Nov
