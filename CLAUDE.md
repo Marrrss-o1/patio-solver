@@ -283,6 +283,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
+  By raise size (v1.8.24, `PF_LIMP_CURVE`, `limpCurveFold`; `input.pfLimpCurve: false` for the old rule, an object
+  replaces fields): the first raise a limper faces is answered from a curve in ln(raise-to), with the player's limpFold
+  moving it (s 0.89 in log-odds) and re-raises at 4.5% of continues; above 30bb bigFade and from 8bb the callBig floor
+  still apply. The old rule read 46-49% folds at every size; friends fold 11% to raises of 3.5bb or less (n 90), 34% at
+  3.5-5bb (164), 52% at 5-8bb (60) (all logs to 5 Nov, 335 spots, reads from earlier hands). Log-likelihood -222.5
+  (old rule; a constant -214.1) -> -180.1; fitted before 5 Nov and scored on it -72.4 -> -61.1. At hero's isolation
+  raises over one limper the predicted all-fold goes 42% -> 26%, actual 26% (n 134). 74 of 924 logged preflop decisions
+  change, mostly more and bigger isolation raises. Simulator, v12r regulars, live budget, 1,000 deals each, on vs off:
+  heads-up +15.8 ± 22.5, 3-handed +31.1 ± 25.3, 4-handed +14.0 ± 20.8 (pooled +19.2 ± 13.1); with pendingTilt off as
+  well, 4-handed +24.6 ± 21.6 against main. Files: /mnt/project-files/patio-solver/sims/2026-11-06-leakhunt/,
+  leakhunt-2026-11-06/ (RESULTS.md, scripts/).
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
   The tilt also lands on players yet to act preflop, whose hands are dealt, not chosen, so the big blind's range leans
