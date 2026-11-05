@@ -358,10 +358,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   The 30bb step moves 4-bet EVs by up to 8bb a chip either side of it (1 Nov, multiway AKo in the big blind: a
   re-raise to 29.5bb +55.6, to 30.5bb +38.7 chips; the opener went from continuing 93% / re-raising 36% to 72% / 11%).
   `input.pfRaisedReadBB` (v1.8.17; default `PF_RAISED_READ_BB` 30, the step) above 30 fades the read into the old rule
-  from 30bb, gone at that raise-to. All logs (519 hands): friends continued against all 5 re-raises to 30-45bb (call 3,
-  re-raise 2) and folded to 7 of 9 above 45bb. With 45, 22 of 1,017 logged decisions change, all preflop and nearly
-  all near-ties among open sizes (the solver's 4-bets deeper in the tree get answered more); KK's 5-bet over Aura and
-  Jagger (#152) 41 -> 59 chips. Off until the simulator has judged it.
+  from 30bb, gone at that raise-to. All logs (519 hands): friends continued against all 5 re-raises
+  to 30-45bb (call 3, re-raise 2) and folded to 7 of 9 above 45bb. It changes 22 of 1,017 logged decisions, all
+  preflop and nearly all near-ties among open sizes (the solver's 4-bets deeper in the tree get answered more); KK's
+  5-bet over Aura and Jagger (#152) 41 -> 59 chips. Simulator, live budget, v8 bots, 2,000 deals each, 45 vs 30:
+  4-handed +19.9 ± 15.5, 5-handed +0.8 ± 12.2 (pooled +8.1 ± 9.6, neutral). Split by the first decision where the two
+  differ, hands that part where hero faces a 3-bet gain +5.4 ± 2.2 (86 hands; A's 4-bets to 50-80bb become 4-bets to
+  25-30bb or calls, mostly premium and strong hands), facing a 4-bet -0.4 ± 0.6, and the rest is drift after earlier
+  hands differed. 4-bet and 5-bet shares barely move (facing a 3-bet 17.5 -> 16.3% 4-handed). Neutral overall, so it
+  stays off (merge rule: a sim win); clearing the noise from hands that drift apart afterwards would take far more deals
+  than a gain this size is worth. Files: /mnt/project-files/patio-solver/sims/2026-11-05-leakhunt/RR45-RESULTS.md.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the
@@ -697,12 +703,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   re-solved with 1-chip changes (pot, stack, a bet, an opponent's stack) and with bet-size, preflop-size and depth
   sweeps, against seed-to-seed noise, plus shown hands against the read by line. Steps found: pfRaisedRead at 30bb
   (above), the 1/3-committed rule (pfCommitCall: 0.55 -> 0.97 continue; a ramp since v1.8.18), the 25bb preflop shove-menu gate
-  (shoveMakesSense), bigBetMedium at 0.9 pot, and the 2.6x raise dropped above pfRaiseCapBB. The first two that the
-  simulator can judge are options, off by default: `pfRaisedReadBB` (above) and `input.pfShoveBB` (25: all-in is on the
-  preflop menu up to that stack or 3 pots). 15 of 499 logged preflop decisions had 25-40bb and no all-in offered; 2 Nov
-  TT in late position with 25.5bb behind a limper: best raise +9.5 chips, with a chip less the shove at +23.0. With 40,
-  6 of the 15 shove (AA 40bb in the big blind over three limpers, AKs/AKo 36-40bb, A3o 28.5bb, TT). The simulator needs
-  `--stack 30` or so for it. The other steps have too few logged spots to place a ramp.
+  (shoveMakesSense), bigBetMedium at 0.9 pot, and the 2.6x raise dropped above pfRaiseCapBB. `pfRaisedReadBB` can
+  smooth the first (above; off, neutral in the sim). `input.pfShoveBB` (25: all-in is on the preflop menu up to that stack or 3 pots) stays at 25: 15 of
+  499 logged preflop decisions had 25-40bb and no all-in offered (2 Nov TT in late position with 25.5bb behind a
+  limper: best raise +9.5 chips, with a chip less the shove at +23.0), and with 40 6 of the 15 shove (AA 40bb in the
+  big blind over three limpers, AKs/AKo 36-40bb, A3o 28.5bb, TT), but 40 lost in the simulator: live, v8 bots,
+  4-handed, 2,000 deals, the whole table at 30bb -41.8 ± 6.0, at 35bb -47.5 ± 7.0. Hero shoved 18-24% of hands instead
+  of 5-6%, at every seat, good hands worst (-19 / -22); the shoves came back 2.5-2.7bb below their EV and the 4-6bb
+  raises they replaced 2.5-2.6bb above theirs (premium hands +4.3bb), which is the 4 Nov audit's preflop TD gap still
+  there after v1.8.13's flop edge. The bots continue against a 30bb shove 43% (35bb: 22%, their cliff). The same
+  overrating may hold for shoves at 20-25bb (hero had 25bb or less in 2 of 499 logged preflop decisions). Files:
+  sims/2026-11-05-leakhunt/SHOVE-GATE.md. The other steps have too few logged spots to place a ramp.
 - River raise fold (`RIVER_RAISE_FOLD` 0.5, off: `input.riverRaiseFold: true` turns it on, a number sets it): in
   riverSolve's fixed strategy a bettor facing hero's root raise folds at least that share of its betting range, x
   min(1, raise / pot). The read folds only the bluffs, 0.9 x (1 - value share), about 25-35%; in the logs river bettors
