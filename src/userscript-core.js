@@ -121,7 +121,7 @@ function slim(r) {
   // Shows saved before v1.8.9 don't say whether hero was in the pot (the learned hero-pot tilt): filled in from the
   // stored hands.
   if (tracker.tagHeroPot(tracker.db.history || [])) save(DB_KEY, tracker.db);
-  // Shown all-in re-raises from hands stored before v1.8.26 (the per-player deep-shove read): filled in once.
+  // Shown all-in re-raises from hands stored before v1.8.27 (the per-player deep-shove read): filled in once.
   if (!tracker.db.jamTagged) { tracker.tagJamShows(tracker.db.history || []); tracker.db.jamTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';

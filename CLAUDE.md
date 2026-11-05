@@ -283,8 +283,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
-  By raise size (v1.8.24, `PF_LIMP_CURVE`, `limpCurveFold`; `input.pfLimpCurve: false` for the old rule, an object
-  replaces fields): the first raise a limper faces is answered from a curve in ln(raise-to), with the player's limpFold
+  By raise size (`PF_LIMP_CURVE`, `limpCurveFold`; on in v1.8.24-25, off since v1.8.26: `input.pfLimpCurve: true` turns
+  it on, an object replaces fields): the first raise a limper faces is answered from a curve in ln(raise-to), with the player's limpFold
   moving it (s 0.89 in log-odds) and re-raises at 4.5% of continues; above 30bb bigFade and from 8bb the callBig floor
   still apply. The old rule read 46-49% folds at every size; friends fold 11% to raises of 3.5bb or less (n 90), 34% at
   3.5-5bb (164), 52% at 5-8bb (60) (all logs to 5 Nov, 335 spots, reads from earlier hands). Log-likelihood -222.5
@@ -292,7 +292,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   raises over one limper the predicted all-fold goes 42% -> 26%, actual 26% (n 134). 74 of 924 logged preflop decisions
   change, mostly more and bigger isolation raises. Simulator, v12r regulars, live budget, 1,000 deals each, on vs off:
   heads-up +15.8 ± 22.5, 3-handed +31.1 ± 25.3, 4-handed +14.0 ± 20.8 (pooled +19.2 ± 13.1); with pendingTilt off as
-  well, 4-handed +24.6 ± 21.6 against main. Files: /mnt/project-files/patio-solver/sims/2026-11-06-leakhunt/,
+  well, 4-handed +24.6 ± 21.6 against main. Confirmation runs on v1.8.24 (fresh seeds): 5-handed +23.2 ± 19.7, 4-handed
+  -45.5 ± 22.9 (button -37.7 ± 12.5, big blind -20.4 ± 12.9; medium hands -45.2 ± 13.7, the rest flat). All five pooled
+  +8.2 ± 9.8 (4-handed alone about -13 ± 15), so it went back off. The loss looks like the bigger and more frequent
+  isolation raises with medium hands on the button; the bots' re-raises of hero's iso-raises (19-36% at every size, see
+  vsOpenSplit) may punish them where the friends don't. Files: /mnt/project-files/patio-solver/sims/2026-11-06-leakhunt/,
   leakhunt-2026-11-06/ (RESULTS.md, scripts/).
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
@@ -307,6 +311,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   that edge. Files: /mnt/project-files/patio-solver/sims/2026-11-05-untilt/, analysis/2026-11-05-session2.md.
   Re-run on the v12 bots (5 Nov, 4-handed, live, 1,000 deals each): all friends -25.3 ± 22.3, regulars (v12r)
   -46.7 ± 26.9 (pooled about -34 ± 17; strong and good hands lose in both), so the tilt stays.
+  Leak hunt, 6 Nov (all logs to 5 Nov, reads from earlier hands): the solver predicts friends fold to hero's opens 61%
+  of the time, they fold 42% (224 opens, z -6.6; heads-up 73% vs 52%, 3.5-5bb opens 70% vs 42%); pendingTilt off gives
+  45%. First answers to anyone's 3.5-4.5bb open fold 41% where vsOpenRead says 57% (n 143), and a size correction fitted
+  on one half of the logs scores better on the other (log-loss 0.684 -> 0.668, 0.656 -> 0.645; vocurve.js). pendingTilt
+  off with pfFlopEdge 0.10, v12r regulars, 4-handed, live: +22.1 ± 27.0 against main (neutral; it plays more hands). So
+  the tilt still looks like a stand-in for raise EV the flop leaves miss, not a read to calibrate away.
 - Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
   (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
   showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on
@@ -742,7 +752,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   2.1 / 3.2 / 4.8bb a shove faced at 15 / 25 / 40 / 60 / 100bb. It changes none of the 7 logged hero decisions facing an
   all-in re-raise (equity up to +0.07: ATo heads-up 0.54 -> 0.60, A2o 3-way 0.22 -> 0.29) and no other logged decision.
   The bots re-raise by hand strength, so the simulator would score it against shoves as tight as the old read.
-- Deep all-in re-raises read tight (v1.8.23, `DEEP_SHOVE` {from 40, to 100, width 0.08, prior 0.3}; on since v1.8.26,
+- Deep all-in re-raises read tight (v1.8.23, `DEEP_SHOVE` {from 40, to 100, width 0.08, prior 0.3}; on since v1.8.27,
   per player: `input.deepShove: false` turns it off, an object replaces the numbers): an all-in re-raise (as for SHOVE_RANGE) moves linearly from the usual
   read at 40bb deep to the part of it inside the top 8% of hands at 100bb. Depth is the raise-to capped by the biggest
   stack still in at the start of the hand (`sizes.preCover`, from the tracker since v1.8.23), so a big stack shoving into
@@ -761,7 +771,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   friends) 4-handed -4.7 ± 11.0 (-21.5 ± 10.3 at 800 deals), heads-up -5.6 ± 3.0 (good hands and the big blind fold to
   wide shoves; 9 of 2,000 hand pairs end differently).
   Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/.
-  Per player since v1.8.26 (`deepShoveTrust`, `DEEP_SHOVE.prior` 0.3; `{ prior: 1 }` is the v1.8.23 rule): the blend
+  Per player since v1.8.27 (`deepShoveTrust`, `DEEP_SHOVE.prior` 0.3; `{ prior: 1 }` is the v1.8.23 rule): the blend
   is scaled by a trust that starts at the prior and moves by each of the player's own shown all-in re-raises deep
   enough to count (the newest 10 of `tally.jamShows`: the tracker records every preflop all-in re-raise whose cards are
   seen, at showdown or shown after a fold, at any board, newest 20, kept out of decay): the log-likelihood ratio of the
@@ -774,7 +784,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of the 12 logged spots facing an all-in re-raise moves by more than 0.01 (the global version folded A2o and A9o too).
   Those trusts are for a prior of 0.1. With 0.3 (the default) they are 0.30 / 0.67 / 0.68 / 0.92: A2o calls (0.48), Q7o
   and A9o fold (0.40; 0.45 vs 0.47 needed), 77 calls (0.56 vs 0.46), and the other 8 spots move by 0.02 or less. Shows from hands
-  stored before v1.8.26 are added once from the stored hands (`tagJamShows`, flag `db.jamTagged`; on all logs it finds
+  stored before v1.8.27 are added once from the stored hands (`tagJamShows`, flag `db.jamTagged`; on all logs it finds
   the same 11 shows as replaying the raw events). Simulator, live budget, v12r regulars, 1,000 deals each, B - A:
   | opponent | table | prior 0.1 | prior 0.3 |
   | --- | --- | --- | --- |
@@ -892,6 +902,31 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   0.877, new 0.869 -> 0.857, each session alone fits about the same. Bots fold the same way (after checking 59%, old
   read 54%). Simulator -9.5 ± 14.2 and +15.0 ± 14.1 on two seeds (neutral). `input.checkLine: false` turns it off
   (simulator; red team below).
+- Initiative (`INITIATIVE`, `initiativeRoles`; off: `input.initiative: true` turns it on, an object replaces the odds;
+  needs `input.history`): a player's bet rate on a street, with nobody's bet in yet, depends on who bet the street before,
+  which the read's one rate per street pools. Roles at a player's first action on the street: `aggr` (made the last bet
+  or raise of the street before), `lead` (someone else did and hasn't acted yet), `stab` (that player checked first),
+  `none`. All logs to 5 Nov (2,549 spots, reads from earlier hands): turn after betting the flop 60% where the read says
+  37% (n 154, odds x2.8), into the flop's bettor 13% vs 27% (187, x0.38); river 67% vs 53% (142, x1.9) and 24% vs 43%
+  (113, x0.40). Each half of the logs gives the same directions; out of sample, check-or-bet log-loss 0.549 -> 0.536 and
+  0.572 -> 0.561. Applied in the ranges (applyAction's betFreq for bets and checks, in place of afterCall's odds), in
+  the lookahead's later streets by line (plan.at: bet -> aggr, call -> lead if hero is IP, else stab, check -> none) and
+  to the current street's answer to hero's check. Shown hands +3.8 nats over 609 shows; about 15% of postflop decisions
+  change, mostly flop sizes and checks through the lookahead. It does not explain the hero-pot tilt (check-call lines
+  don't use check narrowing). Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: 4-handed +10.1 ± 26.3,
+  heads-up +13.6 ± 18.6 (pooled +12.4 ± 15.2). Neutral, so off. Files: /mnt/project-files/patio-solver/
+  leakhunt-2026-11-06/ (RESULTS.md, scripts/init.js, init2.js, showinit.js), sims/2026-11-06-leakhunt/.
+- Hero's multiway bets (`MW_BET_FOLD` {odds 2, from 0.3, to 0.45}; off: `input.mwBetFold: true` turns it on, a number
+  sets the odds): the first players to answer hero's bet into 2+ opponents (heads-up reads, before anyone stays) fold
+  with odds x2 on the current street, ramped in from 30% to 45% of the pot (`statsHU.betOdds`, read in foldAtSize; Monte
+  Carlo and the multiway turn and river solvers). All 113 of hero's postflop bets into 2+ friends in the logs to 5 Nov,
+  re-solved at the live budget (251 answers): at 40%+ of the pot the first answers folded 70% where the solver said 52%
+  (n 99; flop 64% vs 50%, turn 80% vs 52%, river 75% vs 60%), under 40% on target (43% vs 42%, n 136). Friends answer
+  each other's multiway bets of that size as read (64% vs 64%, n 323), hero's not (73% vs 63%). Fold log-odds also rise
+  0.71 ± 0.14 per ln(bet in bb) multiway against everyone (both halves of the logs agree), which isn't built in.
+  Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: 4-handed +48.2 ± 28.6 and -18.2 ± 28.7, 5-handed
+  +6.4 ± 26.7, 3-handed -1.4 ± 31.3 (pooled +9.1 ± 14.3); phone 4-handed +9.7 ± 28.1. Neutral, so off. Files: as above
+  (scripts/mwsolve.js, mwfit.js, absz*.js).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn

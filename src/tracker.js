@@ -92,7 +92,7 @@
       pos: { early: posTally(), late: posTally(), blinds: posTally() },
       // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
       shows: [],
-      // Preflop all-in re-raises whose cards were seen, at any point of the hand (v1.8.26, DEEP_SHOVE's per-player read):
+      // Preflop all-in re-raises whose cards were seen, at any point of the hand (v1.8.27, DEEP_SHOVE's per-player read):
       // { cards, pre, to, cover } with the raise-to and the biggest stack still in, in big blinds. Newest MAX_JAM_SHOWS.
       jamShows: [],
     };
@@ -905,7 +905,7 @@
       return n;
     }
 
-    // Shown all-in re-raises from hands stored before v1.8.26, which recorded no `jamShows` (DEEP_SHOVE's per-player read):
+    // Shown all-in re-raises from hands stored before v1.8.27, which recorded no `jamShows` (DEEP_SHOVE's per-player read):
     // found in each stored hand's action log (the player's last preflop raise was a re-raise that left under a tenth of
     // the raise-to behind, and their cards were shown) and added to that player's read, oldest first, newest
     // MAX_JAM_SHOWS kept, skipping any already there. The player is the account id the hand's raw events give that name,

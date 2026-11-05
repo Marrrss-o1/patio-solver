@@ -1683,7 +1683,7 @@
     const g = deepRamp(sizes.preTo, sizes.preCover, ds), t = ds.trust != null ? ds.trust : 1;
     return g > 0 && t > 0 ? { g, width: ds.width, t } : null;
   }
-  // How far a player's own shown all-in re-raises (tally.jamShows, from the tracker since v1.8.26) say their deep ones
+  // How far a player's own shown all-in re-raises (tally.jamShows, from the tracker since v1.8.27) say their deep ones
   // are the tight kind: the prior odds (ds.prior) times, for each of the newest 10 shows deep enough to count, the
   // likelihood of the shown hand under the tight read over the usual one. ds.prior 1 skips the learning: every player's
   // deep shoves read tight (the v1.8.23 option).
@@ -2188,7 +2188,7 @@
   // the 7 logged hero decisions facing an all-in re-raise. The friend bots re-raise by hand strength, so the simulator
   // would score their shoves as tight as the old read.
   const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
-  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; on since v1.8.26, per player: input.deepShove false turns it
+  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; on since v1.8.27, per player: input.deepShove false turns it
   // off, an object replaces the numbers, { prior: 1 } reads every player's deep shoves tight). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
   // `from` big blinds deep to the part of it inside the top `width` of hands at `to` (depth: the raise-to, capped by
   // the biggest stack still in that could call it). SHOVE_RANGE was fitted on shoves of 17.5-50bb. On 5 Nov evening
@@ -2197,7 +2197,7 @@
   // hand's equity against a random one (the advice called his 513bb 4-bet shove with 77; he had JJ). All logs to 5 Nov,
   // shown preflop all-ins by depth: under 40bb mean place in a preflop ranking top 32% (6 shows), 40-100bb 21% (7),
   // 100bb+ 8% (4, three of them Mark's).
-  // Per player since v1.8.26 (deepShoveTrust): the tight read applies by how much that player's own shown all-in
+  // Per player since v1.8.27 (deepShoveTrust): the tight read applies by how much that player's own shown all-in
   // re-raises fit it, from a prior of `prior`. Against the friend bots, who jam wide hands at 150bb now and then, the
   // v1.8.23 version (prior 1, everyone tight) lost (4-handed, see CLAUDE.md), as the logs say for most friends.
   // Prior 0.3 (live budget, v12r regulars, 1,000 deals each): against a bot that shoves deep only with the top 8%
@@ -2215,7 +2215,8 @@
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
-  // Limpers facing the first raise (v1.8.24; input.pfLimpCurve: false turns it off, an object replaces fields):
+  // Limpers facing the first raise (v1.8.24, off since v1.8.26; input.pfLimpCurve: true turns it on, an object replaces
+  // fields):
   // logit(fold) = a + b1 x min(ln(R / ref), ln(hinge / ref)) + b2 x max(0, ln(R / hinge)) + s x (logit(limpFold) -
   // logit(s0)), R = the raise-to in bb, limpFold = the player's read (size-mixed). Above 30bb the cliff (bigFade)
   // scales the continue share, and the big-raise floor (callBig) still holds from 8bb. They re-raise rr x their
@@ -2225,7 +2226,8 @@
   // constant, -214.1), the curve -180.1; held out on 5 Nov (fit before) -61.1 against -72.4. At hero's isolation raises
   // over one limper the solver's predicted all-fold goes 42% -> 26%, actual 26% (n 134; 3.5-5bb raises 50% -> 26%, actual
   // 21%). Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: heads-up +15.8 ± 22.5, 3-handed
-  // +31.1 ± 25.3, 4-handed +14.0 ± 20.8 (pooled +19.2 ± 13.1).
+  // +31.1 ± 25.3, 4-handed +14.0 ± 20.8 (pooled +19.2 ± 13.1). Confirmation runs on v1.8.24: 5-handed +23.2 ± 19.7,
+  // 4-handed -45.5 ± 22.9 (button -37.7 ± 12.5, medium hands -45.2 ± 13.7); all five pooled +8.2 ± 9.8, so it is off.
   const PF_LIMP_CURVE = { a: -0.7, b1: 3.0, ref: 4, hinge: 6, b2: 0.3, s: 0.89, s0: 0.52, rr: 0.045 };
   function limpCurveFold(R, limpFold, opt) {
     const C = opt && typeof opt === 'object' ? Object.assign({}, PF_LIMP_CURVE, opt) : PF_LIMP_CURVE;
@@ -5818,7 +5820,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: input.pfLimpCurve === false ? null : input.pfLimpCurve && typeof input.pfLimpCurve === 'object' ? input.pfLimpCurve : PF_LIMP_CURVE, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: input.pfLimpCurve === true ? PF_LIMP_CURVE : input.pfLimpCurve && typeof input.pfLimpCurve === 'object' ? input.pfLimpCurve : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }

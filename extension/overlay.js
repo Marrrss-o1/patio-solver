@@ -703,7 +703,7 @@
         saveDb();
       });
     }
-    // Shown all-in re-raises from hands stored before v1.8.26 don't count in the per-player deep-shove read
+    // Shown all-in re-raises from hands stored before v1.8.27 don't count in the per-player deep-shove read
     // (tally.jamShows): filled in once from every stored hand.
     if (!tracker.db.jamTagged) {
       handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
