@@ -821,6 +821,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   morning); after the flop 0.23 vs 0.07 (n 15: friends call hero's postflop shoves); equity when called on target (0.67
   vs 0.63, n 19). Equity of calls and called shoves by predicted bucket: 0-0.5 real +0.14, 0.5-0.65 -0.10, 0.65-0.8
   -0.11, 0.8+ on target (n 36): the read's all-in equities are too far from 0.5 in the middle.
+  After the flop in full (v1.8.27, pf-allin.js, pf-sum.js; all 1,108 postflop decisions, 47 all-in spots): calls plus
+  called shoves (n 27) predicted 0.67, real 0.70 (+0.03 ± 0.06); flop -0.13 ± 0.11 (n 8: AQ vs Q7, KK vs 97, AJ vs Q5
+  trips), turn -0.02 ± 0.13, river +0.18 ± 0.08 (friends' river shoves weaker than read); by depth (<30 / 30-80 / 80+
+  bb) +0.03 / -0.02 / +0.12, Mark +0.05, others +0.02; spots the panel advised -0.05 ± 0.08 (n 17). Of 10 calls, the real
+  hand flips 3 advised calls and 3 advised folds. Hero's postflop all-ins: everyone folded 1 of 15, predicted 29%, but
+  all were value shoves (equity when called 0.6-1.0), so it under-rates them; none is a low-equity shove. No group is
+  clearly overconfident, so no fix. Every postflop bet (pf-bigbets.js, 494): heads-up folds on target at every share of
+  the stack; multiway bets of 45%+ pot all-fold 44% vs 23% predicted (n 45), the leak hunt's mwBetFold finding.
+  Files: sims/2026-11-05-allin/pf-*.
 - Leak hunt (5 Nov, /mnt/project-files/patio-solver/leakhunt-2026-11-05/, REPORT.md, scripts/): every logged decision
   re-solved with 1-chip changes (pot, stack, a bet, an opponent's stack) and with bet-size, preflop-size and depth
   sweeps, against seed-to-seed noise, plus shown hands against the read by line. Steps found: pfRaisedRead at 30bb
