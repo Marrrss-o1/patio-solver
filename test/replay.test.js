@@ -2091,17 +2091,16 @@ test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / f
   const on = fourBetSpot({ pfCommit: false }), off = fourBetSpot({ pfRaisedRead: false, pfCommit: false });
   assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
   assert.ok(off[0].reraise < 0.2);
-  // From 30bb the read fades into the old rule by 45bb (pfRaisedReadBB, default 45 since v1.8.20), so 36.5bb is in
+  near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
+  // pfRaisedReadBB 45 (v1.8.17, off by default): from 30bb the read fades into the old rule by 45bb, so 36.5bb is in
   // between and 51bb keeps the old rule.
-  const w = (45 - 36.5) / 15;
-  near(on[1].cont, w * on[0].cont + (1 - w) * off[1].cont); near(on[1].reraise, w * on[0].reraise + (1 - w) * off[1].reraise);
-  near(on[2].cont, off[2].cont);
-  // pfRaisedReadBB 30: the old step (bigger re-raises keep the old rule).
-  const step = fourBetSpot({ pfCommit: false, pfRaisedReadBB: 30 });
-  near(step[0].cont, on[0].cont); near(step[1].cont, off[1].cont); near(step[2].cont, off[2].cont);
+  const fade = fourBetSpot({ pfCommit: false, pfRaisedReadBB: 45 }), w = (45 - 36.5) / 15;
+  near(fade[0].cont, on[0].cont);
+  near(fade[1].cont, w * on[0].cont + (1 - w) * off[1].cont); near(fade[1].reraise, w * on[0].reraise + (1 - w) * off[1].reraise);
+  near(fade[2].cont, off[2].cont);
 });
 
-test('pfRaisedReadBB: no step in the raiser\'s answer either side of a re-raise to 30bb (30: the old step)', () => {
+test('pfRaisedReadBB 45: no step in the raiser\'s answer either side of a re-raise to 30bb (default 30: the step)', () => {
   // 1 Nov (#396 in the audit): AKo in the big blind against an open to 4bb and two callers. A re-raise to 29.5bb and one
   // to 30.5bb (pot one chip bigger) were answered 93% / 72% by the opener, and the biggest re-raise's EV fell 8bb.
   const spot = (pot, extra) => E.analyzeSync(Object.assign({
@@ -2113,10 +2112,10 @@ test('pfRaisedReadBB: no step in the raiser\'s answer either side of a re-raise 
       { name: 'C2', tally: {}, actions: { pre: 'call' }, sizes: {}, position: 'blinds', committed: 8, stack: 102, bet: 8, heroIP: true }],
     iterations: 1000, preflopIterations: 300, mix: false, seed: 1,
   }, extra)).scenarios.filter((s) => s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0];
-  const a = spot(26), b = spot(27);
+  const a = spot(26, { pfRaisedReadBB: 45 }), b = spot(27, { pfRaisedReadBB: 45 });
   assert.ok(a.amount + 2 <= 60 && b.amount + 2 > 60, `raise-to ${a.amount + 2} / ${b.amount + 2} chips`);
   assert.ok(Math.abs(a.opp[0].cont - b.opp[0].cont) < 0.02 && Math.abs(a.opp[0].reraise - b.opp[0].reraise) < 0.03, `${a.opp[0].cont} -> ${b.opp[0].cont}`);
-  const s0 = spot(26, { pfRaisedReadBB: 30 }), s1 = spot(27, { pfRaisedReadBB: 30 });
+  const s0 = spot(26), s1 = spot(27);
   assert.ok(s0.opp[0].cont - s1.opp[0].cont > 0.1 && s0.opp[0].reraise - s1.opp[0].reraise > 0.3, 'the old step');
 });
 
