@@ -19,6 +19,7 @@ node test/sim/profile.js <hand-log.json> ...                                   #
 node test/sim/calibrate.js <hand-log.json> ... --names <private file>         # refits profiles.json from logs
 node test/sim/range-test.js <hand-log.json> ...                              # do they fold by absolute or range-relative strength?
 node test/sim/range-test.js --bots test/sim/profiles-v8.json                 # ... the same test on bots
+node test/sim/allin-test.js <hand-log.json> ...                              # preflop all-in re-raises by stack depth (--bots too)
 node test/sim/v8-ref.js --out test/sim/v8-ref.json                           # the v8 bots' usual ranges (BOTPROFILES=...)
 ```
 
@@ -203,6 +204,21 @@ bots, seed and block size), so a third arm can be added later without replaying 
   the same quantile of the solver's read in both (rb-hero.js's method: v8 0.58-0.59, v9 0.57, friends 0.55 ± 0.05),
   and hero's heads-up river calls win less than their equity in both (v9 0.23 against 0.35, v8 0.23 against 0.34).
   Scripts and tables: sims/2026-11-04-v8bots/ in the project folder (rbv8b.js, slope.js).
+* Friend bots v10 (5 Nov; `BOTPROFILES=test/sim/profiles-v10.json`): v9 plus `jam` 0.0413 and `rrShove` 0. Facing one
+  raise, a bot goes all-in with a share J = `jam` x (40bb / its chips)^`jamK` (1.52, at most `jamMax` 0.3) of the spots,
+  from the hands between its re-raise range and `jamTop` (0.7) x VPIP; its other re-raises shrink by J, so it re-raises
+  about as often in all. Why: the friends' preflop all-ins are wide and come from short stacks. `allin-test.js` on all
+  logs (519 hands): 8 of 649 first raises faced were jammed, 2 of 25 under 30bb of chips, 2 of 44 at 30-60bb, 2 of 78 at
+  60-100bb, 2 of 368 at 100-200bb, 0 of 134 deeper (fit: 12% at 20bb, 4.1% at 40bb, 0.6% at 150bb); the shown jams sit
+  at class rank 0.24-0.64 (Q6o, T9o, J8o, A2s twice, Q2o; 0 = AA), where the other shown re-raises have a median of 0.06.
+  Over two raises or more they went all-in once in 200 spots (ATo, 50bb). The v8 bots' all-ins were their top hands
+  (median 0.06, `rrShove`: a share of every re-raise), as rare when short as deep (30bb: 1.8% of first raises faced).
+  Bot play (`allin-test.js --bots`, 6,000 hands, stacks 150/30/60/100bb rotating), friends / v10 / v8: all-in share of
+  every raise faced at 30-60bb 0.061 / 0.085 / 0.040, at 60-100bb 0.020 / 0.026 / 0.014, at 100-200bb 0.004 / 0.007 /
+  0.005; jams over one raise at 150bb 0.54% / 0.69% / 0.65%; all-in hands' median class rank 0.40 (n 7) / 0.26-0.35 /
+  0.06; re-raise share 0.08-0.11 / 0.11-0.125 / 0.10-0.115. The forced shoves stay (a re-raise to 40%+ of the stack is
+  all-in), so short bots still shove some value hands. The sim's stacks are 150bb unless `--stack` or `--seat-stacks`
+  say otherwise; jams are rare there, as with the friends.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
