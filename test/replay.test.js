@@ -2156,7 +2156,7 @@ test('bigRaiseRange: an open to 30bb+ that keeps chips behind reads as the top 1
   near(spot(big, {}, '3bet').equity.share, spot(big, { bigRaiseRange: false }, '3bet').equity.share);
 });
 
-test('pfCommitCall: a preflop raiser with a third of their stack in calls hero\'s shove (false: old rule)', () => {
+test('pfCommitCall: a preflop raiser or caller with a third of their stack in calls hero\'s shove (false: old rule)', () => {
   const spot = (committed, stack, extra) => E.analyzeSync(Object.assign({
     hero: C('Ah 9h'), board: [], pot: committed + 3, toCall: committed - 2, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
     heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
@@ -2166,6 +2166,18 @@ test('pfCommitCall: a preflop raiser with a third of their stack in calls hero\'
   assert.ok(spot(262, 248) >= 0.95, 'half the stack in: calls');
   assert.ok(spot(262, 248, { pfCommitCall: false }) < 0.9, 'old rule folds some');
   assert.ok(spot(60, 450) < 0.9, 'an eighth of the stack in: the usual rule (its biggest raise)');
+  // Callers too (v1.8.16): 1 Nov, Jagger called a 32bb open with 92bb.
+  const caller = (committed, stack, extra) => E.analyzeSync(Object.assign({
+    hero: C('As Jd'), board: [], pot: 131, toCall: 62, stack: 502, bigBlind: 2, inPosition: false, tableStyle: 'typical',
+    heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
+    opponents: [
+      { name: 'R', tally: {}, actions: { pre: 'raise' }, sizes: { pre: 31 }, pfAggressor: true, position: 'late', committed: 64, stack: 998, bet: 64, heroIP: true },
+      { name: 'K', tally: {}, actions: { pre: 'call' }, sizes: {}, position: 'late', committed, stack, bet: committed, heroIP: true }],
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+  }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[1].cont;
+  assert.ok(caller(64, 120) >= 0.95, 'a caller with a third of the stack in calls');
+  assert.ok(caller(64, 120, { pfCommitCall: false }) < 0.9);
+  assert.ok(caller(64, 900) < 0.9, 'a deep caller: the usual rule');
 });
 
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {
