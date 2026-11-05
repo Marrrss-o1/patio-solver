@@ -1756,6 +1756,8 @@
     let over = stats.tiltOver && overbetLine(actions, sizes, stats.tiltOver) ? stats.tiltOver.tilt : 0;
     // River raises of any size read stronger (RIVER_RAISE_TILT); the larger of the two applies.
     if (stats.tiltRaise && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltRaise.street]]] === 'raise') over = Math.max(over, stats.tiltRaise.tilt);
+    // A bet made after hero checked that street reads stronger (CHECK_BET_TILT, only with input.checkBetTilt).
+    if (stats.tiltCheckBet && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltCheckBet.street]]] === 'bet') over = Math.max(over, stats.tiltCheckBet.tilt);
     const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
@@ -2165,6 +2167,12 @@
   // 21.2 nats over a random guess. River bets fit best with no tilt (n 220). The read keeps a quarter of the range
   // noise on turn and river raises already; 8 of 10 shown river raises were strong in the older logs.
   const RIVER_RAISE_TILT = { tilt: 0.3, street: 5 };
+  // Bets into hero's river check read stronger (CHECK_BET_TILT; off: input.checkBetTilt true turns it on, a number sets
+  // the tilt): facing a river bet after hero checked the river, the bettor's range gets this strength tilt, like
+  // RIVER_RAISE_TILT (the larger applies; neither stacks on the hero-pot tilt). Leak hunt, 6 Nov: shown river bets after
+  // hero's check sat at 0.63 of the read's range (n 28, best tilt 0.2), after a friend's check 0.51 (n 33); hero's
+  // heads-up river check-calls won 0 of 11 at a predicted equity of 0.36.
+  const CHECK_BET_TILT = { tilt: 0.2, street: 5 };
 
   // Huge preflop raises that keep chips behind read tight (v1.8.15, input.bigRaiseRange: false turns it off, a number
   // sets the width): an open or isolation raise to 30bb or more with at least a quarter of the raise-to still behind is
@@ -5630,6 +5638,7 @@
     const respNow = respScore(current, RD);
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : {});
+    const cbt = input.checkBetTilt === true ? Object.assign({}, CHECK_BET_TILT) : typeof input.checkBetTilt === 'number' ? Object.assign({}, CHECK_BET_TILT, { tilt: input.checkBetTilt }) : null;
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
     const dsh = input.deepShove === false ? null : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : Object.assign({}, DEEP_SHOVE);
@@ -5684,6 +5693,10 @@
       if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
       // River raises read stronger (RIVER_RAISE_TILT). input.riverRaiseTilt: false turns it off, a number sets the tilt.
       if (rrt && rrt.tilt) { stats.tiltRaise = rrt; if (statsHU) statsHU.tiltRaise = rrt; }
+      // Bets after hero's check on the river read stronger (CHECK_BET_TILT), only with input.checkBetTilt.
+      if (cbt && street === cbt.street && STREET_ACTION_MAP[(input.heroActions || {})[STREET_KEYS[street]]] === 'check' && STREET_ACTION_MAP[(o.actions || {})[STREET_KEYS[street]]] === 'bet') {
+        stats.tiltCheckBet = cbt; if (statsHU) statsHU.tiltCheckBet = cbt;
+      }
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
       if (shr) { stats.shoveRange = shr; if (statsHU) statsHU.shoveRange = shr; }
