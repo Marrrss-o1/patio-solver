@@ -5494,7 +5494,13 @@
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
-      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position);
+      // A player yet to act preflop holds a dealt hand, not a chosen one, so the showdown tilt (fitted on the hands their
+      // lines showed) arguably doesn't apply to it. input.pendingTilt: false drops it for them; by default it stays (the
+      // simulator was neutral, see CLAUDE.md). With the home prior's passive tilt of -0.15 the big blind's range leans
+      // toward weak hands (top hands x0.55, worst x1.8): the Monte Carlo had duke (5 Nov) continue 24% against a 6bb open
+      // where his read said 37%, and the preflop solver meets a weaker range.
+      const untilted = street === 0 && pending && input.pendingTilt === false;
+      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position, untilted);
       const qCont = rangeQuantiles(W, respNow);
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0

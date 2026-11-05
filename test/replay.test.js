@@ -515,6 +515,21 @@ test('reads: answers to 8bb+ opens and shoves are kept apart from 4bb opens (vsO
   assert.ok(off4.fold > open4.fold + 0.2, JSON.stringify(off4));
 });
 
+test('preflop: a big blind yet to act holds an untilted dealt hand (pendingTilt: false, off by default)', () => {
+  // Small blind opens to 4bb heads-up; the big blind's learned answer to opens that size continues 37%.
+  const tally = Object.assign(T.blankTally(), { vsOpen: { small: { fold: 0, call: 0, raise: 0 }, medium: { fold: 0, call: 0, raise: 0 }, large: { fold: 25, call: 15, raise: 0 } } });
+  const spot = (extra) => E.analyzeSync(Object.assign({ hero: C('Ah 6h'), board: [], pot: 3, toCall: 1, stack: 120, bigBlind: 2, mix: false, seed: 1,
+    heroPosition: 'blinds', inPosition: true, opponents: [{ name: 'V', tally, actions: { pre: 'pending' }, position: 'blinds' }], iterations: 6000 }, extra));
+  const foldAt = (r) => r.scenarios.find((s) => s.kind !== 'fold' && s.amount === 7).foldPct;
+  const cont = E.computeStats(tally, 'typical').vsOpen.largeAll.cont;
+  const tilted = foldAt(spot()), untilted = foldAt(spot({ pendingTilt: false }));
+  // With the home prior's passive tilt the dealt hand leans weak, so the Monte Carlo folded far more than the read says.
+  assert.ok(Math.abs(untilted - (1 - cont)) < 0.04, `untilted ${untilted} vs read ${1 - cont}`);
+  assert.ok(tilted > untilted + 0.05, `tilted ${tilted} vs untilted ${untilted}`);
+  // Off by default: no input and pendingTilt true read the same.
+  assert.strictEqual(foldAt(spot({ pendingTilt: true })), tilted);
+});
+
 test('reads: a bet that then calls a raise reads stronger than a plain bet', () => {
   assert.strictEqual(T.streetAction(['bet', 'call'], 4), 'betcall');
   assert.strictEqual(T.streetAction(['bet'], 4), 'bet');
