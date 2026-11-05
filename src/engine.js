@@ -3460,6 +3460,31 @@
       }
       return q;
     }
+    // Per river card, the share of all hands on that board each opponent hand beats (cfg.madeCall: made hands
+    // call hero's river bets, RIVER_MADE_CALL).
+    const absCache = new Array(52);
+    function riverAbs(c) {
+      if (absCache[c] !== undefined) return absCache[c];
+      const b5 = new Int32Array(7);
+      for (let j = 0; j < 4; j++) b5[j] = board[j];
+      b5[4] = c;
+      setBoard(b5, 5);
+      const all = [];
+      for (let k = 0; k < NUM_COMBOS; k++) {
+        const x = COMBO_HI[k], y = COMBO_LO[k];
+        if (onBoard[x] || onBoard[y] || x === c || y === c) continue;
+        all.push(scoreHole(x, y));
+      }
+      all.sort((a, b) => a - b);
+      const below = (v) => { let lo = 0, hi = all.length; while (lo < hi) { const m = (lo + hi) >> 1; if (all[m] < v) lo = m + 1; else hi = m; } return lo; };
+      const out = new Float64Array(O.n), RO = O.R[c];
+      for (let i = 0; i < O.n; i++) {
+        if (!RO.valid[i]) continue;
+        const v = RO.score[i], b = below(v), e = below(v + 1);
+        out[i] = (b + (e - b) / 2) / all.length;
+      }
+      return (absCache[c] = out);
+    }
     // River cards that make the board a straight or better: the opponent's hands that only play
     // the board call any bet (boardPlayers).
     const tieCache = new Array(52);
@@ -3475,7 +3500,7 @@
       }
       return (tieCache[c] = out);
     }
-    function fixedStrategy(acts, facingFrac, vsRaise, rootRaise, q, n5, aggS, ties) {
+    function fixedStrategy(acts, facingFrac, vsRaise, rootRaise, q, n5, aggS, ties, abs) {
       const st = streetStats(oppStats, n5);
       const bf = clamp(st.betFreq, 0.05, 0.9), vr = valueShare(oppStats, betFrac);
       const N = O.n, nA = acts.length, s = new Float32Array(nA * N), pr = new Float64Array(nA);
@@ -3493,7 +3518,11 @@
           let pCont;
           if (rootRaise) pCont = sigmoid((qi - 0.9 * (1 - vr)) / 0.04);
           else if (vsRaise) pCont = qi >= 1 - bf * vr ? 1 : qi < bf * (1 - vr) ? 0.1 : 0.5;
-          else pCont = sigmoid((qi - foldQ) / 0.04);
+          else {
+            pCont = sigmoid((qi - foldQ) / 0.04);
+            // Facing hero's river bet, made hands call whatever the read's cut (RIVER_MADE_CALL).
+            if (abs) pCont = 1 - (1 - pCont) * sigmoid((cfg.madeCall - abs[i]) / 0.03);
+          }
           // A short raise (an all-in a chip over the call) folds no more of the range than a bet of that price.
           if ((rootRaise || vsRaise) && facingFrac < 0.25 && cfg.raisePrice !== false) pCont = Math.max(pCont, sigmoid((qi - foldQ) / 0.04));
           if (ties && ties[i]) pCont = 1;
@@ -3567,7 +3596,8 @@
         const aggS = n5 === 4 ? aggAlways : (oppAgg ? aggIfBet : aggAlways);
         // Hero raising the bet the opponent made before this decision: their range is their betting range.
         const rootRaise = !!vsRaise && n5 === 4 && toCall > 0 && oIn === 0;
-        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, rootRaise, q, n5, aggS, n5 === 5 ? riverTies(card) : null);
+        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, rootRaise, q, n5, aggS, n5 === 5 ? riverTies(card) : null,
+          n5 === 5 && cfg.madeCall > 0 && facing > 0 && !vsRaise ? riverAbs(card) : null);
         // Reach under the read's strategy, so river subgames know the read's range there.
         n.kids = kids.map((k, j) => {
           if (typeof k !== 'function') return k;
@@ -5276,6 +5306,8 @@
       ? clamp(((+input.pot || 0) / Math.max(1e-9, bigBlind) - hpt.from) / Math.max(1e-9, hpt.to - hpt.from), 0, 1) : 0;
     const RRF = input.riverRaiseFold === true ? RIVER_RAISE_FOLD : typeof input.riverRaiseFold === 'number' ? input.riverRaiseFold : 0;
     const RMC = input.riverMadeCall === false ? 0 : typeof input.riverMadeCall === 'number' ? input.riverMadeCall : RIVER_MADE_CALL;
+    // The turn solver's river subgames: the same rule unless input.turnMadeCall is false.
+    const TMC = input.turnMadeCall === false ? 0 : RMC;
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
@@ -6125,7 +6157,7 @@
         heroW: buildRange(heroStats, heroActs, strengths, board, input.heroSizes, input.heroPfAggressor, input.heroPosition, true),
         oppW: buildRange(o.stats, o.actions, strengths, board, oi.sizes, oi.pfAggressor, oi.position),
         oppStats: Object.assign({}, o.stats, { foldShift: 0 }), p: o.stats.exploitWeight,
-        aggScale: o.aggroFold ? aggS : 1, aggScaleIfAgg: aggS,
+        aggScale: o.aggroFold ? aggS : 1, aggScaleIfAgg: aggS, madeCall: TMC,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending, heroIP: inPosition,
         iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
@@ -6151,7 +6183,7 @@
         const ts = turnSolve({ raisePrice: input.raisePrice !== false,
           board, heroCombo, strengths4: strengths[4], bigBlind, heroW, oppW: field.W,
           oppStats: fieldStats(opps.map((x) => x.stats), o.stats, opps.map((x) => x.statsHU || x.stats)), p: Math.min(...opps.map((x) => x.stats.exploitWeight)),
-          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS,
+          aggScale: opps.some((x) => x.aggroFold) ? aggS : 1, aggScaleIfAgg: aggS, madeCall: TMC,
           pot: potWin, toCall, stack: mwStackF,
           heroFirst: toCall <= 0 && opps.some((x) => x.pending), heroIP: inPosition,
           iterations: input.turnIterations, timeMs: input.turnTimeMs, riverSamples: input.turnRiverSamples, seed,
