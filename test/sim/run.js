@@ -238,7 +238,9 @@ function playBlock(cfg, block) {
         // the chosen action's EV, hero's chips in the pot before acting, the pot and the number of opponents (bb).
         if (diag && hero.tracker) hero.onDecision = (vw, input, res) => diag.push([vw.street, input.toCall > 0 ? 1 : 0, res.best.kind, Math.round((res.best.amount || 0) / cfg.bb * 10) / 10, res.solver ? res.solver.kind : '',
           Math.round((res.best.ev || 0) / cfg.bb * 1000) / 1000, Math.round(vw.put / cfg.bb * 1000) / 1000, Math.round(vw.pot / cfg.bb * 1000) / 1000, vw.nOpp,
-          res.equity ? Math.round(res.equity.share * 1000) / 1000 : null]);
+          res.equity ? Math.round(res.equity.share * 1000) / 1000 : null,
+          // Local diag addition (Cloud #47): preflop raises before hero's decision (1 = an open in front, 2 = a 3-bet ...).
+          vw.street === 0 && input.history ? input.history.filter((e) => e.st === 'pre' && (e.act === 'raise' || e.act === '3bet')).length : null]);
         // Env RIVERDUMP=<file>: every heads-up river decision of hero's facing a bet, with the solver input, its options,
         // every seat's hole cards and the hand's log afterwards (what the bettor did after hero's raise), one JSON line
         // each, for checking the river solver's raise and call EVs against the bots' real hands (test/sim/river-check.js).
