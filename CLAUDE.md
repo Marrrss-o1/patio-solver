@@ -265,7 +265,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   -5.0 ± 2.4 bb a hand, n 22: the bots re-raise hero's iso-raises 19-36% at every size, while friends re-raise 8% of
   3.5-5bb opens, 7% at 5-8bb and 0 of 17 at 8-15bb). Files: /mnt/project-files/patio-solver/sims/2026-11-05-opensplit/
   (SHORT-STACKS.md). Off until the logs show more friends facing big opens (the simulator can't judge it: its bots
-  re-raise big opens as often as small ones).
+  re-raise big opens as often as small ones). Re-run on the v12 bots (5 Nov, 4-handed 150bb, live, 1,000 deals each):
+  all friends +22.0 ± 26.0, regulars (v12r) +2.0 ± 18.1 (pooled about +8 ± 15), so it stays off.
 - Range noise (`applyAction`): each line keeps a share `rangeNoise` (home prior 0.45, MAP per player from showdown
   likelihoods `nl` over `NOISES`) of hands that take it whatever their strength; on bets it scales with bluff share
   and bet size (`rangeNoiseAgg`). Without it shown hands scored worse than a random guess.
@@ -293,6 +294,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   live budget, v10 bots, 4-handed, 1,000 deals, on vs off: -18.8 ± 29.0 (button -24.0 ± 14.3, good hands -19.1 ± 16.8),
   neutral, so off. Opens beat their EV by 4.7bb in the 4 Nov audit (pfFlopEdge), so the tilt may partly stand in for
   that edge. Files: /mnt/project-files/patio-solver/sims/2026-11-05-untilt/, analysis/2026-11-05-session2.md.
+  Re-run on the v12 bots (5 Nov, 4-handed, live, 1,000 deals each): all friends -25.3 ± 22.3, regulars (v12r)
+  -46.7 ± 26.9 (pooled about -34 ± 17; strong and good hands lose in both), so the tilt stays.
 - Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
   (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
   showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on
@@ -799,7 +802,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   deals each: live 4-handed -41.7 ± 22.6, 5-handed +16.9 ± 25.3, 6-handed +3.0 ± 15.7 (pooled -6 ± 12), phone
   4-handed +24.2 ± 25.0. No win, so it stays off. The bots keep strong draws (drawCall) but fold weak made hands by a
   fixed strength line, so they are only partly like the friends' floats. Files:
-  /mnt/project-files/patio-solver/sims/2026-11-05-respdraw/.
+  /mnt/project-files/patio-solver/sims/2026-11-05-respdraw/. Re-run on the v12 bots (5 Nov, 4-handed, live, 1,000
+  deals each): all friends +19.2 ± 25.0, regulars (v12r) +8.6 ± 21.6 (pooled about +13 ± 16), so it stays off. Files for
+  all three re-runs: /mnt/project-files/patio-solver/sims/2026-11-05-v12opts/.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
