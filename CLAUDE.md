@@ -696,6 +696,58 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the bots' real hands, +1.1 ± 3.2 bb/100. So it stays off. The same dump has river calls overvalued against the bots
   (solver eq 0.295, real share 0.167, n 93, mostly facing bets under 0.6 pot), where friends' river bets show on
   target in the logs, so that reads as a bot artifact.
+- Made hands call hero's river bets (v1.8.19, `RIVER_MADE_CALL` 0.55; `input.riverMadeCall: false` turns it off, a
+  number sets it; `turnMadeCall: false` / `planMadeCall: false` turn off the turn solver's river subgames / the
+  lookahead's river): facing hero's river bet, an opponent's hand that beats at least 55% of all hands on the board
+  continues whatever its place in the read's range (the fixed strategy's fold is x sigmoid((0.55 - a) / 0.03), a = the
+  hand's share of all hands it beats; the lookahead caps callCut and foldHero at that strength, `heroCallCut`). Raises
+  and friends' bets are untouched. Logs (31 Oct - 4 Nov, reads replayed from earlier hands, each responder's range
+  rebuilt at every river bet; scripts/2026-11-05-river-bluffs/): friends answer each other as read (heads-up n 154,
+  predicted .47, folded .46; calibration slope 0.88 ± 0.20), but answer hero by absolute strength: heads-up n 30, read
+  .51 vs .47 overall, .57 vs .29 where the read needed made hands to fold (n 17), .44 vs .69 where folding the weak
+  hands was enough (n 13); by size (under 45% / 45-85% / 85%+ pot) .54 / .43 / .40 against a read of .37 / .54 / .67.
+  Every shown heads-up caller of a hero river bet beat 59%+ of all hands. Log-likelihood of hero's heads-up spots:
+  read -21.8, this -13.5; multiway (n 16) -21.3 -> -19.6; friends' own bets get worse with it (-115.5 -> -119.1), so it
+  is hero-only. Pot type is not the driver (the called bluffs were mostly in limped pots; in 3-bet pots friends fold to
+  each other more than read). The riverFoldCurve (size elasticity) and riverFoldShrink (fold rates pulled to the mean)
+  threads aimed at the same gap: on hero's heads-up bets they scored -17.1 and -18.3, and on top of this -13.9 and
+  -13.0, so only this was landed. The river solver's own fold at hero's actual size (24 heads-up bets): main .483, this
+  .387, actual .458 (log-lik -17.4 -> -16.0). Log replay (every hero decision, live budget): 17 of 120 river decisions
+  change (bluffs into Q8, JJ/88, Q3, A8 become checks; #369 and #475's bluffs get smaller; value bets grow, which
+  lose more against QQ and AT and win more against QT), 24 of 155 turn decisions (#66's raise -> call, #189 and #479's
+  semi-bluffs -> check), 39 of 243 flop decisions (mostly weak multiway stabs, equity .07-.2, become checks, most of
+  which were called or raised). Simulator, live budget, all three on vs off, 1,000 deals each, v9 bots (v8 plus
+  `heroRiverAbs` 0.55: facing hero's river bet a bot continues iff its made-hand percentile is 0.55+, as the friends
+  do): 4-handed +48.8 ± 22.5, 5-handed +6.8 ± 23.0, 6-handed +36.8 ± 21.7 (pooled +31 ± 13); heads-up river air bets
+  84 -> 44 (5-handed) and their TD -4.8 ± 4.3 -> +9.8 ± 3.9 chips, turn air bets 89 -> 55. On v8 bots, which fold far more than the friends to river bluffs and big
+  bets (audit, 4 Nov), 4-handed -23.8 ± 20.7 (strong hands -17.5 ± 11.6: the bigger value bets get folded). Files:
+  /mnt/project-files/patio-solver/sims/2026-11-05-rivermade/, analysis/2026-11-05-river-bluffs.md.
+- River raises read stronger (v1.8.19, `RIVER_RAISE_TILT` {tilt 0.3, street 5}; `input.riverRaiseTilt: false` turns it
+  off, a number sets the tilt): a river raise of any size (raise, check-raise, re-raise lines) adds 0.3 of strength tilt
+  to the raiser's range in buildRange, like `OVERBET_TILT` (the larger of the two applies; neither stacks on the
+  hero-pot tilt). Shows, all logs (leak hunt's rbl.js sweep, reads from earlier hands): 21 shown river raises at 0.69
+  of the read's range for plain raises (n 17), 0.64 for raises under 3x the pot (n 19); log-likelihood by tilt 0 / 0.15
+  / 0.3 / 0.5: 20.4 / 23.1 / 23.5 / 21.2 nats over a random guess. River bets fit best untilted (n 220). Log replay:
+  2 of the 9 river decisions facing a raise change, both calls -> folds that the shows back (31 Oct #25 QT vs mkorn777's
+  AA, #126 AK vs MaPokerrk's KT full house). Too rare for the simulator to judge.
+- Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
+  on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
+  (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
+  hero's bet (`qTurnR`, `qFlopR`) rank hands by hs + 2 x pot (`respScore`) instead of ehs (hs + pot), as buildRange's
+  call ranges already do. Logs (reads from earlier hands, ranges rebuilt at every flop and turn bet, 958 first answers;
+  scripts/2026-11-05-river-bluffs/ capture-street.js, ranges-street2.js, fit-draw2.js): friends float with flush draws,
+  gutshots, overcards and backdoors that ehs ranks at the bottom (6 of 27 shown heads-up callers of hero's flop bets sat
+  below the read's cut). Log-likelihood, ehs -> weight 2: hero's heads-up flop bets (n 62) -59.0 -> -52.3, turn (49)
+  -37.3 -> -31.7, hero's multiway flop bets (69) -36.7 -> -40.4, friends' bets to each other flop -87.5 -> -81.7 (HU,
+  102) and -161.2 -> -154.2 (MW, 241), turn -87.7 -> -73.8 (121) and -98.8 -> -90.6 (142); weights 3-4 fit about the
+  same. A softer edge (w 0.1-0.24 instead of 0.04) fits much better still on every set but hero's multiway flops, which
+  says the answer model is noisy, not that the read's fold level is off. Log replay (live budget, with riverMadeCall):
+  25 of 243 flop decisions change (medium hands check or bet smaller, a few semi-bluffs grow), 6 of 155 turn decisions
+  (near ties). Off is identical to before (80 flop and turn decisions checked). Simulator, v9 bots, on vs off, 1,000
+  deals each: live 4-handed -41.7 ± 22.6, 5-handed +16.9 ± 25.3, 6-handed +3.0 ± 15.7 (pooled -6 ± 12), phone
+  4-handed +24.2 ± 25.0. No win, so it stays off. The bots keep strong draws (drawCall) but fold weak made hands by a
+  fixed strength line, so they are only partly like the friends' floats. Files:
+  /mnt/project-files/patio-solver/sims/2026-11-05-respdraw/.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
