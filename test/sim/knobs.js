@@ -24,7 +24,9 @@ const KNOBS = {
   // River solver: hero's bet sizes x pot (at most 3: a node has at most 4 actions).
   riverSizes: { def: [0.33, 0.66, 1], edits: [['const fracs = player === 0 ? [0.33, 0.66, 1] : [oppBetFrac];', (v) => { if (v.length > 3) throw new Error('riverSizes: at most 3'); return `const fracs = player === 0 ? ${list(v)} : [oppBetFrac];`; }]] },
   // Shove threshold preflop: all-in is an option at [stack <= v[0] big blinds] or [stack <= v[1] x (pot + call)].
-  shovePre: { def: [25, 3], edits: [['? stack <= 25 * bigBlind || stack <= 3 * (pot + toCall)', (v) => `? stack <= ${num(v[0])} * bigBlind || stack <= ${num(v[1])} * (pot + toCall)`]] },
+  // (Since v1.8.17 the big-blind part is input.pfShoveBB, default 25; the knob sets that default.)
+  shovePre: { def: [25, 3], edits: [['const pfShoveBB = input.pfShoveBB != null ? +input.pfShoveBB : 25;', (v) => `const pfShoveBB = input.pfShoveBB != null ? +input.pfShoveBB : ${num(v[0])};`],
+    ['? stack <= pfShoveBB * bigBlind || stack <= 3 * (pot + toCall)', (v) => `? stack <= pfShoveBB * bigBlind || stack <= ${num(v[1])} * (pot + toCall)`]] },
   // Shove threshold after the flop: all-in is an option at stack <= v x (pot + call).
   shovePost: { def: 2.5, edits: [[': stack <= 2.5 * (pot + toCall));', (v) => `: stack <= ${num(v)} * (pot + toCall));`]] },
   // Hero's story: the fold-rate shift from a strong-looking line, times v (0 = off).

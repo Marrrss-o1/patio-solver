@@ -62,6 +62,8 @@ function answers(H) {
     const hands = known.map((k) => k || [deck.pop(), deck.pop()]);
     const boardAll = board.concat(deck.splice(0, 5 - board.length));
     const queue = P.map((p) => log.filter((e) => e.who === p.name && e.act !== 'sb' && e.act !== 'bb'));
+    // Raises before the flop (0: limped or checked, 1: one raise, 2: re-raised).
+    const pfRaises = log.filter((e) => e.st === 'pre' && KIND[e.act] === 'raise').length;
     const mine = [];
     let fail = false;
     const seats = P.map((p, i) => ({ rangeAware: true, policy(v) {
@@ -70,8 +72,13 @@ function answers(H) {
       if (v.street > 0 && v.toCall > 0 && !p.hero && KIND[e.act] !== 'check') {
         const W = ref.rangeBefore(v), tbl = bots.boardTable(v.board);
         let tot = 0, m = 0; for (const k of tbl.live) if (W[k] > 0) { tot += W[k]; m += W[k] * tbl.hp[k]; }
+        // Who made the bet being answered (the last bet or raise before this answer on the street).
+        const at = log.indexOf(e);
+        let bettor = null; for (let j = at - 1; j >= 0 && log[j].st === st; j--) if (KIND[log[j].act] === 'raise') { bettor = log[j].who; break; }
+        const bp = bettor && h.players.find((x) => x.name === bettor);
         mine.push({ st, fold: e.act === 'fold' ? 1 : 0, f: v.toCall / Math.max(1, v.pot - v.toCall), hu: v.nOpp === 1, raised: v.raises >= 2,
-          own: (v.seq[st] || []).some((x) => x === 'bet' || x === 'raise'), rangeHp: m / tot, potBB: v.pot / v.bb });
+          own: (v.seq[st] || []).some((x) => x === 'bet' || x === 'raise'), rangeHp: m / tot, potBB: v.pot / v.bb,
+          pf: pfRaises, vsHero: !!(bp && bp.hero), checked: (v.seq[st] || []).includes('check') });
       }
       return [{ t: KIND[e.act], to: e.to, p: 1 }];
     } }));
@@ -116,3 +123,14 @@ const t1 = qs[Math.floor(qs.length / 3)], t2 = qs[Math.floor((2 * qs.length) / 3
 const g = (s) => (s.length ? `${(s.reduce((a, r) => a + r.fold, 0) / s.length).toFixed(2)} (n ${s.length})` : '-');
 console.log(`bets of 25-110% pot, fold by the range's strength (mean percentile under ${t1.toFixed(2)} / ${t2.toFixed(2)} / above): ${g(S.filter((r) => r.rangeHp < t1))}, ${g(S.filter((r) => r.rangeHp >= t1 && r.rangeHp < t2))}, ${g(S.filter((r) => r.rangeHp >= t2))}`);
 console.log(`same bets by pot (under 10bb / 10-20bb / 20bb+): ${g(S.filter((r) => r.potBB < 10))}, ${g(S.filter((r) => r.potBB >= 10 && r.potBB < 20))}, ${g(S.filter((r) => r.potBB >= 20))}`);
+// River answers by how the pot was played before the flop (first answers to a bet, not re-raised after betting).
+if (args.includes('--river')) {
+  const RV = R.filter((r) => r.st === 'river' && !r.raised);
+  const pfName = ['limped', 'raised', 're-raised'];
+  console.log(`river first answers: ${g(RV)}; heads-up ${g(RV.filter((r) => r.hu))}, multiway ${g(RV.filter((r) => !r.hu))}; facing hero ${g(RV.filter((r) => r.vsHero))}`);
+  for (let k = 0; k < 3; k++) {
+    const P = RV.filter((r) => Math.min(2, r.pf) === k);
+    const by = [[0, 0.45], [0.45, 0.85], [0.85, 99]].map(([lo, hi]) => g(P.filter((r) => r.f >= lo && r.f < hi))).join(' / ');
+    console.log(`  ${pfName[k].padEnd(10)} ${g(P)}  by size (<45% / 45-85% / 85%+ pot) ${by}  HU ${g(P.filter((r) => r.hu))}  after checking ${g(P.filter((r) => r.checked))}  facing hero ${g(P.filter((r) => r.vsHero))}`);
+  }
+}
