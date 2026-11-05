@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.25
+// @version      1.8.26
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -2181,7 +2181,8 @@ function ENGINE() {
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
-  // Limpers facing the first raise (v1.8.24; input.pfLimpCurve: false turns it off, an object replaces fields):
+  // Limpers facing the first raise (v1.8.24, off since v1.8.26; input.pfLimpCurve: true turns it on, an object replaces
+  // fields):
   // logit(fold) = a + b1 x min(ln(R / ref), ln(hinge / ref)) + b2 x max(0, ln(R / hinge)) + s x (logit(limpFold) -
   // logit(s0)), R = the raise-to in bb, limpFold = the player's read (size-mixed). Above 30bb the cliff (bigFade)
   // scales the continue share, and the big-raise floor (callBig) still holds from 8bb. They re-raise rr x their
@@ -2191,7 +2192,8 @@ function ENGINE() {
   // constant, -214.1), the curve -180.1; held out on 5 Nov (fit before) -61.1 against -72.4. At hero's isolation raises
   // over one limper the solver's predicted all-fold goes 42% -> 26%, actual 26% (n 134; 3.5-5bb raises 50% -> 26%, actual
   // 21%). Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: heads-up +15.8 ± 22.5, 3-handed
-  // +31.1 ± 25.3, 4-handed +14.0 ± 20.8 (pooled +19.2 ± 13.1).
+  // +31.1 ± 25.3, 4-handed +14.0 ± 20.8 (pooled +19.2 ± 13.1). Confirmation runs on v1.8.24: 5-handed +23.2 ± 19.7,
+  // 4-handed -45.5 ± 22.9 (button -37.7 ± 12.5, medium hands -45.2 ± 13.7); all five pooled +8.2 ± 9.8, so it is off.
   const PF_LIMP_CURVE = { a: -0.7, b1: 3.0, ref: 4, hinge: 6, b2: 0.3, s: 0.89, s0: 0.52, rr: 0.045 };
   function limpCurveFold(R, limpFold, opt) {
     const C = opt && typeof opt === 'object' ? Object.assign({}, PF_LIMP_CURVE, opt) : PF_LIMP_CURVE;
@@ -5781,7 +5783,7 @@ function ENGINE() {
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: input.pfLimpCurve === false ? null : input.pfLimpCurve && typeof input.pfLimpCurve === 'object' ? input.pfLimpCurve : PF_LIMP_CURVE, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: input.pfLimpCurve === true ? PF_LIMP_CURVE : input.pfLimpCurve && typeof input.pfLimpCurve === 'object' ? input.pfLimpCurve : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
