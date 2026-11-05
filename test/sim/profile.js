@@ -36,7 +36,9 @@ function blank() {
     // Answering the first bet of a street after the flop (25-110% pot): heads-up, and multiway as the first to
     // answer, the last after everyone before folded, the last after someone stayed; plus whole answers (all fold) with
     // 2 and 3 to answer, kept on the first answerer.
-    huAnsN: 0, huAnsFold: 0, mwFirstN: 0, mwFirstFold: 0, mwLastFoldedN: 0, mwLastFoldedFold: 0, mwLastStayedN: 0, mwLastStayedFold: 0,
+    huAnsN: 0, huAnsFold: 0, huAnsSN: 0, huAnsSFold: 0, huAnsLN: 0, huAnsLFold: 0,
+    // Facing a bet of 25-110% pot after the flop, in pots under 10bb and of 20bb or more (pot before answering).
+    potSN: 0, potSFold: 0, potLN: 0, potLFold: 0, mwFirstN: 0, mwFirstFold: 0, mwLastFoldedN: 0, mwLastFoldedFold: 0, mwLastStayedN: 0, mwLastStayedFold: 0,
     mw2N: 0, mw2Fold: 0, mw3N: 0, mw3Fold: 0,
     // The first chance to bet a turn or river nobody has bet yet, by the player's own line on the street before:
     // called a bet (without betting or raising), bet or raised, or only checked (the street went by without a bet).
@@ -169,7 +171,7 @@ function addLog(prof, h, bb, opts) {
       const i = fb.ans.length, stayed = fb.ans.some(([, a]) => a !== 'fold');
       if (t) {
         const f = e.act === 'fold' ? 1 : 0;
-        if (fb.m === 1) { t.huAnsN++; t.huAnsFold += f; }
+        if (fb.m === 1) { t.huAnsN++; t.huAnsFold += f; if (fb.pp < 50) { t.huAnsSN++; t.huAnsSFold += f; } else { t.huAnsLN++; t.huAnsLFold += f; } }
         else if (i === 0) { t.mwFirstN++; t.mwFirstFold += f; }
         else if (i === fb.m - 1 && !stayed) { t.mwLastFoldedN++; t.mwLastFoldedFold += f; }
         else if (i === fb.m - 1) { t.mwLastStayedN++; t.mwLastStayedFold += f; }
@@ -177,7 +179,7 @@ function addLog(prof, h, bb, opts) {
       fb.ans.push([e.who, e.act]);
     }
     if (e.act === 'bet' && !(e.facing > 0) && e.potPct >= 25 && e.potPct <= 110 && (!fb || fb.st !== e.st)) {
-      fb = { st: e.st, m: names.filter((nm) => !out[nm] && nm !== e.who).length, ans: [], open: true };
+      fb = { st: e.st, m: names.filter((nm) => !out[nm] && nm !== e.who).length, ans: [], open: true, pp: e.potPct };
     }
     if (e.act === 'fold') out[e.who] = true;
     if (e.st !== street) { street = e.st; betMade = false; cur = 0; inc = bb; for (const o of [checked, aggr, faced]) for (const k of Object.keys(o)) delete o[k]; }
@@ -204,6 +206,7 @@ function addLog(prof, h, bb, opts) {
       if (e.facing > 0 && (e.act === 'fold' || e.act === 'call' || e.act === 'raise')) {
         const f = e.facing / Math.max(1, e.pot - e.facing);
         t.vs[f < 0.45 ? 'small' : f < 0.85 ? 'medium' : 'large'][e.act]++;
+        if (f >= 0.25 && f <= 1.1) { const pb = e.pot / bb, fd = e.act === 'fold' ? 1 : 0; if (pb < 10) { t.potSN++; t.potSFold += fd; } else if (pb >= 20) { t.potLN++; t.potLFold += fd; } }
         if (checked[e.who]) { t.xrOpp++; if (e.act === 'raise') t.xr++; checked[e.who] = false; }
       }
       if (street === 'flop' && !flopBet && pfRaiser) {
@@ -257,7 +260,9 @@ function summarize(t) {
   s.rrMinShare = ratio(t.rrMin, t.rrN); s.rrShoveShare = ratio(t.rrShove, t.rrN); s.rrN = t.rrN;
   s.raiseMinShare = ratio(t.praMin, t.praN); s.raiseShoveShare = ratio(t.praShove, t.praN); s.raiseN = t.praN; s.raiseOtherRatio = mean(t.praOther);
   s.minBetShare = ratio(t.minBetN, t.betN); s.betN = t.betN;
-  s.huAnsFold = ratio(t.huAnsFold, t.huAnsN); s.mwFirstFold = ratio(t.mwFirstFold, t.mwFirstN); s.mwLastFoldedFold = ratio(t.mwLastFoldedFold, t.mwLastFoldedN);
+  s.huAnsFold = ratio(t.huAnsFold, t.huAnsN); s.huAnsSFold = ratio(t.huAnsSFold, t.huAnsSN); s.huAnsLFold = ratio(t.huAnsLFold, t.huAnsLN);
+  s.huAnsSN = t.huAnsSN; s.huAnsLN = t.huAnsLN;
+  s.potSFold = ratio(t.potSFold, t.potSN); s.potLFold = ratio(t.potLFold, t.potLN); s.potSN = t.potSN; s.potLN = t.potLN; s.mwFirstFold = ratio(t.mwFirstFold, t.mwFirstN); s.mwLastFoldedFold = ratio(t.mwLastFoldedFold, t.mwLastFoldedN);
   s.mwLastStayedFold = ratio(t.mwLastStayedFold, t.mwLastStayedN); s.mw2Fold = ratio(t.mw2Fold, t.mw2N); s.mw3Fold = ratio(t.mw3Fold, t.mw3N);
   Object.assign(s, { huAnsN: t.huAnsN, mwFirstN: t.mwFirstN, mwLastFoldedN: t.mwLastFoldedN, mwLastStayedN: t.mwLastStayedN, mw2N: t.mw2N, mw3N: t.mw3N });
   for (const st of ['turn', 'river']) {

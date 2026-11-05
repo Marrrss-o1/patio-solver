@@ -158,6 +158,25 @@ class ValueFn {
   }
 }
 
+// Applies an action in a betting state { cur, myBet, stack, lastRaise, others } (others: the most any other live
+// seat can have in this street). Returns { t, add, to? }: fold / check / call / raise with the chips it adds.
+function normalizeWith(s, a) {
+  const toCall = s.cur - s.myBet;
+  let t = a.t;
+  if (t === 'check' && toCall > 0) t = 'fold';
+  if ((t === 'call' || t === 'fold') && toCall <= 0) t = 'check';
+  if (t === 'call') return { t, add: Math.min(toCall, s.stack) };
+  if (t === 'raise') {
+    const maxTo = s.myBet + s.stack;
+    let to = Math.round(a.to);
+    to = Math.max(to, s.cur + s.lastRaise);
+    to = Math.min(to, maxTo, Math.max(s.cur, s.others));
+    if (to <= s.cur) return toCall > 0 ? { t: 'call', add: Math.min(toCall, s.stack) } : { t: 'check', add: 0 };
+    return { t: 'raise', add: to - s.myBet, to };
+  }
+  return { t, add: 0 };
+}
+
 // ---------- the hand ----------
 // cfg: { n, btn, hands, boardAll, stacks, sb, bb, seats, hero, emit(ev, data, snapFn), seed, aivat: { pending, pfSamples } | null,
 //        names, ids, log: true to build a hand-log entry,
@@ -170,6 +189,8 @@ function playHand(cfg) {
     stack: cfg.stacks.slice(), start: cfg.stacks.slice(), bet: new Array(n).fill(0), put: new Array(n).fill(0),
     folded: new Array(n).fill(false), cur: 0, lastRaise: bb, raises: 0, street: 0, callsNow: 0, foldsNow: 0, pfAgg: -1, limpers: 0, limped: new Array(n).fill(false),
     seq: Array.from({ length: n }, () => ({ pre: [], flop: [], turn: [], river: [] })), nAct: 0,
+    // Range-aware bots (seat.rangeAware): each of their earlier decisions this hand, to rebuild their own range.
+    hist: Array.from({ length: n }, () => []),
     vseed: (cfg.seed ^ 0x5bd1e995) >>> 0, lastAgg: -1, potAtStreet: 0,
   };
   const hero = cfg.hero == null ? 0 : cfg.hero;
@@ -207,25 +228,13 @@ function playHand(cfg) {
   }
   let uidN = uidBase + 2 * n + 10;
 
-  // Applies a normalized action. Returns the tracker-style kind.
-  function normalize(i, a) {
-    const toCall = g.cur - g.bet[i];
-    let t = a.t;
-    if (t === 'check' && toCall > 0) t = 'fold';
-    if ((t === 'call' || t === 'fold') && toCall <= 0) t = 'check';
-    if (t === 'call') return { t, add: Math.min(toCall, g.stack[i]) };
-    if (t === 'raise') {
-      const maxTo = g.bet[i] + g.stack[i];
-      let others = 0;
-      for (let j = 0; j < n; j++) if (j !== i && !g.folded[j]) others = Math.max(others, g.bet[j] + g.stack[j]);
-      let to = Math.round(a.to);
-      to = Math.max(to, g.cur + g.lastRaise);
-      to = Math.min(to, maxTo, Math.max(g.cur, others));
-      if (to <= g.cur) return toCall > 0 ? { t: 'call', add: Math.min(toCall, g.stack[i]) } : { t: 'check', add: 0 };
-      return { t: 'raise', add: to - g.bet[i], to };
-    }
-    return { t, add: 0 };
+  // The betting state seat i acts in (what normalizeWith needs), and the normalized action.
+  function actState(i) {
+    let others = 0;
+    for (let j = 0; j < n; j++) if (j !== i && !g.folded[j]) others = Math.max(others, g.bet[j] + g.stack[j]);
+    return { cur: g.cur, myBet: g.bet[i], stack: g.stack[i], lastRaise: g.lastRaise, others };
   }
+  const normalize = (i, a) => normalizeWith(actState(i), a);
   // State after action `na` by seat i, for the value function.
   function after(i, na) {
     const put = g.put.slice(), bet = g.bet.slice(), stack = g.stack.slice(), folded = g.folded.slice();
@@ -252,6 +261,7 @@ function playHand(cfg) {
       rk: cfg.seed, nAct: g.nAct,
       // Hero's seat and whether hero is still in the hand (bots with a habit for hero's pots, bots.js hp*).
       heroSeat: hero, heroIn: !g.folded[hero],
+      hist: g.hist[i],
     };
   }
 
@@ -302,6 +312,7 @@ function playHand(cfg) {
       if (seat.policy) {
         // Known probabilities: merge equal outcomes, draw one, and add the AIVAT action correction.
         const dist = seat.policy(v);
+        const ns = seat.rangeAware ? actState(actor) : null;
         const outs = [];
         for (const d of dist) {
           if (!(d.p > 0)) continue;
@@ -313,6 +324,8 @@ function playHand(cfg) {
         let u = keyed(cfg.seed, actor, g.nAct, 77) * tot, pick = outs[outs.length - 1];
         for (const o of outs) { u -= o.p; if (u < 0) { pick = o; break; } }
         na = pick;
+        // The decision as the bot saw it (seq copied: it keeps growing) and what it did, for its range later on.
+        if (ns) g.hist[actor].push({ v: Object.assign({}, v, { seq: { pre: v.seq.pre.slice(), flop: v.seq.flop.slice(), turn: v.seq.turn.slice(), river: v.seq.river.slice() }, hist: null }), ns, did: { t: pick.t, add: pick.add } });
         if (vf && !g.folded[hero] && actor !== hero && outs.length > 1) {
           let exp = 0, vPick = 0;
           for (const o of outs) { const val = vf.value(g.board.length, after(actor, o)); exp += (o.p / tot) * val; if (o === pick) vPick = val; }
@@ -386,4 +399,4 @@ function playHand(cfg) {
   return res;
 }
 
-module.exports = { playHand, payouts, posGroup, seatOrderFrom, rng32, keyed, shuffled, ValueFn };
+module.exports = { playHand, payouts, posGroup, seatOrderFrom, rng32, keyed, shuffled, ValueFn, normalizeWith };

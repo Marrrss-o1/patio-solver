@@ -7,7 +7,7 @@
 // Plus `baseline`, the old "simple solid regular" agent used as the comparison hero.
 'use strict';
 const E = require('../../src/engine.js');
-const { keyed } = require('./game.js');
+const { keyed, normalizeWith } = require('./game.js');
 // Big preflop raises (to more than 30bb) get the logs' cliff (see the facing-a-raise rule below); BOTCLIFF=0 turns it off.
 const BOT_CLIFF = process.env.BOTCLIFF !== '0';
 
@@ -39,6 +39,119 @@ function post(h, board) {
   return r;
 }
 
+// ---------- v8: strength within the bot's own range ----------
+// The v7 bots continue, bet and raise by absolute strength (made-hand percentile against all hands), so where their
+// range is weak (hero's big bets after they checked, raises of their bluffy bets) they fold far more than their usual
+// rate, and where it is strong they hardly fold. The friends don't (audit 4 Nov: big heads-up bets folded 49% by the
+// friends, 81% by the bots, read 50-57%). With `rel` (calling and raising) and `relBet` (betting when checked to) a
+// v8 bot rebuilds its own range from its line this hand (its own policy replayed over every combo, game.js `hist`),
+// finds its hand's quantile q in that range, and plays as if it held the hand at quantile q of its usual range in
+// that spot (`REF`, measured on the bots' own ranges): hp + rel x (REF(q) - hp). rel 0 is the v7 bot exactly.
+const NC = 1326, CA = new Uint8Array(NC), CB = new Uint8Array(NC);
+{ let k = 0; for (let a = 1; a < 52; a++) for (let b = 0; b < a; b++) { CA[k] = a; CB[k] = b; k++; } }
+const cidx = (x, y) => (x > y ? (x * (x - 1)) / 2 + y : (y * (y - 1)) / 2 + x);
+let PCT = null;
+const pctOf = (k) => { if (!PCT) { PCT = new Float64Array(NC); for (let j = 0; j < NC; j++) PCT[j] = pfPct([CA[j], CB[j]]); } return PCT[k]; };
+// Every combo's made-hand percentile (exactly handPercentile) and draw outs (as describeHero / post) on a board.
+const tblCache = new Map();
+function lowerBound(a, x) { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < x) lo = m + 1; else hi = m; } return lo; }
+function boardTable(board) {
+  const key = board.join(',');
+  let t = tblCache.get(key);
+  if (t) return t;
+  const n = board.length, dead = new Uint8Array(52);
+  for (const c of board) dead[c] = 1;
+  const hp = new Float64Array(NC).fill(-1), outs = new Uint8Array(NC), score = new Int32Array(NC);
+  const buf = new Int32Array(8);
+  for (let i = 0; i < n; i++) buf[i] = board[i];
+  const live = [];
+  const byCard = Array.from({ length: 52 }, () => []);
+  for (let k = 0; k < NC; k++) {
+    if (dead[CA[k]] || dead[CB[k]]) continue;
+    buf[n] = CA[k]; buf[n + 1] = CB[k];
+    score[k] = E.evaluate(buf, n + 2);
+    live.push(k); byCard[CA[k]].push(k); byCard[CB[k]].push(k);
+  }
+  const sorted = Int32Array.from(live.map((k) => score[k])).sort();
+  for (const k of live) {
+    const sc = score[k];
+    const lo = lowerBound(sorted, sc), hi = lowerBound(sorted, sc + 1);
+    let below = lo, ties = hi - lo, total = live.length;
+    for (const j of byCard[CA[k]]) { total--; if (score[j] < sc) below--; else if (score[j] === sc) ties--; }
+    for (const j of byCard[CB[k]]) { if (j === k) continue; total--; if (score[j] < sc) below--; else if (score[j] === sc) ties--; }
+    hp[k] = total ? (below + ties / 2) / total : 0.5;
+  }
+  if (n < 5) {
+    const bo = new Int8Array(52);
+    for (let x = 0; x < 52; x++) { if (dead[x]) continue; buf[n] = x; bo[x] = E.evaluate(buf, n + 1) >> 20; }
+    for (const k of live) {
+      const cat = score[k] >> 20;
+      if (cat >= 5) continue;
+      buf[n] = CA[k]; buf[n + 1] = CB[k];
+      let fl = 0, sr = 0;
+      for (let x = 0; x < 52; x++) {
+        if (dead[x] || x === CA[k] || x === CB[k]) continue;
+        buf[n + 2] = x;
+        const c2 = E.evaluate(buf, n + 3) >> 20;
+        if ((c2 === 5 || c2 === 8) && bo[x] < 5) fl++;
+        else if (c2 === 4 && cat < 4 && bo[x] < 4) sr++;
+      }
+      outs[k] = (fl >= 7 ? fl : 0) + (sr >= 3 ? sr : 0);
+    }
+  }
+  t = { hp, outs, live };
+  if (tblCache.size > 400) tblCache.clear();
+  tblCache.set(key, t);
+  return t;
+}
+// Usual ranges: hp at quantiles 0, 0.05, ..., 1 of a bot's range, by street (flop, turn, river) and spot:
+// open (checked to), face (facing a bet before betting or raising on the street), raised (re-raised after betting).
+// Measured on the bots' own ranges by test/sim/v8-ref.js (test/sim/v8-ref.json; V8REF=<file> reads another).
+const REF = (() => {
+  try { return JSON.parse(require('fs').readFileSync(process.env.V8REF || require('path').join(__dirname, 'v8-ref.json'), 'utf8')); } catch (e) { return null; }
+})();
+const SPOTS = ['open', 'face', 'raised', 'openA', 'openC', 'openX'];
+function refAt(st, spot, q) {
+  const r = REF && REF[st] && REF[st][spot];
+  if (!r) return q;
+  const x = Math.max(0, Math.min(1, q)) * (r.length - 1), i = Math.min(r.length - 2, Math.floor(x)), f = x - i;
+  return r[i] + f * (r[i + 1] - r[i]);
+}
+const spotOf = (v) => (v.toCall <= 0 ? 'open' : (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? 'raised' : 'face');
+// Checked to, by the bot's own line on the street before (flop: preflop): A bet or raised, C only called, X neither.
+const PREV_OF = { 3: 'pre', 4: 'flop', 5: 'turn' };
+function openLine(v) {
+  const pl = v.seq[PREV_OF[v.street]] || [];
+  if (pl.some((x) => x === 'bet' || x === 'raise' || x === '3bet')) return 'openA';
+  return pl.includes('call') ? 'openC' : 'openX';
+}
+// The REF entry a decision maps through: betting spots by line when the table has them (v8b), else 'open'.
+const refSpot = (v) => { const s = spotOf(v); if (s !== 'open') return s; const l = openLine(v); return REF && REF[v.street - 3] && REF[v.street - 3][l] ? l : 'open'; };
+// Each combo's quantile in range W by made-hand percentile on this board (ties split), live combos only.
+function rangeQuantiles(W, tbl) {
+  const L = tbl.live.filter((k) => W[k] > 0);
+  L.sort((a, b) => tbl.hp[a] - tbl.hp[b]);
+  const q = new Float64Array(NC).fill(0.5);
+  let tot = 0; for (const k of L) tot += W[k];
+  if (!(tot > 0)) return q;
+  let cum = 0;
+  for (let i = 0; i < L.length;) {
+    let j = i, w = 0; const h = tbl.hp[L[i]];
+    while (j < L.length && tbl.hp[L[j]] === h) { w += W[L[j]]; j++; }
+    const qq = (cum + w / 2) / tot;
+    for (let m = i; m < j; m++) q[L[m]] = qq;
+    // Combos not in the range (weight 0) at this strength get the same quantile, so any hand has one.
+    cum += w; i = j;
+  }
+  // Hands outside the range: the quantile their strength would have.
+  const hs = L.map((k) => tbl.hp[k]), cw = []; { let c = 0; for (const k of L) { c += W[k]; cw.push(c); } }
+  for (const k of tbl.live) {
+    if (W[k] > 0) continue;
+    const i = lowerBound(hs, tbl.hp[k]);
+    q[k] = i ? cw[i - 1] / tot : 0;
+  }
+  return q;
+}
 // ---------- legacy bots ----------
 const LEGACY = {
   station: { vpip: 0.35, pfRaise: 0.9, threebet: 0.95, callRaise: 0.4, betHp: 0.8, bluff: 0.06, raiseHp: 0.96, callBase: 0.3, callSlope: 0.1, drawCall: true },
@@ -193,6 +306,17 @@ const HOME_DEFAULT = {
   // bots fold to bets in 15bb+ pots 8-10 points less than main's read (twin logs, n 400-1,200 per run) where the friends
   // fold as the read says (0.434 vs 0.438 against each other, n 371; 0.495 vs 0.474 against hero, n 109).
   bigCall: 0, bigPot: 15,
+  // v8 (see boardTable / REF above): strength within their own range for calls and raises (rel) and bets (relBet),
+  // 0 = absolute strength as in v7; raisedCut moves the continue cut of a player re-raised after betting or raising on
+  // the street (fitted, pooled: friends fold 19% there, v7 bots 33%).
+  rel: 0, relBet: 0, raisedCut: 0,
+  // v8: heads-up from the start of the street, the continue cut also moves by callHuLog x ln(size / 0.5) (sizes 0.1 to
+  // 1.5 pot; fitted, pooled): friends answer a third-pot bet heads-up about like a 2/3-pot one (fold 33-44% from 0.28
+  // to 0.9 pot), the v7 bots folded 22% to third-pot and 52% to 0.7-0.9 pot bets.
+  callHuLog: 0,
+  // v8: the continue cut also moves by potCall x ln(pot / 10bb) (fitted, pooled). At the same fraction of the pot friends
+  // fold a little more in big pots (25-110% pot bets: 44% in pots under 10bb, 50% at 20bb+); range-relative bots don't.
+  potCall: 0,
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
@@ -202,13 +326,14 @@ const STREET_OF = { 3: 'flop', 4: 'turn', 5: 'river' };
 function homeBot(params) {
   const P = Object.assign({}, HOME_DEFAULT, params || {});
   const posMul = { early: 0.85, late: 1.15, blinds: 1.0 };
-  return {
-    params: P,
-    policy(v) {
-      const h = v.hand, bb = v.bb, toCall = v.toCall;
+  const relOn = (P.rel || 0) > 0 || (P.relBet || 0) > 0;
+  // The decision for a hand described by info: { pct } preflop, { hp, outs, hpC, hpB } after the flop (hpC / hpB: the
+  // strength calls, raises and bets are judged by; hp itself in v7).
+  function act(v, info) {
+      const bb = v.bb, toCall = v.toCall;
       const allinTo = v.myBet + v.stack;
       if (v.street === 0) {
-        const pct = pfPct(h);
+        const pct = info.pct;
         const pm = posMul[v.pos] || 1;
         const w = 0.04;
         if (v.raises === 0) {
@@ -269,7 +394,7 @@ function homeBot(params) {
         return out;
       }
       const si = v.street === 3 ? 0 : v.street === 4 ? 1 : 2;
-      const { hp, outs } = post(h, v.board);
+      const { hp, outs } = info, hpC = info.hpC == null ? hp : info.hpC, hpB = info.hpB == null ? hp : info.hpB;
       const strongDraw = v.street < 5 && outs >= 8, weakDraw = v.street < 5 && outs >= 4 && !strongDraw;
       const k = Math.max(0, v.nOpp - 1);
       const air = hp < 0.5 && !strongDraw && !weakDraw;
@@ -278,7 +403,7 @@ function homeBot(params) {
       const hpOn = (P.hpCall || P.hpWc !== 1 || P.hpDraw !== 1 || P.hpBluff !== 1) && v.heroIn && v.seat !== v.heroSeat &&
         (v.street >= 4 || (P.hpFlop && v.street === 3)) && !(v.seq.flop || []).some((x) => x === 'bet' || x === 'raise');
       if (toCall === 0) {
-        const pv = sig((hp - (P.val[si] + P.mw * k)) / P.w) * (hp > 0.98 ? 1 - P.slow : 1);
+        const pv = sig((hpB - (P.val[si] + P.mw * k)) / P.w) * (hp > 0.98 ? 1 - P.slow : 1);
         let pb = 0;
         if (strongDraw) pb = P.semi / (1 + 0.5 * k);
         else if (weakDraw) pb = P.semi / 3 / (1 + k);
@@ -306,7 +431,7 @@ function homeBot(params) {
       // spot instead, like the friends: first to answer with others behind, last after everyone else folded, or
       // after someone has already called (overcall); heads-up from the start of the street has its own shift (callHu:
       // friends fold 52% to a first heads-up bet of 25-110% pot, n 61, where bots fitted without it folded 63%).
-      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : (P.callHu || 0);
+      const mwShift = !P.callMw ? P.mw * k : v.callsNow > 0 ? P.callMw[2] : v.toAnswer > 0 ? P.callMw[0] : v.foldsNow > 0 ? P.callMw[1] : (P.callHu || 0) + (P.callHuLog ? P.callHuLog * Math.log(clamp(f, 0.1, 1.5) / 0.5) : 0);
       let tc = P.call[si] + P.callSlope * (Math.min(f, P.sizeCap) - 0.5) + mwShift + (v.raises >= 2 ? 0.06 : 0);
       if (P.commitCut && v.put > 0) {
         const c = v.put / Math.max(1e-9, v.put + v.stack), t = clamp(tc, 1e-3, 1 - 1e-3);
@@ -315,7 +440,9 @@ function homeBot(params) {
       const hpNow = hpOn && v.put + toCall >= P.hpPut * bb;
       if (hpNow) tc += P.hpCall;
       if (P.bigCall && pot >= P.bigPot * bb) tc += P.bigCall;
-      let pCont = sig((hp - tc) / (P.wc * (hpNow ? P.hpWc : 1)));
+      if (P.raisedCut && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise')) tc += P.raisedCut;
+      if (P.potCall) tc += P.potCall * Math.log(Math.max(2, pot / bb) / 10);
+      let pCont = sig((hpC - tc) / (P.wc * (hpNow ? P.hpWc : 1)));
       const dc = P.drawCall * (hpNow ? P.hpDraw : 1);
       if (strongDraw) pCont = Math.max(pCont, f <= 1 ? dc : dc / 2);
       else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? dc / 2 : 0.1 * (hpNow ? P.hpDraw : 1));
@@ -325,7 +452,7 @@ function homeBot(params) {
         pCont = 1 - (fo * m) / (fo * m + 1 - fo);
       }
       const reR = P.reRaise !== 1 && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? P.reRaise : 1;
-      const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hp - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
+      const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hpC - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
       const pRb = v.raises < 3 ? reR * P.bluffRaise * (strongDraw ? 2 : air ? 1 : 0.5) : 0;
       const pRaise = pRv + (1 - pCont) * pRb;
       const to = Math.round(v.cur * P.raiseX);
@@ -336,6 +463,68 @@ function homeBot(params) {
       if (sh > 0) out.push({ t: 'raise', to: allinTo, p: pRaise * sh });
       out.unshift({ t: 'raise', to: to >= 0.6 * allinTo ? allinTo : to, p: pRaise * (1 - mn - sh) });
       return out;
+  }
+  // v8: the range before decision v (combo weights, max 1), from the bot's earlier decisions this hand. Each step's
+  // result is kept on its history entry, so a hand's range is built once, one decision at a time.
+  function rangeBefore(v) {
+    const hist = v.hist || [];
+    let j = hist.length - 1;
+    while (j >= 0 && !hist[j].W) j--;
+    let W = j >= 0 ? hist[j].W : new Float64Array(NC).fill(1);
+    for (let i = j + 1; i < hist.length; i++) { W = stepRange(W, hist[i]); hist[i].W = W; }
+    return W;
+  }
+  // Strengths of combo k at a postflop decision: hp, outs and the range-relative hpC / hpB.
+  function infoAt(v, tbl, q, k) {
+    const hp = tbl.hp[k];
+    if (!q) return { hp, outs: tbl.outs[k] };
+    const r = refAt(v.street - 3, refSpot(v), q[k]) - hp;
+    return { hp, outs: tbl.outs[k], hpC: hp + (P.rel || 0) * r, hpB: hp + (P.relBet || 0) * r };
+  }
+  function postCtx(v, W) {
+    const tbl = boardTable(v.board);
+    const lam = v.toCall > 0 ? P.rel || 0 : P.relBet || 0;
+    return { tbl, q: lam > 0 ? rangeQuantiles(W, tbl) : null };
+  }
+  function stepRange(W, e) {
+    const v = e.v, out = new Float64Array(NC);
+    let mask = null, tot = 0, mx = 0;
+    const probOf = (dist) => {
+      if (!mask || mask.length !== dist.length) mask = dist.map((d) => { const x = normalizeWith(e.ns, d); return x.t === e.did.t && x.add === e.did.add; });
+      let a = 0, b = 0;
+      for (let i = 0; i < dist.length; i++) { const p = dist[i].p > 0 ? dist[i].p : 0; b += p; if (mask[i]) a += p; }
+      return b > 0 ? a / b : 0;
+    };
+    if (v.street === 0) {
+      const memo = new Map();
+      for (let k = 0; k < NC; k++) {
+        if (!(W[k] > 1e-6)) continue;
+        const pc = pctOf(k);
+        let p = memo.get(pc);
+        if (p === undefined) { p = probOf(act(v, { pct: pc })); memo.set(pc, p); }
+        out[k] = W[k] * p; tot += out[k]; if (out[k] > mx) mx = out[k];
+      }
+    } else {
+      const { tbl, q } = postCtx(v, W);
+      // Combos below a millionth of the most likely one are dropped from the range (no effect on any quantile to speak of).
+      for (const k of tbl.live) {
+        if (!(W[k] > 1e-6)) continue;
+        out[k] = W[k] * probOf(act(v, infoAt(v, tbl, q, k))); tot += out[k]; if (out[k] > mx) mx = out[k];
+      }
+    }
+    if (!(tot > 0)) return W;
+    for (let k = 0; k < NC; k++) out[k] /= mx;
+    return out;
+  }
+  return {
+    params: P,
+    rangeAware: relOn,
+    rangeBefore,
+    policy(v) {
+      if (v.street === 0) return act(v, { pct: pfPct(v.hand) });
+      if (!relOn) return act(v, post(v.hand, v.board));
+      const { tbl, q } = postCtx(v, rangeBefore(v));
+      return act(v, infoAt(v, tbl, q, cidx(v.hand[0], v.hand[1])));
     },
   };
 }
@@ -355,4 +544,4 @@ function makeBot(spec, profiles) {
   throw new Error('unknown bot ' + spec);
 }
 
-module.exports = { LEGACY, HOME_DEFAULT, legacyBot, baseline, homeBot, makeBot, pfStrength, pfPct, post };
+module.exports = { LEGACY, HOME_DEFAULT, legacyBot, baseline, homeBot, makeBot, pfStrength, pfPct, post, boardTable, rangeQuantiles, cidx, NC, CA, CB, spotOf, openLine, SPOTS };
