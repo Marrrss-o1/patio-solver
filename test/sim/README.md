@@ -291,7 +291,11 @@ bots, seed and block size), so a third arm can be added later without replaying 
   another) with one tendency pushed hard (test/sim/exploiters.js `PRESETS`): `leadbluff`, `bigvalue`, `xraise`, `trap`,
   `jam`, `overcall`, `vraise`, `riverover` (4 Nov: checked to on the river, bets 3, 5 or 10x pot with strong hands
   half the time and air 5% of the time, like the friends' shown river overbets; the friend bots never bet over 2x),
-  `riverbluff` (the same sizes with air 30% of the time), `none` (the plain base, for comparisons), the older
+  `riverbluff` (the same sizes with air 30% of the time), `riverxb` (6 Nov: after hero checks the river, hands at a
+  made-hand percentile of 0.6+ bet 85% of the time, 0.4-0.6 check, under 0.4 bet 5%, like the friends' shown bets and
+  check-backs after Marwin's checks; the plain v12r bots' bets there are 15-20% hands under 0.4, the preset's 5-7%),
+  `riverxbluff` (the same with hands under 0.4 betting 35%, a third of the bets),
+  `none` (the plain base, for comparisons), the older
   exploit.js presets, and
   `switch<period>` (loose and tight in turns, every `period` hands, default 100). Seat it with the block's friend
   lineup: `--bots xp:trap,friends`. `--seat-stacks 20,150,...` sets the bots' stacks in big blinds. To see what an
