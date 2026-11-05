@@ -1444,14 +1444,67 @@
     return P;
   }
 
+  // Who had the initiative (input.initiative, off): a player's bet rate on a street depends on who bet the street before
+  // (for the flop: who raised preflop), which the read's one rate per street pools. Odds multipliers on the street's bet
+  // rate by the player's role when they first acted on it: 'aggr' (they made the last bet or raise of the street before),
+  // 'lead' (someone else did and had not acted yet on this street: a bet is a lead into them), 'stab' (that player checked
+  // first), 'none' (nobody bet the street before, or that player folded). The flop's 'aggr' is the c-bet, which has its
+  // own read. Fitted on every opponent's first action on a street with nobody's bet yet (all logs to 5 Nov, 2,549 spots,
+  // reads from earlier hands only, links as on the panel), against the read's bet rate: turn after betting the flop the
+  // friends bet 58% where the read said 36% (n 154, odds x2.8), into the flop's bettor 11% vs 27% (n 187, x0.38); river
+  // x1.9 (n 142) and x0.40 (n 113); each half of the hands alone gives the same direction everywhere (turn aggr x3.6 /
+  // x2.0, lead x0.49 / x0.30, river aggr x1.6 / x2.3, lead x0.45 / x0.35). Check-or-bet log-loss on the second half with
+  // the first half's fit 0.549 -> 0.536, the other way round 0.572 -> 0.561. The ranges use it for bets and checks
+  // (applyAction's betFreq); a bet after calling the street before takes these odds instead of afterCall's.
+  const INITIATIVE = {
+    3: { aggr: 1, lead: 0.66, stab: 1.2, none: 1.13 },
+    4: { aggr: 2.8, lead: 0.38, stab: 0.88, none: 0.86 },
+    5: { aggr: 1.9, lead: 0.4, stab: 0.52, none: 1.22 },
+  };
+  const AGGR_ACT = /^(bet|raise|\dbet)$/;
+  // Roles from the hand's action history (input.history: { st, who, act } in order): roles[name][street] = the role at
+  // their first action on that street; now(name, street) = their role if they acted next on `street`.
+  function initiativeRoles(history) {
+    const ST = { pre: 0, flop: 3, turn: 4, river: 5 };
+    const roles = {};
+    let street = 0, aggPrev = null, aggCur = null, acted = new Set();
+    const folded = new Set();
+    const roleOf = (who, agg, act) => (agg == null || folded.has(agg) ? 'none' : agg === who ? 'aggr' : act.has(agg) ? 'stab' : 'lead');
+    for (const e of history || []) {
+      const s = ST[e && e.st];
+      if (s == null || !e.who) continue;
+      if (s !== street) { aggPrev = aggCur; aggCur = null; acted = new Set(); street = s; }
+      if (e.act === 'sb' || e.act === 'bb') continue;
+      if (s > 0 && !acted.has(e.who)) (roles[e.who] || (roles[e.who] = {}))[s] = roleOf(e.who, aggPrev, acted);
+      acted.add(e.who);
+      if (e.act === 'fold') folded.add(e.who);
+      if (AGGR_ACT.test(e.act || '')) aggCur = e.who;
+    }
+    // `also`: a player counted as having acted already (hero, for an opponent's answer to hero's check).
+    const now = (who, s, also) => {
+      const act = s > street ? new Set() : new Set(acted);
+      if (also) act.add(also);
+      return s > street ? roleOf(who, aggCur, act) : s === street ? roleOf(who, aggPrev, act) : null;
+    };
+    return { roles, now };
+  }
+  function initiativeOdds(stats, street) {
+    const r = stats.initiative && stats.roles ? stats.roles[street] : null;
+    const m = r && stats.initiative[street] ? stats.initiative[street][r] : null;
+    return m != null && m !== 1 ? m : null;
+  }
+
   function applyAction(W, st, action, stats, size, opts) {
     const out = new Float64Array(NUM_COMBOS);
+    const im = (action === 'bet' || action === 'check') && !(opts && opts.reraise) ? initiativeOdds(stats, st.street) : null;
     stats = streetStats(stats, st.street);
     if (opts && opts.cbet && action === 'bet') stats = Object.assign({}, stats, { betFreq: stats.cbet });
     if (opts && opts.cbet && action === 'check') stats = Object.assign({}, stats, { betFreq: stats.cbet });
-    // A bet on the turn or river after only calling the street before (READ_PRIORS.home.afterCall).
+    if (im != null && !(opts && opts.cbet)) stats = Object.assign({}, stats, { betFreq: oddsScale(stats.betFreq, im) });
+    // A bet on the turn or river after only calling the street before (READ_PRIORS.home.afterCall). With the
+    // initiative read on, its odds replace afterCall's (the noise and bluff parts stay).
     const ac = opts && opts.afterCall && action === 'bet' && stats.afterCall ? stats.afterCall[st.street] : null;
-    if (ac && ac.odds != null) stats = Object.assign({}, stats, { betFreq: oddsScale(stats.betFreq, ac.odds) });
+    if (ac && ac.odds != null && im == null) stats = Object.assign({}, stats, { betFreq: oddsScale(stats.betFreq, ac.odds) });
     let vr = valueShare(stats, size);
     if (ac && ac.bluff != null) vr = 1 - (1 - vr) * ac.bluff;
     // Big bets come from a narrower, more polarized range; small bets from a wider one
@@ -2185,12 +2238,14 @@
     // Callers of hero's bet on the current street are cut by answer strength (respScore), as in the Monte Carlo.
     const xr = xs.resp, xrSorted = xr ? (draws.xrSorted || (draws.xrSorted = Float64Array.from(xr).sort())) : null;
     // Thresholds for street s from the strengths x (sorted, n of them) of the hands that got there.
-    const build = (s, x, n) => {
+    // `role`: the opponent's initiative role on street s in this line (ctx.initiative, see INITIATIVE).
+    const build = (s, x, n, role) => {
       const q = (p) => x[clamp(Math.floor(p * (n - 1)), 0, n - 1)];
       const gd = n > 128 ? lbGuide(x) : null;
       const lb = (h) => (gd ? lowerBoundG(x, gd, h) : lowerBound(x, h));
       const ss = streetStats(o.stats, s);
-      const betFreq = clamp(ss.betFreq + (o.stats.betShift || 0), 0.05, 0.9);
+      const im = role && ctx.initiative && ctx.initiative[s] ? ctx.initiative[s][role] : null;
+      const betFreq = clamp((im != null ? oddsScale(ss.betFreq, im) : ss.betFreq) + (o.stats.betShift || 0), 0.05, 0.9);
       const vr = clamp(valueShare(o.stats, o.stats.betSize) - (o.stats.valueShift || 0), 0.2, 0.97);
       const vCut = q(1 - betFreq * vr);
       const airCut = q(0.35);
@@ -2328,7 +2383,14 @@
         else {
           const x = new Float64Array(idx.length);
           for (let j = 0; j < idx.length; j++) x[j] = xs[s][idx[j]];
-          p = build(s, x.sort(), idx.length);
+          // Their role on street s from what they did on the street before in this line: bet or raised -> 'aggr',
+          // called hero's bet -> 'lead' (they act first) or 'stab' (hero checks first), checked -> 'none'.
+          let role = null;
+          if (ctx.initiative && s > street) {
+            const k = (m >> (2 * (s - 4))) & 3;
+            role = k === LINE_BET ? 'aggr' : k === LINE_CALL ? (ctx.heroIP ? 'lead' : 'stab') : k === LINE_CHECK ? 'none' : null;
+          }
+          p = build(s, x.sort(), idx.length, role);
         }
         memo[key] = p;
       }
@@ -5472,6 +5534,11 @@
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
+    // Initiative read (INITIATIVE), off until the simulator has judged it: input.initiative true turns it on, an object
+    // replaces the table. Roles come from input.history (the tracker's action log for the hand).
+    const INIT = street > 0 && input.initiative && Array.isArray(input.history)
+      ? (typeof input.initiative === 'object' ? input.initiative : INITIATIVE) : null;
+    const initR = INIT ? initiativeRoles(input.history) : null;
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -5527,7 +5594,25 @@
       // toward weak hands (top hands x0.55, worst x1.8): the Monte Carlo had duke (5 Nov) continue 24% against a 6bb open
       // where his read said 37%, and the preflop solver meets a weaker range.
       const untilted = street === 0 && pending && input.pendingTilt === false;
+      if (INIT) {
+        const rl = initR.roles[o.name] || {};
+        stats.initiative = INIT; stats.roles = rl;
+        if (statsHU) { statsHU.initiative = INIT; statsHU.roles = rl; }
+      }
       const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position, untilted);
+      // Not acted on this street yet: what they bet after hero's check (the lookahead's current street, the river,
+      // turn and flop solvers' fixed strategies) follows their role then. Past streets are in the range already.
+      if (INIT && pending) {
+        const role = initR.now(o.name, street, input.heroName);
+        const mult = role && INIT[street] ? INIT[street][role] : null;
+        if (mult != null && mult !== 1) {
+          for (const S of statsHU ? [stats, statsHU] : [stats]) {
+            const b = Object.assign({}, S.byStreet && S.byStreet[street]);
+            b.betFreq = oddsScale(b.betFreq != null ? b.betFreq : S.betFreq, mult);
+            S.byStreet = Object.assign({}, S.byStreet, { [street]: b });
+          }
+        }
+      }
       const qCont = rangeQuantiles(W, respNow);
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
@@ -5852,7 +5937,7 @@
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
           { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroFold,
-            draws: planDraws[i] || (planDraws[i] = {}), madeCall: PMC, resp: respNow });
+            draws: planDraws[i] || (planDraws[i] = {}), madeCall: PMC, resp: respNow, initiative: INIT, heroIP: heroIPvs[i] });
       }
       return plans[key];
     }
@@ -6908,6 +6993,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
+    INITIATIVE, initiativeRoles,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
