@@ -721,14 +721,18 @@
     stats.vsOpen = {};
     const vo = t.vsOpen || {};
     const looser = fam.vpip.u;
-    for (const key of ['small', 'medium', 'large']) {
-      const x = Object.assign({ fold: 0, call: 0, raise: 0 }, vo[key] || {});
+    const voRate = (x, key) => {
       const n = x.fold + x.call + x.raise;
       const [c0, r0] = prior.vsOpen[key];
       const cont = betaRate(x.call + x.raise, n, sigmoid(logit(c0) + looser), prior.vsOpen.k);
       const threeBet = Math.min(cont, betaRate(x.raise, n, clamp(r0 * stats.threeBet / Math.max(0.01, R.threeBet[0]), 0.01, 0.4), prior.vsOpen.k));
-      stats.vsOpen[key] = { cont, threeBet, n };
-    }
+      return { cont, threeBet, n };
+    };
+    const voX = (key) => Object.assign({ fold: 0, call: 0, raise: 0 }, vo[key] || {});
+    for (const key of ['small', 'medium', 'large']) stats.vsOpen[key] = voRate(voX(key), key);
+    // 'large' with the 8bb+ answers added back: the bucket as it was before v1.8.20, read by default (vsOpenSplit off).
+    const lg = voX('large'), hg = voX('huge');
+    stats.vsOpen.largeAll = voRate({ fold: lg.fold + hg.fold, call: lg.call + hg.call, raise: lg.raise + hg.raise }, 'large');
 
     // Per street.
     stats.byStreet = {};
@@ -953,7 +957,7 @@
     }
     if (d.kind === 'vo') {
       // First response to an open raise to d.toBB big blinds, as the preflop solver reads it.
-      const r = vsOpenRead(stats, d.toBB) || { cont: stats.vpip, threeBet: stats.threeBet };
+      const r = vsOpenRead(stats, d.toBB, d.vsOpenSplit) || { cont: stats.vpip, threeBet: stats.threeBet };
       return { fold: 1 - r.cont, call: r.cont - r.threeBet, raise: r.threeBet };
     }
     const bs = stats.byStreet[d.n] || stats;
@@ -1764,16 +1768,28 @@
   // A player's learned response to an open raise to `toBB` big blinds (stats.vsOpen, when the
   // reads have it: { small, medium, large } by raise-to size, each { cont, threeBet }), with
   // big raises still called at least at callBig. Null when there is no such read.
-  function vsOpenRead(stats, toBB) {
+  // split (input.vsOpenSplit: true, off by default, v1.8.20): opens of 8bb or more (shoves included) are read with callBig,
+  // the big-raise call rate, and the 'large' bucket holds only opens under 8bb. Friends answer them very differently
+  // (all logs to 5 Nov, first answers: 3.5-5bb fold 49%, n 205; 5-8bb 54%, n 67; 8-15bb 65%, n 17; 15-30bb 71%, n 14;
+  // 30bb+ 89%, n 28), and with one bucket a heads-up session's shoves and 4bb opens averaged out (5 Nov: 4bb opens read
+  // as folded 69%, actual 51%; shoves 68%, actual 88%). From 5bb the large rate blends into callBig, all callBig at 8bb.
+  // Reads benchmark, every log: vs-open log-loss 0.932 -> 0.923; simulator neutral (pooled +1.0 ± 2.3 over five runs,
+  // the bots re-raise big opens as often as small ones, the friends don't), so it is off. Off: the old single bucket
+  // ('largeAll', bit-identical to v1.8.19).
+  function vsOpenRead(stats, toBB, split) {
     const vo = stats && stats.vsOpen;
     if (!vo || !(toBB > 0)) return null;
-    const b = toBB <= 2.5 ? vo.small : toBB <= 3.5 ? vo.medium : vo.large;
+    const old = split !== true;
+    const b = toBB <= 2.5 ? vo.small : toBB <= 3.5 ? vo.medium : old && vo.largeAll ? vo.largeAll : vo.large;
     if (!b || b.cont == null) return null;
     const big = clamp((toBB - 4) / 4, 0, 1), callBig = stats.callBig != null ? stats.callBig : 0.25;
     // Opens above 30bb (shoves): the learned 'large' rate fades with the size too.
     const fade = bigFade(toBB, 1);
-    const cont = clamp(Math.max(b.cont * fade, big * callBig * fade), 0.02, 0.98);
-    return { cont, threeBet: clamp(b.threeBet != null ? b.threeBet : 0.05, 0.005, cont) };
+    const w = old ? 0 : clamp((toBB - 5) / 3, 0, 1);
+    const base = (1 - w) * b.cont + w * callBig;
+    const cont = clamp(Math.max(base * fade, big * callBig * fade), 0.02, 0.98);
+    const tb = (1 - w) * (b.threeBet != null ? b.threeBet : 0.05) + w * 0.02;
+    return { cont, threeBet: clamp(tb, 0.005, cont) };
   }
 
   function continueRule(opp, ctx, mdf, kind) {
@@ -1785,7 +1801,7 @@
       const fade = bigFade(kind.amount + (ctx.heroBet || 0), ctx.bigBlind);
       const callBig = s.callBig != null ? s.callBig : 0.25;
       if (opp.pending) {
-        const learned = kind.openTo ? vsOpenRead(s, kind.openTo / Math.max(1e-9, ctx.bigBlind)) : null;
+        const learned = kind.openTo ? vsOpenRead(s, kind.openTo / Math.max(1e-9, ctx.bigBlind), ctx.vsOpenSplit) : null;
         if (learned) return { cont: learned.cont, nut: 0.965, reraise: learned.threeBet };
         const sizeFactor = Math.min(1, (6 * ctx.bigBlind) / Math.max(ctx.bigBlind, kind.amount));
         let cont = s.vpip * 0.7 * (mdf / 0.375) * Math.sqrt(sizeFactor);
@@ -5574,7 +5590,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -5606,7 +5622,7 @@
         let rule;
         // An open (nobody has raised yet): the raise-to size, for learned responses to opens.
         const openTo = street === 0 && toCall <= bigBlind + 1e-9 ? sc.amount + bigBlind - toCall : 0;
-        const learned = i === bigBlindSeat && openTo ? vsOpenRead(o.stats, openTo / bigBlind) : null;
+        const learned = i === bigBlindSeat && openTo ? vsOpenRead(o.stats, openTo / bigBlind, input.vsOpenSplit) : null;
         if (learned) {
           rule = { cont: learned.cont, nut: 0.965, reraise: learned.threeBet, add: sc.amount - bigBlind };
         } else if (i === bigBlindSeat) {
@@ -6443,7 +6459,7 @@
         opps.forEach((o, i) => {
           const r = sc ? sc.opp[i] : continueRule(o, ctx, (pot + toCall) / (pot + amt), { amount: amt });
           const c = clamp(r.cont, 0, 1);
-          const learned = o.pending && toCall <= bigBlind + 1e-9 ? vsOpenRead(o.stats, (amt + bigBlind - toCall) / bigBlind) : null;
+          const learned = o.pending && toCall <= bigBlind + 1e-9 ? vsOpenRead(o.stats, (amt + bigBlind - toCall) / bigBlind, input.vsOpenSplit) : null;
           const rr = learned ? learned.threeBet : o.pending ? clamp(o.stats.threeBet != null ? o.stats.threeBet : o.stats.pfr * 0.4, 0.02, 0.25) : clamp(r.reraise || 0, 0, c);
           fold *= 1 - c;
           noRaise *= 1 - Math.min(rr, c);
