@@ -594,6 +594,7 @@ test('preflop: a player with a quarter of the raise-to in is not faded by the bi
     hero: C('As 5s'), board: [], pot: 103, toCall: 60, stack: 280, bigBlind: 2, inPosition: true,
     opponents: [{ name: 'V', tally, actions: { pre: '3bet' }, committed: 80, stack: 220, bet: 80, position: 'late' }],
     heroActions: { pre: 'raise' }, heroBet: 20, heroCommitted: 20, iterations: 4000, preflopSolver: false, mix: false, seed: 1,
+    pfCommitRamp: false, // a quarter of their stack in: the ramp (v1.8.18) would already move "off" halfway
   }, extra || {});
   const shove = (r) => r.ranked.find((s) => s.kind === 'allin');
   const on = E.analyzeSync(input({ pfCommit: true })), off = E.analyzeSync(input());
@@ -2091,6 +2092,50 @@ test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / f
   assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
   assert.ok(off[0].reraise < 0.2);
   near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
+  // pfRaisedReadBB 45 (v1.8.17, off by default): from 30bb the read fades into the old rule by 45bb, so 36.5bb is in
+  // between and 51bb keeps the old rule.
+  const fade = fourBetSpot({ pfCommit: false, pfRaisedReadBB: 45 }), w = (45 - 36.5) / 15;
+  near(fade[0].cont, on[0].cont);
+  near(fade[1].cont, w * on[0].cont + (1 - w) * off[1].cont); near(fade[1].reraise, w * on[0].reraise + (1 - w) * off[1].reraise);
+  near(fade[2].cont, off[2].cont);
+});
+
+test('pfRaisedReadBB 45: no step in the raiser\'s answer either side of a re-raise to 30bb (default 30: the step)', () => {
+  // 1 Nov (#396 in the audit): AKo in the big blind against an open to 4bb and two callers. A re-raise to 29.5bb and one
+  // to 30.5bb (pot one chip bigger) were answered 93% / 72% by the opener, and the biggest re-raise's EV fell 8bb.
+  const spot = (pot, extra) => E.analyzeSync(Object.assign({
+    hero: C('Kc As'), board: [], pot, toCall: 6, stack: 367, bigBlind: 2, inPosition: false, tableStyle: 'typical',
+    heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
+    opponents: [
+      { name: 'R', tally: {}, actions: { pre: 'raise' }, sizes: { pre: 3, preTo: 4, preBehind: 180.5 }, pfAggressor: true, position: 'early', committed: 8, stack: 361, bet: 8, heroIP: false },
+      { name: 'C1', tally: {}, actions: { pre: 'call' }, sizes: {}, position: 'late', committed: 8, stack: 280, bet: 8, heroIP: false },
+      { name: 'C2', tally: {}, actions: { pre: 'call' }, sizes: {}, position: 'blinds', committed: 8, stack: 102, bet: 8, heroIP: true }],
+    iterations: 1000, preflopIterations: 300, mix: false, seed: 1,
+  }, extra)).scenarios.filter((s) => s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0];
+  const a = spot(26, { pfRaisedReadBB: 45 }), b = spot(27, { pfRaisedReadBB: 45 });
+  assert.ok(a.amount + 2 <= 60 && b.amount + 2 > 60, `raise-to ${a.amount + 2} / ${b.amount + 2} chips`);
+  assert.ok(Math.abs(a.opp[0].cont - b.opp[0].cont) < 0.02 && Math.abs(a.opp[0].reraise - b.opp[0].reraise) < 0.03, `${a.opp[0].cont} -> ${b.opp[0].cont}`);
+  const s0 = spot(26), s1 = spot(27);
+  assert.ok(s0.opp[0].cont - s1.opp[0].cont > 0.1 && s0.opp[0].reraise - s1.opp[0].reraise > 0.3, 'the old step');
+});
+
+test('shoveRange: all-in preflop re-raises read as 0.7 x VPIP, not the narrow re-raise range (false: off)', () => {
+  // Hero opened to 2.5bb from late position; a loose player (VPIP about 0.6) shoves 40bb from the big blind.
+  const loose = { pfFold: 40, pfCall: 40, pfRaise: 40, hands: 120 };
+  const spot = (preBehind, extra, pre = '3bet', hero = 'Ah 8d') => E.analyzeSync(Object.assign({
+    hero: C(hero), board: [], pot: 86, toCall: 75, stack: 75 + (preBehind ? 2 * preBehind : 0), bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 2.5, preBehind: 37.5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
+    opponents: [{ name: 'V', tally: loose, actions: { pre }, sizes: { pre: 25, preTo: 40, preBehind }, pfAggressor: true, position: 'blinds', committed: 80, stack: 2 * preBehind, bet: 80, heroIP: false }],
+    iterations: 3000, mix: false, seed: 1,
+  }, extra));
+  const on = spot(0), off = spot(0, { shoveRange: false });
+  assert.ok(on.equity.share > off.equity.share + 0.04, `A8o vs a 40bb shove: on ${on.equity.share} off ${off.equity.share}`);
+  assert.ok(spot(0, { shoveRange: 1 }).equity.share > on.equity.share + 0.01, 'a number sets the share of VPIP');
+  // A near all-in (under a tenth of the raise-to behind) reads the same; a re-raise with chips behind keeps the narrow range.
+  assert.ok(spot(3).equity.share > spot(3, { shoveRange: false }).equity.share + 0.03, '3bb behind a 40bb raise-to');
+  near(spot(20).equity.share, spot(20, { shoveRange: false }).equity.share);
+  // Opens (not re-raises) are unchanged.
+  near(spot(0, {}, 'raise').equity.share, spot(0, { shoveRange: false }, 'raise').equity.share);
 });
 
 test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10bb, full tilt from 25bb (false: off)', () => {
@@ -2222,6 +2267,24 @@ test('pfCommitCall: a preflop raiser or caller with a third of their stack in ca
   assert.ok(caller(64, 120) >= 0.95, 'a caller with a third of the stack in calls');
   assert.ok(caller(64, 120, { pfCommitCall: false }) < 0.9);
   assert.ok(caller(64, 900) < 0.9, 'a deep caller: the usual rule');
+});
+
+test('pfCommitRamp: between a fifth and a third of the stack in, the call rate ramps up to the committed one (false: the old step)', () => {
+  const spot = (committed, stack, extra) => E.analyzeSync(Object.assign({
+    hero: C('Ah 9h'), board: [], pot: committed + 3, toCall: committed - 2, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, sizes: { pre: committed / 2 - 1 }, pfAggressor: true, position: 'early', committed, stack, bet: committed, heroIP: true }],
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+  }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[0].cont;
+  // A quarter in: above the old rule, below a committed player's call.
+  const q = spot(120, 360), qOld = spot(120, 360, { pfCommitRamp: false });
+  assert.ok(q > qOld + 0.1 && q < 0.95, `quarter ${q} old ${qOld}`);
+  // Just under a third: nearly the committed rate, where the old rule jumped from qOld-like to 0.97.
+  const t = spot(120, 250), tOld = spot(120, 250, { pfCommitRamp: false });
+  assert.ok(t > 0.9 && t < 0.97 && tOld < 0.9, `third ${t} old ${tOld}`);
+  // Under a fifth, or a third and more: as before.
+  near(spot(60, 450), spot(60, 450, { pfCommitRamp: false }));
+  near(spot(262, 248), spot(262, 248, { pfCommitRamp: false }));
 });
 
 test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of the tilt that fits the rest', () => {

@@ -338,6 +338,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (BOTCLIFF=0, seed 514): +8.0 ± 15.0 (premium and strong flat). Pooled: with the cliff about +39 ± 8 (three seeds),
   without it about +2 ± 12 (two), so it costs nothing where big re-raises get called and gains where they get
   folded, as the friends do. Heads-up (seed 515, Mac): +16.1 ± 14.2.
+  The 30bb step moves 4-bet EVs by up to 8bb a chip either side of it (1 Nov, multiway AKo in the big blind: a
+  re-raise to 29.5bb +55.6, to 30.5bb +38.7 chips; the opener went from continuing 93% / re-raising 36% to 72% / 11%).
+  `input.pfRaisedReadBB` (v1.8.17; default `PF_RAISED_READ_BB` 30, the step) above 30 fades the read into the old rule
+  from 30bb, gone at that raise-to. All logs (519 hands): friends continued against all 5 re-raises to 30-45bb (call 3,
+  re-raise 2) and folded to 7 of 9 above 45bb. With 45, 22 of 1,017 logged decisions change, all preflop and nearly
+  all near-ties among open sizes (the solver's 4-bets deeper in the tree get answered more); KK's 5-bet over Aura and
+  Jagger (#152) 41 -> 59 chips. Off until the simulator has judged it.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the
@@ -653,6 +660,32 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shove) to all-in (+46 vs +29bb), the only one of 1,018 logged decisions that changes. The bots don't model it (their
   `pfCommit` is opt-in), so a sim would score them folding where friends call. Files: analysis/2026-11-04-session.md
   ("Your two questions"), scripts/2026-11-04-session/questions/.
+  Since v1.8.18 it ramps in from a fifth of the stack in (`PF_COMMIT_RAMP` [0.2, 1/3]: continue and re-raise move
+  linearly from the usual rule to 0.97 / 0.11; `input.pfCommitRamp: false` keeps the old step at a third). The step
+  moved a logged re-raise's EV by 14.6bb for one chip (leak hunt). Friends with 15-20% in continued 1 of 3 times, 20-33%
+  1 of 1, a third or more 3 of 3. Example, a raiser facing hero's shove: 0.43 continue at a fifth in, 0.63 at a quarter,
+  0.93 just under a third, 0.97 from a third. On the 18 logged preflop spots with an opponent 15-40% in no decision
+  changes (88 at #62: all-in EV 49.7 -> 40.9, still the pick).
+- All-in preflop re-raises read wide (v1.8.17, `SHOVE_RANGE` {behind 0.1, vpip 0.7, min 0.15}; `input.shoveRange: false`
+  turns it off, a number sets the share of VPIP): a 3-bet, 4-bet or 5-bet that leaves under a tenth of the raise-to
+  behind (`sizes.preTo` / `preBehind`) is read as the narrow re-raise range plus the top 0.7 x VPIP of hands. Friends'
+  shown all-in re-raises (reads from earlier hands): Jagger Q6o (25bb), Dew666 J8o (39bb) and T9o (17.5bb), etestraight
+  A2s (36.5bb), jamaleatkid ATo (50bb), each at about the 0.04-0.06 quantile of the old read; log-likelihood against a
+  random guess -7.1 nats over the five, +1.8 at 0.7 x VPIP (best of 0.3-1.5). Synthetic heads-up spots (hero opens
+  late, a 0.65-VPIP friend shoves from the big blind): the old read folded hands that should call, about 1.0 / 1.6 /
+  2.1 / 3.2 / 4.8bb a shove faced at 15 / 25 / 40 / 60 / 100bb. It changes none of the 7 logged hero decisions facing an
+  all-in re-raise (equity up to +0.07: ATo heads-up 0.54 -> 0.60, A2o 3-way 0.22 -> 0.29) and no other logged decision.
+  The bots re-raise by hand strength, so the simulator would score it against shoves as tight as the old read.
+- Leak hunt (5 Nov, /mnt/project-files/patio-solver/leakhunt-2026-11-05/, REPORT.md, scripts/): every logged decision
+  re-solved with 1-chip changes (pot, stack, a bet, an opponent's stack) and with bet-size, preflop-size and depth
+  sweeps, against seed-to-seed noise, plus shown hands against the read by line. Steps found: pfRaisedRead at 30bb
+  (above), the 1/3-committed rule (pfCommitCall: 0.55 -> 0.97 continue; a ramp since v1.8.18), the 25bb preflop shove-menu gate
+  (shoveMakesSense), bigBetMedium at 0.9 pot, and the 2.6x raise dropped above pfRaiseCapBB. The first two that the
+  simulator can judge are options, off by default: `pfRaisedReadBB` (above) and `input.pfShoveBB` (25: all-in is on the
+  preflop menu up to that stack or 3 pots). 15 of 499 logged preflop decisions had 25-40bb and no all-in offered; 2 Nov
+  TT in late position with 25.5bb behind a limper: best raise +9.5 chips, with a chip less the shove at +23.0. With 40,
+  6 of the 15 shove (AA 40bb in the big blind over three limpers, AKs/AKo 36-40bb, A3o 28.5bb, TT). The simulator needs
+  `--stack 30` or so for it. The other steps have too few logged spots to place a ramp.
 - River raise fold (`RIVER_RAISE_FOLD` 0.5, off: `input.riverRaiseFold: true` turns it on, a number sets it): in
   riverSolve's fixed strategy a bettor facing hero's root raise folds at least that share of its betting range, x
   min(1, raise / pot). The read folds only the bluffs, 0.9 x (1 - value share), about 25-35%; in the logs river bettors
@@ -663,6 +696,50 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the bots' real hands, +1.1 ± 3.2 bb/100. So it stays off. The same dump has river calls overvalued against the bots
   (solver eq 0.295, real share 0.167, n 93, mostly facing bets under 0.6 pot), where friends' river bets show on
   target in the logs, so that reads as a bot artifact.
+- Made hands call hero's river bets (v1.8.19, `RIVER_MADE_CALL` 0.55; `input.riverMadeCall: false` turns it off, a
+  number sets it; `turnMadeCall: false` / `planMadeCall: false` turn off the turn solver's river subgames / the
+  lookahead's river): facing hero's river bet, an opponent's hand that beats at least 55% of all hands on the board
+  continues whatever its place in the read's range (the fixed strategy's fold is x sigmoid((0.55 - a) / 0.03), a = the
+  hand's share of all hands it beats; the lookahead caps callCut and foldHero at that strength, `heroCallCut`). Raises
+  and friends' bets are untouched. Logs (31 Oct - 4 Nov, reads replayed from earlier hands, each responder's range
+  rebuilt at every river bet; scripts/2026-11-05-river-bluffs/): friends answer each other as read (heads-up n 154,
+  predicted .47, folded .46; calibration slope 0.88 ± 0.20), but answer hero by absolute strength: heads-up n 30, read
+  .51 vs .47 overall, .57 vs .29 where the read needed made hands to fold (n 17), .44 vs .69 where folding the weak
+  hands was enough (n 13); by size (under 45% / 45-85% / 85%+ pot) .54 / .43 / .40 against a read of .37 / .54 / .67.
+  Every shown heads-up caller of a hero river bet beat 59%+ of all hands. Log-likelihood of hero's heads-up spots:
+  read -21.8, this -13.5; multiway (n 16) -21.3 -> -19.6; friends' own bets get worse with it (-115.5 -> -119.1), so it
+  is hero-only. Pot type is not the driver (the called bluffs were mostly in limped pots; in 3-bet pots friends fold to
+  each other more than read). The riverFoldCurve (size elasticity) and riverFoldShrink (fold rates pulled to the mean)
+  threads aimed at the same gap: on hero's heads-up bets they scored -17.1 and -18.3, and on top of this -13.9 and
+  -13.0, so only this was landed. The river solver's own fold at hero's actual size (24 heads-up bets): main .483, this
+  .387, actual .458 (log-lik -17.4 -> -16.0). Log replay (every hero decision, live budget): 17 of 120 river decisions
+  change (bluffs into Q8, JJ/88, Q3, A8 become checks; #369 and #475's bluffs get smaller; value bets grow, which
+  lose more against QQ and AT and win more against QT), 24 of 155 turn decisions (#66's raise -> call, #189 and #479's
+  semi-bluffs -> check), 39 of 243 flop decisions (mostly weak multiway stabs, equity .07-.2, become checks, most of
+  which were called or raised). SIMRESULTS
+- River raises read stronger (v1.8.19, `RIVER_RAISE_TILT` {tilt 0.3, street 5}; `input.riverRaiseTilt: false` turns it
+  off, a number sets the tilt): a river raise of any size (raise, check-raise, re-raise lines) adds 0.3 of strength tilt
+  to the raiser's range in buildRange, like `OVERBET_TILT` (the larger of the two applies; neither stacks on the
+  hero-pot tilt). Shows, all logs (leak hunt's rbl.js sweep, reads from earlier hands): 21 shown river raises at 0.69
+  of the read's range for plain raises (n 17), 0.64 for raises under 3x the pot (n 19); log-likelihood by tilt 0 / 0.15
+  / 0.3 / 0.5: 20.4 / 23.1 / 23.5 / 21.2 nats over a random guess. River bets fit best untilted (n 220). Log replay:
+  2 of the 9 river decisions facing a raise change, both calls -> folds that the shows back (31 Oct #25 QT vs mkorn777's
+  AA, #126 AK vs MaPokerrk's KT full house). Too rare for the simulator to judge.
+- Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
+  on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
+  (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
+  hero's bet (`qTurnR`, `qFlopR`) rank hands by hs + 2 x pot (`respScore`) instead of ehs (hs + pot), as buildRange's
+  call ranges already do. Logs (reads from earlier hands, ranges rebuilt at every flop and turn bet, 958 first answers;
+  scripts/2026-11-05-river-bluffs/ capture-street.js, ranges-street2.js, fit-draw2.js): friends float with flush draws,
+  gutshots, overcards and backdoors that ehs ranks at the bottom (6 of 27 shown heads-up callers of hero's flop bets sat
+  below the read's cut). Log-likelihood, ehs -> weight 2: hero's heads-up flop bets (n 62) -59.0 -> -52.3, turn (49)
+  -37.3 -> -31.7, hero's multiway flop bets (69) -36.7 -> -40.4, friends' bets to each other flop -87.5 -> -81.7 (HU,
+  102) and -161.2 -> -154.2 (MW, 241), turn -87.7 -> -73.8 (121) and -98.8 -> -90.6 (142); weights 3-4 fit about the
+  same. A softer edge (w 0.1-0.24 instead of 0.04) fits much better still on every set but hero's multiway flops, which
+  says the answer model is noisy, not that the read's fold level is off. Log replay (live budget, with riverMadeCall):
+  25 of 243 flop decisions change (medium hands check or bet smaller, a few semi-bluffs grow), 6 of 155 turn decisions
+  (near ties). Off is identical to before (80 flop and turn decisions checked). Sims:
+  /mnt/project-files/patio-solver/sims/2026-11-05-respdraw/.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
   often (READ_PRIORS.home.line; computeStats ctx.line / ctx.street moves only that street's foldToBet and raiseFreq,
