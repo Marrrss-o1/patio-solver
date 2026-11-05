@@ -52,7 +52,9 @@ Also works with Tampermonkey / Violentmonkey on desktop browsers and Firefox for
 5. **River solve.** On the river against one player, it solves your whole range against theirs (the same kind of
    real-time solving the strongest poker bots use), with their tendencies built in. The panel shows how often to
    play each option, so it can tell you to bluff some hands and call down with the right bluff-catchers.
-6. **Review.** "Hand log" downloads your last 150 hands with everyone's actions, shown cards and the advice given.
+6. **Review.** "Hand log" downloads hands with everyone's actions, shown cards and the advice given. On the computer it
+   offers the hands since your last export, one session, or every stored hand (it keeps the newest 1,000); the phone
+   downloads its last 150. `node test/merge-logs.js all.json <exports or folders>` joins several exports into one.
 
 See `docs/protocol.md` for the game's message format and `CLAUDE.md` for developer notes.
 

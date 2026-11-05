@@ -306,6 +306,116 @@ test('import: linked reads and "different players" answers survive a rebuild', a
   assert.ok(Math.abs(hands(t2.readTally('J3')) - hands(r.db.players.J1.tally) - hands(r.db.players.J3.tally)) < 1e-9);
 });
 
+// ---------- exports of new hands (v1.8.21) ----------
+test('export of a range: only those hands, reading only their keys, memory copies first', async () => {
+  const area = fakeArea();
+  const hl = HL.create(area, DB, { keep: 300 });
+  const { db } = await hl.load(MEM, RAW);
+  for (let i = 0; i < 250; i++) { logHand(db); await hl.save(db); }
+  const times = await hl.times(db);
+  assert.strictEqual(times.length, 250);
+  assert.ok(times.every((t, i) => !i || t > times[i - 1]), 'oldest first');
+  const newest = db.history[db.history.length - 1];
+  newest.heroNet = 5; // not saved yet
+  area.log.gets = [];
+  const out = await hl.exportRange(db, times[199], Infinity);
+  assert.deepStrictEqual(out.map((e) => e.t), times.slice(200));
+  assert.deepStrictEqual(area.log.gets, [50], 'only the 50 hands in range are read');
+  assert.ok(out.every((e) => e.raw), 'raw events come from storage where the page dropped them');
+  assert.strictEqual(out[out.length - 1].heroNet, 5, 'hands in memory come from memory');
+  // Old hands that the page no longer holds come from storage.
+  const early = await hl.exportRange(db, times[9], times[19]);
+  assert.deepStrictEqual(early.map((e) => e.t), times.slice(10, 20));
+  // A hand that couldn't be saved yet is in times and in the export.
+  area.failWith('full');
+  const unsaved = logHand(db);
+  await hl.save(db);
+  const t2 = await hl.times(db);
+  assert.strictEqual(t2[t2.length - 1], unsaved.t);
+  assert.strictEqual((await hl.exportRange(db, newest.t, Infinity)).length, 1);
+  // Everything: the same hands as exportAll.
+  const all = await hl.exportRange(db, -Infinity, Infinity);
+  assert.deepStrictEqual(all.map((e) => e.t), (await hl.exportAll(db)).map((e) => e.t));
+  // Without getKeys it reads everything once to find the keys, and still exports the range.
+  const old = fakeArea({ noKeys: true });
+  for (const [k, v] of area.m) old.m.set(k, v);
+  const viaGet = await HL.create(old, DB, { keep: 300 }).exportRange({ history: [] }, times[239], Infinity);
+  assert.deepStrictEqual(viaGet.map((e) => e.t), times.slice(240));
+});
+
+test('export mark: moves over the hands an export covers, never over a gap or a hand still changing', () => {
+  const now = 1e12;
+  const ts = [100, 200, 300, 400, 500].map((x) => now - 1e6 + x);
+  const hand = (t, net = true) => ({ t, net: net ? { A: 1 } : undefined });
+  const all = ts.map((t) => hand(t));
+  // First export with this version (no mark): everything, up to the newest hand with its result.
+  assert.strictEqual(HL.nextMark(null, ts, all, now, -Infinity), ts[4]);
+  // The newest hand without its result yet stays new; so does one that ended under a minute ago.
+  assert.strictEqual(HL.nextMark(null, ts, all.slice(0, 4).concat([hand(ts[4], false)]), now, -Infinity), ts[3]);
+  assert.strictEqual(HL.nextMark(null, ts, all, ts[4] + HL.SETTLE_MS - 1, -Infinity), ts[3]);
+  // An older hand that never got a result (the page was reloaded) doesn't hold the mark back.
+  assert.strictEqual(HL.nextMark(null, ts, [hand(ts[0]), hand(ts[1], false)].concat(all.slice(2)), now, -Infinity), ts[4]);
+  // New hands after a mark.
+  assert.strictEqual(HL.nextMark(ts[1], ts, all.slice(2), now, ts[1]), ts[4]);
+  // An export that skips hands after the mark (an older or a later session) leaves the mark where it is.
+  assert.strictEqual(HL.nextMark(ts[0], ts, all.slice(3), now, ts[2]), ts[0]);
+  assert.strictEqual(HL.nextMark(ts[3], ts, all.slice(0, 2), now, ts[0] - 1), ts[3], 'never moves back');
+  // With no mark yet, a session export counts the hands before it as exported (every older export
+  // had every hand), so "New hands" starts after that session.
+  assert.strictEqual(HL.nextMark(null, ts, all.slice(2, 4), now, ts[2] - 1), ts[3]);
+  // An import with no mark: the imported hands, as far as they cover the stored ones.
+  assert.strictEqual(HL.nextMark(null, ts, all.slice(0, 3), now), ts[2]);
+  assert.strictEqual(HL.nextMark(null, ts, all.slice(1, 3), now), null, 'the oldest stored hand was not imported');
+  assert.strictEqual(HL.nextMark(null, [], [], now), null);
+});
+
+test('sessions: hands split at a 45-minute break', () => {
+  const m = 60000;
+  const ts = [0, 1, 2, 26.4, 28, 28 + 45, 28 + 45 + 1, 200].map((x) => 1e12 + x * m);
+  assert.deepStrictEqual(HL.sessions(ts).map((s) => [s.n, (s.from - 1e12) / m, (s.to - 1e12) / m]), [[5, 0, 28], [2, 73, 74], [1, 200, 200]]);
+  assert.deepStrictEqual(HL.sessions([]), []);
+});
+
+test('export file: one hand per line, reads back as the same hands, named by its time range', () => {
+  const db = { history: [] };
+  for (let i = 0; i < 3; i++) logHand(db);
+  const text = HL.toFile(db.history);
+  assert.deepStrictEqual(JSON.parse(text), db.history);
+  assert.strictEqual(text.split('\n').length, db.history.length + 3);
+  assert.ok(text.length < JSON.stringify(db.history, null, 1).length);
+  const at = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi).getTime();
+  assert.strictEqual(HL.fileName([{ t: at(2026, 11, 5, 10, 54) }, { t: at(2026, 11, 5, 11, 31) }]), 'patio-hand-log-2026-11-05-1054-to-1131.json');
+  assert.strictEqual(HL.fileName([{ t: at(2026, 11, 4, 23, 5) }, { t: at(2026, 11, 5, 1, 2) }]), 'patio-hand-log-2026-11-04-2305-to-2026-11-05-0102.json');
+  assert.strictEqual(HL.fileName([]), 'patio-hand-log.json');
+});
+
+test('merge-logs: files and folders, each hand once, the fuller copy kept', () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const M = require('./merge-logs.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'patio-merge-'));
+  const h = (t, extra) => Object.assign({ t, hero: ['As', 'Kd'], board: [] }, extra);
+  // An old cumulative export, then two exports of new hands that overlap by one hand (exported
+  // before its result came in), and a file in the folder that isn't a hand log.
+  fs.writeFileSync(path.join(dir, 'a-old.json'), JSON.stringify([h(1, { net: {} }), h(2, { net: {} }), h(3)], null, 1));
+  fs.writeFileSync(path.join(dir, 'b-new.json'), HL.toFile([h(3, { net: { A: 4 }, raw: [] }), h(4), h(5, { net: {}, raw: [1, 2, 3] })]));
+  fs.writeFileSync(path.join(dir, 'c-new.json'), HL.toFile([h(4, { net: { A: -1 } }), h(5, { net: {}, raw: [1, 2] })]));
+  fs.writeFileSync(path.join(dir, 'notes.json'), JSON.stringify({ hello: 1 }));
+  const info = {};
+  const got = M.loadHands([dir], { info, quiet: true });
+  assert.deepStrictEqual(got.map((x) => x.t), [1, 2, 3, 4, 5]);
+  assert.deepStrictEqual(got[2].net, { A: 4 }, 'the copy with the result wins');
+  assert.deepStrictEqual(got[3].net, { A: -1 });
+  assert.strictEqual(got[4].raw.length, 3, 'then the copy with more raw events');
+  assert.deepStrictEqual(info, { files: 3, read: 8, dupes: 3 });
+  // The same hand time with other hero cards is another hand (two tables).
+  fs.writeFileSync(path.join(dir, 'd.json'), JSON.stringify({ history: [h(5, { hero: ['2c', '2d'] })] }));
+  assert.strictEqual(M.loadHands([dir], { quiet: true }).length, 6);
+  // Files named on their own must be hand logs.
+  assert.throws(() => M.loadHands([path.join(dir, 'notes.json')]), /not a hand-log export/);
+  assert.strictEqual(M.loadHands([path.join(dir, 'b-new.json'), path.join(dir, 'a-old.json')]).length, 5);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 (async () => {
   let failures = 0;
   for (const [name, fn] of tests) {

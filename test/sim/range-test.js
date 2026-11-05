@@ -111,7 +111,7 @@ const COLS = [['const', () => 1], ['ln size', (x) => Math.log(Math.min(1.5, Math
   ['river', (x) => (x.st === 'river' ? 1 : 0)], ['heads-up', (x) => (x.hu ? 1 : 0)], ['re-raised', (x) => (x.raised ? 1 : 0)],
   ['ln pot/10bb', (x) => Math.log(Math.max(2, x.potBB) / 10)], ['range hp x10', (x) => (x.rangeHp - 0.5) * 10]];
 
-const H = opt('bots', null) ? botHands(opt('bots'), +opt('hands', 2500)) : files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+const H = opt('bots', null) ? botHands(opt('bots'), +opt('hands', 2500)) : require('../merge-logs.js').loadHands(files);
 const { rows, ok, bad } = answers(H);
 if (opt('rows', null)) fs.writeFileSync(opt('rows'), JSON.stringify(rows));
 const R = rows.filter((r) => !r.own);

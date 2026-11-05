@@ -24,8 +24,7 @@ const profiles = JSON.parse(fs.readFileSync(opt('profiles', path.join(__dirname,
 const idName = JSON.parse(fs.readFileSync(opt('names'), 'utf8'));
 const botParams = JSON.parse(opt('bot-params', '{}'));
 
-const seenT = new Set();
-const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8'))).filter((h) => (h.t == null || !seenT.has(h.t)) && (seenT.add(h.t), true));
+const entries = require('../merge-logs.js').loadHands(files);
 const realT = prof.profileEntries(entries);
 
 // ---------- the bots' own numbers ----------

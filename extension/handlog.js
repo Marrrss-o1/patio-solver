@@ -102,18 +102,46 @@
       });
     }
 
-    // Every stored hand, oldest first. Hands still in memory come from memory (newest fields),
-    // with their stored raw events where memory has dropped them.
-    async function exportAll(db) {
-      const all = (await area.get(null)) || {};
+    // Stored hands plus the ones in memory, oldest first. Hands still in memory come from memory
+    // (newest fields), with their stored raw events where memory has dropped them.
+    function withMemory(found, db, inRange) {
       const byKey = new Map();
-      for (const k of Object.keys(all)) if (isHand(k) && all[k]) byKey.set(k, all[k]);
+      for (const k of Object.keys(found)) if (isHand(k) && found[k] && inRange(keyTime(k))) byKey.set(k, found[k]);
       for (const e of db.history || []) {
+        if (!inRange((e && e.t) || 0)) continue;
         const k = keyOf.get(e) || baseKey(e);
         const s = byKey.get(k);
         byKey.set(k, !e.raw && s && s.raw ? Object.assign({}, e, { raw: s.raw }) : e);
       }
       return [...byKey.values()].sort((a, b) => (a.t || 0) - (b.t || 0));
+    }
+
+    // Every stored hand, oldest first.
+    async function exportAll(db) {
+      return withMemory((await area.get(null)) || {}, db, () => true);
+    }
+
+    // The hands with from < t <= to, oldest first. Only those keys are read (the key holds the
+    // hand's time), so a session's export doesn't load all 1,000 hands. null if storage couldn't be
+    // read.
+    async function exportRange(db, from, to) {
+      const inRange = (t) => t > from && t <= to;
+      const keys = await allKeys();
+      if (!keys) return null;
+      const want = keys.filter((k) => isHand(k) && inRange(keyTime(k)));
+      const found = want.length ? await area.get(want) : {};
+      if (!found) return null;
+      return withMemory(found, db, inRange);
+    }
+
+    // The time of every hand stored or in memory, oldest first (from the keys alone). null if
+    // storage couldn't be read.
+    async function times(db) {
+      const keys = await allKeys();
+      if (!keys) return null;
+      const set = new Set(keys.filter(isHand).map(keyTime));
+      for (const e of db.history || []) set.add((e && e.t) || 0);
+      return [...set].sort((a, b) => a - b);
     }
 
     // Hands from an imported hand log, written under their own keys like any other. Hands already
@@ -141,10 +169,69 @@
       return Object.assign({ added: keys.length - drop.filter((k) => items[k]).length }, r2);
     }
 
-    return { load, save, exportAll, addHands, count: () => stored.length };
+    return { load, save, exportAll, exportRange, times, addHands, count: () => stored.length };
   }
 
-  const api = { create, PREFIX, KEEP, REWRITE };
+  // ---------- exports of new hands ----------
+  // Every export used to hold every stored hand (up to 1,000, about 20 MB by 5 Nov). Now "New
+  // hands" holds only the hands after the export mark: the time of the newest hand that every
+  // export so far has covered without a gap.
+  //
+  // Only the newest hand can still change after it is stored (shown cards arrive after it ends,
+  // its result when the next hand starts), so it moves the mark only once it has its result and
+  // ended a minute ago. Otherwise it goes into the next export too, and merging the files keeps
+  // the fuller copy (test/merge-logs.js).
+  const SETTLE_MS = 60000;
+  // mark: the current mark (null: nothing exported since this version; hands before `from` count
+  // as exported, because every older export held every hand). times: every hand's time, oldest
+  // first (times()). entries: the hands just exported or imported. from: the export's lower bound.
+  function nextMark(mark, times, entries, now, from) {
+    const got = new Map();
+    for (const e of entries || []) if (e && e.t != null) got.set(e.t, e);
+    let m = mark != null ? mark : from != null ? from : -Infinity;
+    const n = times.length;
+    for (let i = 0; i < n; i++) {
+      const t = times[i];
+      if (t <= m) continue;
+      const e = got.get(t);
+      if (!e) break; // a hand this export didn't have: the mark stops before it
+      if (i === n - 1 && (!e.net || now - t < SETTLE_MS)) break;
+      m = t;
+    }
+    return m === -Infinity ? null : m;
+  }
+
+  // Sessions: runs of hands with no break of `gap` or more (45 minutes; hands take a minute or
+  // two, and the longest break inside one of Marwin's sessions was 24 minutes). Oldest first.
+  const SESSION_GAP = 45 * 60000;
+  function sessions(times, gap) {
+    const g = gap || SESSION_GAP;
+    const out = [];
+    for (const t of times) {
+      const s = out[out.length - 1];
+      if (s && t - s.to < g) { s.to = t; s.n++; } else out.push({ from: t, to: t, n: 1 });
+    }
+    return out;
+  }
+
+  // The export file: one hand per line. Still one JSON array, about 40% smaller than indenting
+  // every field, and a text editor can still open it.
+  function toFile(hands) {
+    return '[\n' + hands.map((h) => JSON.stringify(h)).join(',\n') + '\n]\n';
+  }
+
+  // patio-hand-log-2026-11-05-1054-to-1131.json (local time; the end's date only if it differs).
+  function fileName(hands) {
+    const pad = (x) => String(x).padStart(2, '0');
+    const day = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const hm = (d) => pad(d.getHours()) + pad(d.getMinutes());
+    const ts = hands.map((h) => h && h.t).filter((t) => t > 0);
+    if (!ts.length) return 'patio-hand-log.json';
+    const a = new Date(Math.min(...ts)), b = new Date(Math.max(...ts));
+    return `patio-hand-log-${day(a)}-${hm(a)}-to-${day(a) === day(b) ? '' : day(b) + '-'}${hm(b)}.json`;
+  }
+
+  const api = { create, PREFIX, KEEP, REWRITE, SETTLE_MS, SESSION_GAP, nextMark, sessions, toFile, fileName };
   g.PatioHandLog = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
