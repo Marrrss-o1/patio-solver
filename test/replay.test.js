@@ -835,36 +835,11 @@ test('size reads sit at the bets actually seen: folds to min-bets do not pull do
 
 test('fold rates rise with bet size up to about pot, then barely (overbets buy no folds)', () => {
   const st = E.computeStats({}, 'typical');
-  const f = (x) => E.foldAtSize(st, x, 4);
+  const f = (x) => E.foldAtSize(st, x, 5);
   // The logs: 20% folds to min-bets, 44% to a third of the pot, 67-74% to 0.55-0.9 pot, the same above.
   assert.ok(f(0.33) - f(0.1) > 0.12 && f(0.75) - f(0.33) > 0.1, `${f(0.1)} ${f(0.33)} ${f(0.75)}`);
   assert.ok(f(2) - f(1) < 0.05, `${f(1)} vs ${f(2)}`);
   assert.ok(f(2) - f(0.5) < 0.2);
-});
-
-test('river fold curve: river bets of 0.55-1 pot fold about as often as half-pot ones; flop and turn unchanged (riverFoldCurve: false: off)', () => {
-  const st = E.computeStats({}, 'typical');
-  const off = Object.assign({}, st, { riverCurve: null });
-  const f = (s, x, n) => E.foldAtSize(s, x, n);
-  // The logs (31 Oct - 4 Nov, 275 first answers to river bets): 0.55-1.2 pot folded 54% where the read said 70%,
-  // 0.3-0.55 pot 52% vs 54%; flop and turn on target.
-  near(f(st, 0.33, 5), f(off, 0.33, 5));
-  assert.ok(f(st, 1, 5) < f(off, 1, 5) - 0.08, `${f(st, 1, 5)} vs ${f(off, 1, 5)}`);
-  assert.ok(f(st, 1, 5) - f(st, 0.5, 5) < 0.08 && f(off, 1, 5) - f(off, 0.5, 5) > 0.12, `${f(st, 0.5, 5)} ${f(st, 1, 5)}`);
-  assert.ok(f(st, 0.66, 5) < f(off, 0.66, 5) - 0.05);
-  for (const n of [3, 4]) for (const x of [0.33, 0.66, 1]) near(f(st, x, n), f(off, x, n));
-  // Overbets fold about as read: the shift fades out by 2x pot.
-  near(f(st, 2.5, 5), f(off, 2.5, 5));
-  assert.ok(f(st, 1.6, 5) > f(st, 1.2, 5));
-  // Through analyzeSync: on by default, false turns it off, a number sets k. A pot-size river bluff with 6-high.
-  const spot = (extra) => E.analyzeSync(Object.assign({
-    hero: C('6d 5d'), board: C('Ks 9h 2c 7s 3h'), pot: 200, toCall: 0, stack: 1000, bigBlind: 10, inPosition: true, mix: false, seed: 3,
-    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' } }],
-    heroActions: { pre: 'raise', flop: 'bet', turn: 'check' }, iterations: 2000, riverIterations: 300, heroPotTilt: false,
-  }, extra)).scenarios.find((s) => s.kind === 'bet' && Math.abs(s.amount - 200) < 1);
-  const on = spot(), offA = spot({ riverFoldCurve: false }), more = spot({ riverFoldCurve: -1.2 });
-  assert.ok(on.foldPct < offA.foldPct - 0.05, `${on.foldPct} vs ${offA.foldPct}`);
-  assert.ok(more.foldPct < on.foldPct - 0.03, `${more.foldPct} vs ${on.foldPct}`);
 });
 
 test('bet size: a solid player\'s big bet reads polarized, a friend\'s pot-size bet keeps the medium hands', () => {
@@ -1069,10 +1044,8 @@ test('river solver: a player who bet earlier and then checks folds like anyone e
   // street and then check fold more than their read, not less, so the old fold-after-aggression scale
   // ('all') no longer applies once they checked on this street.
   const betEV = (r) => Math.max(...r.ranked.filter((s) => s.kind === 'bet').map((s) => s.ev));
-  // With the river's flatter fold curve (riverFoldCurve) this 6-high bluff is worth about 7 chips in a 200 pot either
-  // way, so the curve is off here: the test is about the scale.
   const spot = (opp, heroActions, extra) => riverSpot('6d 5d', Object.assign({ toCall: 0, pot: 200, board: C('Ks 9h 2c 7s 3h'), seed: 3, heroPotTilt: false,
-    riverFoldCurve: false, opponents: [Object.assign({ name: 'V', tally: {}, pfAggressor: true }, opp)], heroActions }, extra));
+    opponents: [Object.assign({ name: 'V', tally: {}, pfAggressor: true }, opp)], heroActions }, extra));
   const gaveUp = (extra) => spot({ actions: { pre: 'raise', flop: 'bet', turn: 'check', river: 'check' }, sizes: { flop: 0.5 } },
     { pre: 'call', flop: 'call', turn: 'check' }, Object.assign({ inPosition: true }, extra));
   const now = betEV(E.analyzeSync(gaveUp())), old = betEV(E.analyzeSync(gaveUp({ aggroFold: 'all' })));
