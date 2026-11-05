@@ -20,6 +20,7 @@ node test/sim/calibrate.js <hand-log.json> ... --names <private file>         # 
 node test/sim/range-test.js <hand-log.json> ...                              # do they fold by absolute or range-relative strength?
 node test/sim/range-test.js --bots test/sim/profiles-v8.json                 # ... the same test on bots
 node test/sim/allin-test.js <hand-log.json> ...                              # preflop all-in re-raises by stack depth (--bots too)
+node test/sim/lead-test.js <hand-log.json> ...                               # leads into the aggressor after the flop (--bots too)
 node test/sim/fold-cal.js --hands 1000 --players 4 --bots friends --budget live   # do the bots fold to hero's bets as read?
 node test/sim/v8-ref.js --out test/sim/v8-ref.json                           # the v8 bots' usual ranges (BOTPROFILES=...)
 ```
@@ -239,6 +240,33 @@ bots, seed and block size), so a third arm can be added later without replaying 
   bets (41%, the v9 habit) as before. Plain bot-against-bot play is v10's. `fold-cal.js` prints this table for any
   bot file; `range-test.js` rows now carry `cb` (the bettor raised last before the flop; it explains none of the gap).
   Files: sims/2026-11-05-v10bots/v11/ in the project folder.
+* Friend bots v12 (5 Nov; `BOTPROFILES=test/sim/profiles-v12.json`): v11 plus `leadHu` [0.37, 0.49]. Heads-up on the
+  flop or turn, a bot that is first to act before the street's aggressor (the preflop raiser on the flop, the flop's last
+  bettor on the turn) bets 0.37 / 0.49 times as often, every hand alike. `node test/sim/lead-test.js` on every log to 5 Nov
+  (786 hands) and on bots against each other (12,000 hands, 4-handed, 150bb):
+
+  | lead into the aggressor     | friends     | v11 bots     | v12 bots     |
+  |-----------------------------|-------------|--------------|--------------|
+  | flop heads-up               | 0.112 (89)  | 0.306 (1183) | 0.117 (1183) |
+  | flop multiway               | 0.184 (158) | 0.228 (1916) | 0.228        |
+  | turn heads-up               | 0.130 (92)  | 0.257 (1233) | 0.128 (1282) |
+  | turn multiway               | 0.179 (56)  | 0.143 (746)  | 0.143        |
+  | river heads-up              | 0.309 (68)  | 0.309 (985)  | 0.309        |
+  | flop after the raiser checked | 0.244 (90) | 0.249       | 0.249        |
+  | flop as the raiser (c-bet)  | 0.420 (169) | 0.384        | 0.389        |
+  | turn as the flop's bettor   | 0.617 (149) | 0.551        | 0.559        |
+
+  Only the heads-up flop and turn leads were clearly off (z about 5 and 3); multiway and river spots are within noise
+  and keep v11's play. The same scale for every hand, not a shift in log-odds: the friends' shown leads are about as
+  strong as the bots' (mean made-hand percentile 0.78 vs 0.78 on the flop, 0.76 vs 0.77 on the turn, all lead spots),
+  and a log-odds shift (-1.6 / -1.2 fits the same rates) leaves the strong hands leading and makes the leads stronger
+  (heads-up shown flop leads at a made-hand percentile of 0.80, against 0.73 with the scale and 0.74 for the friends, n 6). This came out of a slow-play check (do the friends check strong hands
+  more than the bots?): by made-hand percentile, their first actions after the flop are about as aggressive as the
+  bots' when checked to and facing a bet, in hero's pots and in the rest; the one sign of trapping is strong hands
+  (0.9+) on the flop in hero's pots, which bet 31% (n 55) against the bots' 43% (z about 1.7), part of what the
+  checked-to-before-the-raiser habit covers. Plain bot-against-bot play is otherwise v11's; the view the bots see now
+  has `prevAgg` (the street before's last bettor or raiser) and `prevAggActed`. Files: sims/2026-11-05-v10bots/v12/ in
+  the project folder.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that

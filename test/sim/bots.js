@@ -320,6 +320,7 @@ const HOME_DEFAULT = {
   heroRiverAbs: 0, heroRiverW: 0.02, heroRiverHU: 0,   // v9: answers to hero's river bets by absolute strength (0: off)
   jam: 0, jamK: 1.52, jamTop: 0.7, jamMax: 0.3,        // v10: wide all-in re-raises over one raise, by stack depth (0: off)
   heroHuCut: 0,                                       // v11: heads-up flop and turn answers to hero's bets fold more (0: off)
+  leadHu: null,                                       // v12: [flop, turn] scale on heads-up leads into the aggressor (null: off)
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
@@ -430,6 +431,10 @@ function homeBot(params) {
           const sh = j < 0 ? 0 : P.lineBet[2 * (si - 1) + j];
           if (sh) { const q = clamp(pBet, 1e-4, 1 - 1e-4); pBet = sig(Math.log(q / (1 - q)) + sh); }
         }
+        // v12: heads-up on the flop or turn, first to act before the street's aggressor (the preflop raiser, the flop's
+        // last bettor): bet leadHu [flop, turn] times as often, every hand alike. Friends lead there 11% / 13% (all logs to
+        // 5 Nov), v11 bots 31% / 26%.
+        if (P.leadHu && si <= 1 && v.nOpp === 1 && v.prevAgg >= 0 && v.prevAgg !== v.seat && !v.prevAggActed) pBet *= P.leadHu[si];
         // Bet size: a min-bet sometimes, otherwise around their usual size, bigger when stronger.
         const target = Math.log(P.betSize) + P.sizeTell * (hp - 0.7) + (P.potSlope ? P.potSlope * (Math.log(Math.max(1, pot / bb)) - Math.log(12)) : 0);
         const sd = P.sizeSd, grid = sd > 0.45 || P.potSlope ? SIZES_WIDE : SIZES;
