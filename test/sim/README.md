@@ -184,6 +184,25 @@ bots, seed and block size), so a third arm can be added later without replaying 
   percentile 0.55-0.61 against 0.53-0.56 in the logs, river pots 65bb against 41bb), not a misfit everywhere. Read v8
   results on flop and turn bets as pessimistic and on river calls as about right (hero's heads-up river calls: solver
   equity 0.38, share won 0.26; v7 0.37 / 0.21). Scripts and tables: sims/2026-11-04-v8bots/ in the project folder.
+* Friend bots v9 (5 Nov; `BOTPROFILES=test/sim/profiles-v9.json`): v8 plus one habit, `heroRiverAbs` 0.55. On the river,
+  facing a bet whose last aggressor is the hero seat, a bot continues iff its hand beats `heroRiverAbs` of all hands on
+  the board (`hp`, soft edge `heroRiverW` 0.02), whatever the size or its range; it raises as before among the hands that
+  continue (`heroRiverHU` 1 limits the habit to heads-up answers; off by default). Other bots' river bets are answered as
+  in v8. Why: on all logs the friends fold to each other's river bets as read (heads-up n 154, predicted .47, actual .46,
+  calibration slope 0.88 ± 0.20), but answer hero's by absolute strength: heads-up they continued iff the hand beat
+  about 55% of all hands (n 30; every shown caller had second pair or better), with no response to size (river-bluff
+  thread). Plain river fold rates already matched in v8 (`range-test.js --river`: first answers to river bets, friends
+  0.51, n 230, v8 bots 0.50, n 1,315; by preflop pot type and size within noise), so this is the only change.
+  Against the solver (4-handed, live budget, seed 3851, 1,000 deals; act / pred = everyone folded / the solver's
+  predicted all-fold): heads-up river bets 0.39 / 0.47 (n 289), calibration slope 0.06 ± 0.14 (friends against Marwin
+  0.08 ± 0.48, n 29); hero's heads-up river bets with under 30% equity 0.33 / 0.61 (n 93; friends 0 of 4, 0 of 9 with
+  multiway); with 60%+ equity 0.43 / 0.39 (friends 0.54 / 0.46). By size (under 45% / 45-85% / 85%+ pot) the bots fold
+  0.46 / 0.36 / 0.49 where the read says 0.35 / 0.63 / 0.61.
+  The same deals on v8: heads-up river bets 0.55 / 0.50 (n 299), slope 0.65 ± 0.15; bluffs under 30% equity 0.65 /
+  0.63 (n 106), so on v8 the solver's river bluffs paid and on the friends they didn't. Shown river bets sit at about
+  the same quantile of the solver's read in both (rb-hero.js's method: v8 0.58-0.59, v9 0.57, friends 0.55 ± 0.05),
+  and hero's heads-up river calls win less than their equity in both (v9 0.23 against 0.35, v8 0.23 against 0.34).
+  Scripts and tables: sims/2026-11-04-v8bots/ in the project folder (rbv8b.js, slope.js).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
