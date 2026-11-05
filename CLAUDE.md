@@ -794,7 +794,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   | xp:deepbluff | heads-up | +9.8 ± 8.6 | -0.2 ± 0.5 |
   | plain regulars | heads-up | 0 (all 2,000 the same); 0 (1,200 warm-up) | 0 (all 2,000 the same) |
   | plain regulars | 4-handed | +0.6 ± 11.2 | -0.1 ± 7.6; -10.9 ± 7.0; -2.8 ± 3.8; -2.5 ± 3.6 |
-  Pooled at 0.3: with a tight deep shover at the table about +28 ± 7 (four runs), plain regulars 4-handed about
+  Pooled at 0.3: with a tight deep shover at the table about +28 ± 6 (five runs), plain regulars 4-handed about
   -3.3 ± 2.3 (four runs, 23-110 of 4,000 hands differ: the 30% tight share folds a few good hands to their wide deep
   jams before any of them is shown). The merge (#110) was on the first five prior-0.3 runs; the 4-handed seeds 936
   and 942-945 came after it.
