@@ -11,6 +11,7 @@ function slim(r) {
     bigBlind: r.bigBlind, inPosition: r.inPosition, lookahead: !!r.lookahead,
     best: sc(r.best), runnerUp: sc(r.runnerUp), ranked: r.ranked.map(sc),
     margin: isFinite(r.margin) ? r.margin : null, close: r.close, mix: r.mix, solver: r.solver, blueprint: r.blueprint, heroPot: r.heroPot || null,
+    allinTie: r.allinTie || null,
     equity: r.equity, potOdds: r.potOdds, hero: r.hero, impliedOddsNeeded: r.impliedOddsNeeded,
     opponents: r.opponents.map((o) => ({
       name: o.name, pending: o.pending, aggressor: o.aggressor,

@@ -731,6 +731,34 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   2.1 / 3.2 / 4.8bb a shove faced at 15 / 25 / 40 / 60 / 100bb. It changes none of the 7 logged hero decisions facing an
   all-in re-raise (equity up to +0.07: ATo heads-up 0.54 -> 0.60, A2o 3-way 0.22 -> 0.29) and no other logged decision.
   The bots re-raise by hand strength, so the simulator would score it against shoves as tight as the old read.
+- Deep all-in re-raises read tight (v1.8.23, `DEEP_SHOVE` {from 40, to 100, width 0.08}; off: `input.deepShove: true`
+  turns it on, an object replaces the numbers): an all-in re-raise (as for SHOVE_RANGE) moves linearly from the usual
+  read at 40bb deep to the part of it inside the top 8% of hands at 100bb. Depth is the raise-to capped by the biggest
+  stack still in at the start of the hand (`sizes.preCover`, from the tracker since v1.8.23), so a big stack shoving into
+  short ones counts as shallow. On 5 Nov evening MarkMaodjaoj (MarkMaxMoney's account) re-raised all-in 130-692bb deep
+  four times: AKs (shown after hero folded A2o), not shown (hero folded Q7o), JJ (hero called 77, read 0.65, real 0.19)
+  and AJs (hero called A9o, read 0.60, real 0.25). All logs, preflop all-ins by depth (shoves.js, place in a preflop
+  ranking): under 40bb 11 shoves, 6 shown, mean top 32%; 40-100bb 12, 7 shown, 21%; 100bb+ 9, 4 shown, 8%. Mark's 40bb+
+  all-ins: 5, 4 shown (AKs, KQo voluntarily; JJ, AJs at showdown), all top 2-11%. Other players' 40bb+ re-raise shoves
+  are wider: Jelonte Q2o (85bb), Jagger A2s (135bb), jamaleatkid ATo (50bb), Dew666 AJo (55bb); 2 more not shown.
+  On the logs (2,032 hero decisions, 12 facing an all-in re-raise) it changes three: A2o (#868 of the evening) and Q7o
+  call -> fold, A9o vs AJs call -> fold (0.60 -> 0.43); 77 vs JJ still calls (0.65 -> 0.51, 0.46 needed). Simulator:
+  red-team presets `xp:deepshove` (top 8% re-raise all-in 60% facing a raise 40bb+ deep, nothing else shoves there) and
+  `xp:deepbluff` (plus 15% of the top half: about half bluffs).
+- Near-tie all-ins (v1.8.23, `ALLIN_TIE_BB` 1; off: `input.allinTie: true` turns it on, a number sets the margin in big
+  blinds): when the pick is all-in (hero's whole stack, or every opponent left is all-in once they match it) and an
+  option that isn't comes within the margin of its EV, that option is played; the result's `allinTie` (kind, amount,
+  label, ev, by) says what it replaced. On the logs it changes 28 of 2,032 decisions at 1bb: 22 preflop (mostly
+  heads-up 8-25bb shoves on 5 Nov morning becoming raises, giving up 0.01-0.73bb by the EVs), 6 turn and river value
+  shoves becoming smaller bets or calls. Asked for by Marwin (5 Nov): all-ins should be the confident spots.
+- All-in audit (5 Nov, scripts/2026-11-05-evening/allin-audit.js, allin-sum.js): every hero decision of all logs that
+  shoves, calls an all-in or folds to one (84), re-solved on reads rebuilt from earlier hands, against the shown cards.
+  Calls of all-ins (opponents always show): preflop 4, predicted equity 0.61, real 0.30 (-0.31 ± 0.12; ATs vs AA 24bb,
+  77 vs JJ, A9o vs AJs, AJo vs KTo the only one on target); after the flop 13, predicted 0.59, real 0.69 (+0.10 ± 0.10).
+  Hero's shoves (40): preflop predicted all-fold 0.58, real 0.80 (n 25, mostly short-stacked heads-up on 5 Nov
+  morning); after the flop 0.23 vs 0.07 (n 15: friends call hero's postflop shoves); equity when called on target (0.67
+  vs 0.63, n 19). Equity of calls and called shoves by predicted bucket: 0-0.5 real +0.14, 0.5-0.65 -0.10, 0.65-0.8
+  -0.11, 0.8+ on target (n 36): the read's all-in equities are too far from 0.5 in the middle.
 - Leak hunt (5 Nov, /mnt/project-files/patio-solver/leakhunt-2026-11-05/, REPORT.md, scripts/): every logged decision
   re-solved with 1-chip changes (pot, stack, a bet, an opponent's stack) and with bet-size, preflop-size and depth
   sweeps, against seed-to-seed noise, plus shown hands against the read by line. Steps found: pfRaisedRead at 30bb

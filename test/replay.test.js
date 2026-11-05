@@ -74,10 +74,10 @@ test('real hand: opponent tally after the hand', () => {
   near(tally.fold, T.DECAY);
 });
 
-test('tracker: preflop raises carry the raise-to and the chips left behind, in big blinds (sizes.preTo / preBehind)', () => {
+test('tracker: preflop raises carry the raise-to, the chips left behind and the biggest stack still in, in big blinds (sizes.preTo / preBehind / preCover)', () => {
   const { turns } = replay(require(path.join(__dirname, 'fixtures/three-hand-150bb.json')));
   const ann = turns.find((b) => b.input && b.input.board.length === 0).input.opponents.find((o) => o.name === 'Ann');
-  assert.deepStrictEqual(ann.sizes, { pre: 2, preTo: 3, preBehind: 147 });
+  assert.deepStrictEqual(ann.sizes, { pre: 2, preTo: 3, preBehind: 147, preCover: 150 });
 });
 
 test('hand log: every action with amount, pot, stack, advice match and result', () => {
@@ -2181,6 +2181,51 @@ test('shoveRange: all-in preflop re-raises read as 0.7 x VPIP, not the narrow re
   near(spot(20).equity.share, spot(20, { shoveRange: false }).equity.share);
   // Opens (not re-raises) are unchanged.
   near(spot(0, {}, 'raise').equity.share, spot(0, { shoveRange: false }, 'raise').equity.share);
+});
+
+test('deepShove (off by default): deep all-in re-raises read tighter from 40bb, fully from 100bb, depth capped by the cover', () => {
+  // Hero opened to 2.5bb; a loose player (VPIP about 0.6) re-raises all-in to `to` bb. cover: the biggest stack still in
+  // that could call it, in bb (sizes.preCover, from the tracker).
+  const loose = { pfFold: 40, pfCall: 40, pfRaise: 40, hands: 120 };
+  const spot = (to, extra, cover, hero = 'Ah 8d') => E.analyzeSync(Object.assign({
+    hero: C(hero), board: [], pot: 2 * to + 6, toCall: 2 * to - 5, stack: 2 * to - 5, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 2.5, preBehind: to - 2.5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
+    opponents: [{ name: 'V', tally: loose, actions: { pre: '3bet' }, sizes: Object.assign({ pre: 25, preTo: to, preBehind: 0 }, cover != null ? { preCover: cover } : {}), pfAggressor: true, position: 'blinds', committed: 2 * to, stack: 0, bet: 2 * to, heroIP: false }],
+    iterations: 3000, mix: false, seed: 1,
+  }, extra)).equity.share;
+  const off = spot(150), on = spot(150, { deepShove: true });
+  near(off, spot(150, { deepShove: false }));
+  assert.ok(on < off - 0.08, `A8o vs a 150bb shove: on ${on} off ${off}`);
+  assert.ok(spot(150, { deepShove: { width: 0.2 } }) > on + 0.02, 'an object replaces the numbers');
+  // The ramp: nothing at 40bb, part of it at 70bb.
+  near(spot(40, { deepShove: true }), spot(40));
+  const mid = spot(70, { deepShove: true }), midOff = spot(70);
+  assert.ok(mid < midOff - 0.02 && mid > spot(70, { deepShove: { from: 40, to: 41 } }) + 0.01, `70bb: ${midOff} -> ${mid}`);
+  // A 150bb shove that only a 30bb stack can call is a 30bb shove.
+  near(spot(150, { deepShove: true }, 30), spot(150, {}, 30));
+});
+
+test('allinTie (off by default): an all-in pick gives way to the best option that is not all-in within the margin', () => {
+  const spot = (extra, stack = 75, hero = 'Ac Kd') => E.analyzeSync(Object.assign({
+    hero: C(hero), board: [], pot: 86, toCall: 75, stack, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 2.5, preBehind: 37.5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: '3bet' }, sizes: { pre: 25, preTo: 40, preBehind: 0 }, pfAggressor: true, position: 'blinds', committed: 80, stack: 0, bet: 80, heroIP: false }],
+    iterations: 3000, mix: false, seed: 1,
+  }, extra));
+  const base = spot({});
+  assert.strictEqual(base.best.kind, 'allin', 'AK calls the 40bb shove');
+  assert.strictEqual(base.allinTie, null);
+  // The call is far ahead of folding: a 1bb margin keeps it.
+  assert.strictEqual(spot({ allinTie: true }).best.kind, 'allin');
+  // A margin bigger than the gap folds, and says what it gave up.
+  const wide = spot({ allinTie: 1000 });
+  assert.strictEqual(wide.best.kind, 'fold');
+  assert.strictEqual(wide.allinTie.kind, 'allin');
+  near(wide.allinTie.by, base.best.ev);
+  // Hero covers the shover: the call is not hero's whole stack, but it ends the betting, so it counts as all-in too.
+  const deep = spot({ allinTie: 1000 }, 400);
+  assert.notStrictEqual(spot({}, 400).best.kind, 'fold');
+  assert.strictEqual(deep.best.kind, 'fold');
 });
 
 test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10bb, full tilt from 25bb (false: off)', () => {

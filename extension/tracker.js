@@ -702,6 +702,11 @@
           if (bb > 0) {
             p.sizes.preTo = Math.round((p.stageBet / bb) * 100) / 100;
             p.sizes.preBehind = Math.round((Math.max(0, p.start - p.total) / bb) * 100) / 100;
+            // The most chips any other player still in had at the start of the hand (v1.8.23): how deep a shove really
+            // is when a big stack shoves into shorter ones (DEEP_SHOVE).
+            let cover = 0;
+            for (const x of Object.values(h.players)) if (x.id !== p.id && !x.folded) cover = Math.max(cover, x.start);
+            p.sizes.preCover = Math.round((cover / bb) * 100) / 100;
           }
           h.lastRaiseInc = inc;
         }
