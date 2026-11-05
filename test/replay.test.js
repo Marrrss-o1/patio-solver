@@ -2205,17 +2205,18 @@ test('deepShove (off by default): deep all-in re-raises read tighter from 40bb, 
   near(spot(150, { deepShove: true }, 30), spot(150, {}, 30));
 });
 
-test('allinTie (off by default): an all-in pick gives way to the best option that is not all-in within the margin', () => {
+test('allinTie (on, 1bb): an all-in pick gives way to the best option that is not all-in within the margin (false: off)', () => {
   const spot = (extra, stack = 75, hero = 'Ac Kd') => E.analyzeSync(Object.assign({
     hero: C(hero), board: [], pot: 86, toCall: 75, stack, bigBlind: 2, inPosition: true, tableStyle: 'typical',
     heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 2.5, preBehind: 37.5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
     opponents: [{ name: 'V', tally: {}, actions: { pre: '3bet' }, sizes: { pre: 25, preTo: 40, preBehind: 0 }, pfAggressor: true, position: 'blinds', committed: 80, stack: 0, bet: 80, heroIP: false }],
     iterations: 3000, mix: false, seed: 1,
   }, extra));
-  const base = spot({});
+  const base = spot({ allinTie: false });
   assert.strictEqual(base.best.kind, 'allin', 'AK calls the 40bb shove');
   assert.strictEqual(base.allinTie, null);
-  // The call is far ahead of folding: a 1bb margin keeps it.
+  // The call is far ahead of folding: the default 1bb margin keeps it.
+  assert.strictEqual(spot({}).best.kind, 'allin');
   assert.strictEqual(spot({ allinTie: true }).best.kind, 'allin');
   // A margin bigger than the gap folds, and says what it gave up.
   const wide = spot({ allinTie: 1000 });
@@ -2224,7 +2225,7 @@ test('allinTie (off by default): an all-in pick gives way to the best option tha
   near(wide.allinTie.by, base.best.ev);
   // Hero covers the shover: the call is not hero's whole stack, but it ends the betting, so it counts as all-in too.
   const deep = spot({ allinTie: 1000 }, 400);
-  assert.notStrictEqual(spot({}, 400).best.kind, 'fold');
+  assert.notStrictEqual(spot({ allinTie: false }, 400).best.kind, 'fold');
   assert.strictEqual(deep.best.kind, 'fold');
 });
 

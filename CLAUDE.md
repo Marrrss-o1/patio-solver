@@ -756,12 +756,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   call -> fold, A9o vs AJs call -> fold (0.60 -> 0.43); 77 vs JJ still calls (0.65 -> 0.51, 0.46 needed). Simulator:
   red-team presets `xp:deepshove` (top 8% re-raise all-in 60% facing a raise 40bb+ deep, nothing else shoves there) and
   `xp:deepbluff` (plus 15% of the top half: about half bluffs).
-- Near-tie all-ins (v1.8.23, `ALLIN_TIE_BB` 1; off: `input.allinTie: true` turns it on, a number sets the margin in big
-  blinds): when the pick is all-in (hero's whole stack, or every opponent left is all-in once they match it) and an
-  option that isn't comes within the margin of its EV, that option is played; the result's `allinTie` (kind, amount,
-  label, ev, by) says what it replaced. On the logs it changes 28 of 2,032 decisions at 1bb: 22 preflop (mostly
+- Near-tie all-ins (v1.8.23, `ALLIN_TIE_BB` 1; on since v1.8.25: `input.allinTie: false` turns it off, a number sets the
+  margin in big blinds): when the pick is all-in (hero's whole stack, or every opponent left is all-in once they match
+  it) and an option that isn't comes within the margin of its EV, that option is played; the result's `allinTie` (kind,
+  amount, label, ev, by) says what it replaced. On the logs it changes 28 of 2,032 decisions at 1bb: 22 preflop (mostly
   heads-up 8-25bb shoves on 5 Nov morning becoming raises, giving up 0.01-0.73bb by the EVs), 6 turn and river value
-  shoves becoming smaller bets or calls. Asked for by Marwin (5 Nov): all-ins should be the confident spots.
+  shoves becoming smaller bets or calls. Asked for by Marwin (5 Nov): all-ins should be the confident spots. Simulator,
+  live budget, v12r regulars, 1,000 deals each, on vs off (v1.8.23): 4-handed 25bb +8.7 ± 5.0 and +21.8 ± 5.3 (button,
+  early seats, strong to medium hands), heads-up 25bb +10.6 ± 7.8 (big blind), heads-up 150bb +7.0 ± 9.2, 4-handed
+  150bb -10.7 ± 11.5; pooled +11.7 ± 3.0 (25bb +14.1 ± 3.3, 150bb +0.1 ± 7.2). This fits the leak hunt's finding that
+  preflop shoves come back below their EV and the raises they replace above theirs (SHOVE-GATE.md). The friends folded
+  to hero's short preflop shoves more than predicted (audit below: 0.80 vs 0.58, n 25, nearly all one player heads-up),
+  which points the other way, on a small sample. Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/.
 - All-in audit (5 Nov, scripts/2026-11-05-evening/allin-audit.js, allin-sum.js): every hero decision of all logs that
   shoves, calls an all-in or folds to one (84), re-solved on reads rebuilt from earlier hands, against the shown cards.
   Calls of all-ins (opponents always show): preflop 4, predicted equity 0.61, real 0.30 (-0.31 ± 0.12; ATs vs AA 24bb,
