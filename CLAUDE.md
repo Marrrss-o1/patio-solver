@@ -251,6 +251,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   bucket better), nothing else moves. Log replay (1-5 Nov): 21 of 942 decisions change, all preflop near-ties
   (short-stack shoves with strong aces become raises, open sizes move a step). `stats.vsOpen.largeAll` is the old
   bucket (vsOpenSplit false is bit-identical to v1.8.19). Older reads keep their past shoves in `large`.
+  Simulator, live budget, v10 bots, 1,000 deals each, on vs off: 4-handed 100bb +13.8 ± 16.7, 150bb +1.4 ± 22.1, 30bb
+  -4.1 ± 6.2, 20bb +0.6 ± 3.0, heads-up 20bb +4.1 ± 4.9 (pooled +1.0 ± 2.3: neutral). At 20bb it shoves less first in
+  (heads-up small blind 27% -> 21%, raises 49% -> 55%); at 30bb it mostly moves raise sizes (button isolation over a
+  limper 3bb -> 6.5bb, -5.0 ± 2.4 bb a hand, n 22: the bots re-raise hero's iso-raises 19-36% at every size, while
+  friends re-raise 8% of 3.5-5bb opens, 7% at 5-8bb and 0 of 17 at 8-15bb). Files:
+  /mnt/project-files/patio-solver/sims/2026-11-05-opensplit/ (SHORT-STACKS.md).
 - Range noise (`applyAction`): each line keeps a share `rangeNoise` (home prior 0.45, MAP per player from showdown
   likelihoods `nl` over `NOISES`) of hands that take it whatever their strength; on bets it scales with bluff share
   and bet size (`rangeNoiseAgg`). Without it shown hands scored worse than a random guess.
