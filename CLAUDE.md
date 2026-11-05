@@ -790,9 +790,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   | --- | --- | --- | --- |
   | xp:deepshove | heads-up | +3.3 ± 11.4; -2.2 ± 4.6 (1,200 warm-up hands) | +41.5 ± 14.0; +18.2 ± 9.7 |
   | xp:deepshove + friends | 3-handed | +17.7 ± 16.8 | +52.7 ± 21.7 |
+  | xp:deepshove + friends | 4-handed | | +24.4 ± 14.6; +27.1 ± 20.8 |
   | xp:deepbluff | heads-up | +9.8 ± 8.6 | -0.2 ± 0.5 |
   | plain regulars | heads-up | 0 (all 2,000 the same); 0 (1,200 warm-up) | 0 (all 2,000 the same) |
-  | plain regulars | 4-handed | +0.6 ± 11.2 | -0.1 ± 7.6 |
+  | plain regulars | 4-handed | +0.6 ± 11.2 | -0.1 ± 7.6; -10.9 ± 7.0; -2.8 ± 3.8; -2.5 ± 3.6 |
+  Pooled at 0.3: with a tight deep shover at the table about +28 ± 6 (five runs), plain regulars 4-handed about
+  -3.3 ± 2.3 (four runs, 23-110 of 4,000 hands differ: the 30% tight share folds a few good hands to their wide deep
+  jams before any of them is shown). The merge (#110) was on the first five prior-0.3 runs; the 4-handed seeds 936
+  and 942-945 came after it.
   With 1,200 warm-up hands the trust is 1.00 by the time hero faces the tight bot (15-18 shows), and A has learned most
   of it from the showdowns too, so B and A barely differ: the read matters while a player's read is young (Mark's
   account was new on 5 Nov). Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/ (dsl-*, dsl3-*).
