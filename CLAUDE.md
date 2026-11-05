@@ -77,6 +77,8 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # --budget live (the computer's full solve: phone budget + turn solver at 100 iterations)
                          # and --budget phone: judge every solver change at live, and run both for any change
                          # touching flops or turns. The default (3,000 Monte Carlo, 120 river) is for quick checks.
+                         # Main check for solver changes (since 5 Nov): BOTPROFILES=test/sim/profiles-v12r.json,
+                         # the regulars Marwin usually plays (one bot per regular account, v12 habits).
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/merge-logs.js <out.json> <exports or folders...>  # one merged log: each hand once, fuller copy kept
                          # (exports since v1.8.21 hold only new hands; every log tool below takes several

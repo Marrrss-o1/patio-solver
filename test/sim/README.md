@@ -6,6 +6,8 @@ for measuring changes (those two still work and are left as they were).
 
 ```
 node test/sim/run.js --hands 2000 --players 4 --bots friends                  # solver vs bots fitted to Marwin's friends
+BOTPROFILES=test/sim/profiles-v12r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
+     --a-ref main --b-ref my-branch                                           # the main check: the regulars, live budget
 node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the same, with the budget Marwin plays
 node test/sim/run.js --hands 2000 --players 2 --bots maniac --stack 100 \
@@ -267,6 +269,16 @@ bots, seed and block size), so a third arm can be added later without replaying 
   checked-to-before-the-raiser habit covers. Plain bot-against-bot play is otherwise v11's; the view the bots see now
   has `prevAgg` (the street before's last bettor or raiser) and `prevAggActed`. Files: sims/2026-11-05-v10bots/v12/ in
   the project folder.
+* Regulars only, v12r (5 Nov; `BOTPROFILES=test/sim/profiles-v12r.json`): **the main check for solver changes.** The
+  seven regulars Marwin usually plays, one bot each (v12's profiles; for a regular seen under several names, the
+  profile with the most hands): f1, f2, f3, f4, f5, f11, f23, plus `pool` and `hero`. v12's 24 profiles include 8
+  one-session players and several profiles for one account (one regular has five). Regulars were matched by the
+  account ids in the raw events (names map in the project folder). All logs to 5 Nov, first answers to heads-up flop and
+  turn bets (range-test.js rows, which now carry `who` and `t`): regulars fold to Marwin's 46% (n 74; the v11 target),
+  to each other's 38% (196); the other players fold to Marwin's 36% (120), mostly one heads-up opponent on 5 Nov at 24%
+  (51). Regulars lead into the aggressor heads-up 15% (48) on the flop and 13% (61) on the turn; v12r bots against each
+  other 12% / 11%, multiway 19% / 14% (regulars 18% / 17%). Bot against bot (range-test.js --bots, 3,000 hands), the
+  answers to the other bots' heads-up flop and turn bets fold 35% (v12: 40%).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
