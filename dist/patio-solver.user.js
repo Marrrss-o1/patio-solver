@@ -2204,19 +2204,23 @@ function ENGINE() {
   // the 7 logged hero decisions facing an all-in re-raise. The friend bots re-raise by hand strength, so the simulator
   // would score their shoves as tight as the old read.
   const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
-  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; off by default: input.deepShove true turns it on, an object
-  // replaces the numbers). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
+  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; on since v1.8.26, per player: input.deepShove false turns it
+  // off, an object replaces the numbers, { prior: 1 } reads every player's deep shoves tight). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
   // `from` big blinds deep to the part of it inside the top `width` of hands at `to` (depth: the raise-to, capped by
   // the biggest stack still in that could call it). SHOVE_RANGE was fitted on shoves of 17.5-50bb. On 5 Nov evening
   // MarkMaodjaoj (MarkMaxMoney's account) shoved 130-692bb deep; his shown deep shoves were AKs, JJ and AJs (and KQo
   // opening 81bb), all top-11% hands, while the read gave A2o 0.52, Q7o 0.51, 77 0.65 and A9o 0.60 against them, each
   // hand's equity against a random one (the advice called his 513bb 4-bet shove with 77; he had JJ). All logs to 5 Nov,
   // shown preflop all-ins by depth: under 40bb mean place in a preflop ranking top 32% (6 shows), 40-100bb 21% (7),
-  // 100bb+ 8% (4, three of them Mark's). The simulator can't judge it (its bots shove by hand strength).
+  // 100bb+ 8% (4, three of them Mark's).
   // Per player since v1.8.26 (deepShoveTrust): the tight read applies by how much that player's own shown all-in
   // re-raises fit it, from a prior of `prior`. Against the friend bots, who jam wide hands at 150bb now and then, the
   // v1.8.23 version (prior 1, everyone tight) lost (4-handed, see CLAUDE.md), as the logs say for most friends.
-  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.1 };
+  // Prior 0.3 (live budget, v12r regulars, 1,000 deals each): against a bot that shoves deep only with the top 8%
+  // heads-up +41.5 ± 14.0 and +18.2 ± 9.7, 3-handed +52.7 ± 21.7; against one that bluffs half its deep shoves -0.2 ± 0.5;
+  // against the plain regulars heads-up 0 (every hand the same), 4-handed -0.1 ± 7.6. Prior 0.1 was safe but slow (+3.3,
+  // -2.2, +17.7 against the tight shover).
+  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.3 };
   // Near-tie all-ins (v1.8.23, input.allinTie; on since v1.8.25, false turns it off): an all-in pick gives way to the
   // best option that isn't all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb
   // over Mark's limp-re-raise at +2.26 chips, the call was +2.08 (bb 2 chips). Simulator, live budget, v12r regulars,
@@ -5642,7 +5646,7 @@ function ENGINE() {
     const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
-    const dsh = input.deepShove === true ? Object.assign({}, DEEP_SHOVE) : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : null;
+    const dsh = input.deepShove === false ? null : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : Object.assign({}, DEEP_SHOVE);
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     // Initiative read (INITIATIVE), off until the simulator has judged it: input.initiative true turns it on, an object
     // replaces the table. Roles come from input.history (the tracker's action log for the hand).
@@ -5697,7 +5701,7 @@ function ENGINE() {
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
       if (shr) { stats.shoveRange = shr; if (statsHU) statsHU.shoveRange = shr; }
-      // Deep all-in re-raises read tight (DEEP_SHOVE), only with input.deepShove.
+      // Deep all-in re-raises read tight (DEEP_SHOVE) by the player's trust; input.deepShove false turns it off.
       if (dsh) {
         const ds = Object.assign({}, dsh, { trust: deepShoveTrust(stats, dsh, o.tally && o.tally.jamShows) });
         stats.deepShove = ds; if (statsHU) statsHU.deepShove = ds;
@@ -8055,6 +8059,55 @@ ENGINE();
       return n;
     }
 
+    // Shown all-in re-raises from hands stored before v1.8.26, which recorded no `jamShows` (DEEP_SHOVE's per-player read):
+    // found in each stored hand's action log (the player's last preflop raise was a re-raise that left under a tenth of
+    // the raise-to behind, and their cards were shown) and added to that player's read, oldest first, newest
+    // MAX_JAM_SHOWS kept, skipping any already there. The player is the account id the hand's raw events give that name,
+    // else the one read that used the name around that time. Returns how many were added.
+    tagJamShows(entries) {
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log) && Array.isArray(e.players) && e.bigBlind > 0).sort((a, b) => (a.t || 0) - (b.t || 0));
+      let n = 0;
+      for (const e of list) {
+        const bb = e.bigBlind;
+        const pre = e.log.filter((x) => x && x.st === 'pre');
+        for (const p of e.players) {
+          if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
+          let i = -1;
+          for (let j = 0; j < pre.length; j++) if (pre[j].who === p.name && (pre[j].act === 'raise' || pre[j].act === '3bet')) i = j;
+          if (i < 0) continue;
+          const x = pre[i];
+          const top = 1 + pre.slice(0, i).filter((y) => y.act === 'raise' || y.act === '3bet').length;
+          if (top < 2 || !(x.to > 0)) continue;
+          const to = Math.round((x.to / bb) * 100) / 100;
+          const behind = x.stack != null ? Math.max(0, x.stack - (x.amt || 0)) / bb : x.allin ? 0 : null;
+          if (behind == null || behind > 0.1 * to) continue;
+          const folded = new Set(pre.slice(0, i).filter((y) => y.act === 'fold').map((y) => y.who));
+          let cover = 0;
+          for (const q of e.players) if (q && q.name !== p.name && !folded.has(q.name) && q.stack > cover) cover = q.stack;
+          const id = idFor(p.name, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) continue;
+          const t = r.tally || (r.tally = blankTally());
+          if (!t.jamShows) t.jamShows = [];
+          const cards = p.shown.slice();
+          const key = cards.slice().sort().join('');
+          if (t.jamShows.some((s) => s && Array.isArray(s.cards) && s.cards.slice().sort().join('') === key && Math.abs((s.to || 0) - to) < 0.02)) continue;
+          t.jamShows.push({ cards, pre: top >= 4 ? '5bet' : top === 3 ? '4bet' : '3bet', to, cover: Math.round((cover / bb) * 100) / 100 });
+          if (t.jamShows.length > MAX_JAM_SHOWS) t.jamShows.splice(0, t.jamShows.length - MAX_JAM_SHOWS);
+          n++;
+        }
+      }
+      return n;
+    }
+
     heroPotShows() {
       const out = { hi: null, hiN: 0, ho: null, hoN: 0 };
       for (const r of Object.values(this.db.players)) {
@@ -8686,6 +8739,8 @@ function slim(r) {
   // Shows saved before v1.8.9 don't say whether hero was in the pot (the learned hero-pot tilt): filled in from the
   // stored hands.
   if (tracker.tagHeroPot(tracker.db.history || [])) save(DB_KEY, tracker.db);
+  // Shown all-in re-raises from hands stored before v1.8.26 (the per-player deep-shove read): filled in once.
+  if (!tracker.db.jamTagged) { tracker.tagJamShows(tracker.db.history || []); tracker.db.jamTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

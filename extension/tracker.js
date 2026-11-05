@@ -905,6 +905,55 @@
       return n;
     }
 
+    // Shown all-in re-raises from hands stored before v1.8.26, which recorded no `jamShows` (DEEP_SHOVE's per-player read):
+    // found in each stored hand's action log (the player's last preflop raise was a re-raise that left under a tenth of
+    // the raise-to behind, and their cards were shown) and added to that player's read, oldest first, newest
+    // MAX_JAM_SHOWS kept, skipping any already there. The player is the account id the hand's raw events give that name,
+    // else the one read that used the name around that time. Returns how many were added.
+    tagJamShows(entries) {
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log) && Array.isArray(e.players) && e.bigBlind > 0).sort((a, b) => (a.t || 0) - (b.t || 0));
+      let n = 0;
+      for (const e of list) {
+        const bb = e.bigBlind;
+        const pre = e.log.filter((x) => x && x.st === 'pre');
+        for (const p of e.players) {
+          if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
+          let i = -1;
+          for (let j = 0; j < pre.length; j++) if (pre[j].who === p.name && (pre[j].act === 'raise' || pre[j].act === '3bet')) i = j;
+          if (i < 0) continue;
+          const x = pre[i];
+          const top = 1 + pre.slice(0, i).filter((y) => y.act === 'raise' || y.act === '3bet').length;
+          if (top < 2 || !(x.to > 0)) continue;
+          const to = Math.round((x.to / bb) * 100) / 100;
+          const behind = x.stack != null ? Math.max(0, x.stack - (x.amt || 0)) / bb : x.allin ? 0 : null;
+          if (behind == null || behind > 0.1 * to) continue;
+          const folded = new Set(pre.slice(0, i).filter((y) => y.act === 'fold').map((y) => y.who));
+          let cover = 0;
+          for (const q of e.players) if (q && q.name !== p.name && !folded.has(q.name) && q.stack > cover) cover = q.stack;
+          const id = idFor(p.name, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) continue;
+          const t = r.tally || (r.tally = blankTally());
+          if (!t.jamShows) t.jamShows = [];
+          const cards = p.shown.slice();
+          const key = cards.slice().sort().join('');
+          if (t.jamShows.some((s) => s && Array.isArray(s.cards) && s.cards.slice().sort().join('') === key && Math.abs((s.to || 0) - to) < 0.02)) continue;
+          t.jamShows.push({ cards, pre: top >= 4 ? '5bet' : top === 3 ? '4bet' : '3bet', to, cover: Math.round((cover / bb) * 100) / 100 });
+          if (t.jamShows.length > MAX_JAM_SHOWS) t.jamShows.splice(0, t.jamShows.length - MAX_JAM_SHOWS);
+          n++;
+        }
+      }
+      return n;
+    }
+
     heroPotShows() {
       const out = { hi: null, hiN: 0, ho: null, hoN: 0 };
       for (const r of Object.values(this.db.players)) {

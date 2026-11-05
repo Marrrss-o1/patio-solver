@@ -703,6 +703,15 @@
         saveDb();
       });
     }
+    // Shown all-in re-raises from hands stored before v1.8.26 don't count in the per-player deep-shove read
+    // (tally.jamShows): filled in once from every stored hand.
+    if (!tracker.db.jamTagged) {
+      handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
+        tracker.tagJamShows(hands);
+        tracker.db.jamTagged = 1;
+        saveDb();
+      });
+    }
     tracker.on((type) => {
       if (type === 'save') saveDb();
       if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }

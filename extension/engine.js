@@ -2188,19 +2188,23 @@
   // the 7 logged hero decisions facing an all-in re-raise. The friend bots re-raise by hand strength, so the simulator
   // would score their shoves as tight as the old read.
   const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
-  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; off by default: input.deepShove true turns it on, an object
-  // replaces the numbers). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
+  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; on since v1.8.26, per player: input.deepShove false turns it
+  // off, an object replaces the numbers, { prior: 1 } reads every player's deep shoves tight). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
   // `from` big blinds deep to the part of it inside the top `width` of hands at `to` (depth: the raise-to, capped by
   // the biggest stack still in that could call it). SHOVE_RANGE was fitted on shoves of 17.5-50bb. On 5 Nov evening
   // MarkMaodjaoj (MarkMaxMoney's account) shoved 130-692bb deep; his shown deep shoves were AKs, JJ and AJs (and KQo
   // opening 81bb), all top-11% hands, while the read gave A2o 0.52, Q7o 0.51, 77 0.65 and A9o 0.60 against them, each
   // hand's equity against a random one (the advice called his 513bb 4-bet shove with 77; he had JJ). All logs to 5 Nov,
   // shown preflop all-ins by depth: under 40bb mean place in a preflop ranking top 32% (6 shows), 40-100bb 21% (7),
-  // 100bb+ 8% (4, three of them Mark's). The simulator can't judge it (its bots shove by hand strength).
+  // 100bb+ 8% (4, three of them Mark's).
   // Per player since v1.8.26 (deepShoveTrust): the tight read applies by how much that player's own shown all-in
   // re-raises fit it, from a prior of `prior`. Against the friend bots, who jam wide hands at 150bb now and then, the
   // v1.8.23 version (prior 1, everyone tight) lost (4-handed, see CLAUDE.md), as the logs say for most friends.
-  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.1 };
+  // Prior 0.3 (live budget, v12r regulars, 1,000 deals each): against a bot that shoves deep only with the top 8%
+  // heads-up +41.5 ± 14.0 and +18.2 ± 9.7, 3-handed +52.7 ± 21.7; against one that bluffs half its deep shoves -0.2 ± 0.5;
+  // against the plain regulars heads-up 0 (every hand the same), 4-handed -0.1 ± 7.6. Prior 0.1 was safe but slow (+3.3,
+  // -2.2, +17.7 against the tight shover).
+  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.3 };
   // Near-tie all-ins (v1.8.23, input.allinTie; on since v1.8.25, false turns it off): an all-in pick gives way to the
   // best option that isn't all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb
   // over Mark's limp-re-raise at +2.26 chips, the call was +2.08 (bb 2 chips). Simulator, live budget, v12r regulars,
@@ -5626,7 +5630,7 @@
     const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
-    const dsh = input.deepShove === true ? Object.assign({}, DEEP_SHOVE) : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : null;
+    const dsh = input.deepShove === false ? null : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : Object.assign({}, DEEP_SHOVE);
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     // Initiative read (INITIATIVE), off until the simulator has judged it: input.initiative true turns it on, an object
     // replaces the table. Roles come from input.history (the tracker's action log for the hand).
@@ -5681,7 +5685,7 @@
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
       if (shr) { stats.shoveRange = shr; if (statsHU) statsHU.shoveRange = shr; }
-      // Deep all-in re-raises read tight (DEEP_SHOVE), only with input.deepShove.
+      // Deep all-in re-raises read tight (DEEP_SHOVE) by the player's trust; input.deepShove false turns it off.
       if (dsh) {
         const ds = Object.assign({}, dsh, { trust: deepShoveTrust(stats, dsh, o.tally && o.tally.jamShows) });
         stats.deepShove = ds; if (statsHU) statsHU.deepShove = ds;
