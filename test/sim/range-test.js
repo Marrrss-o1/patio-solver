@@ -80,7 +80,7 @@ function answers(H) {
         const bp = bettor && h.players.find((x) => x.name === bettor);
         mine.push({ st, fold: e.act === 'fold' ? 1 : 0, f: v.toCall / Math.max(1, v.pot - v.toCall), hu: v.nOpp === 1, raised: v.raises >= 2,
           own: (v.seq[st] || []).some((x) => x === 'bet' || x === 'raise'), rangeHp: m / tot, potBB: v.pot / v.bb,
-          pf: pfRaises, vsHero: !!(bp && bp.hero), checked: (v.seq[st] || []).includes('check'), cb: !!bettor && bettor === pfAgg });
+          pf: pfRaises, vsHero: !!(bp && bp.hero), checked: (v.seq[st] || []).includes('check'), cb: !!bettor && bettor === pfAgg, who: p.name, t: h.t });
       }
       return [{ t: KIND[e.act], to: e.to, p: 1 }];
     } }));
