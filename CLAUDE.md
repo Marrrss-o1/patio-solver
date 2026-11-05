@@ -647,7 +647,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   With it, a preflop raiser with a third or more of their stack in continues against hero's raise at 0.97
   (`input.pfCommitCall: false` for the old rule; continueRule's `opp.behind` is the input's `stack`): #390's rule had
   Jagger folding 23% to the shove with 131 of 255bb in and needing 24%; friends with a third of their stack in called all
-  3 logged spots. It changes no logged decision on its own (#390's shove +65 -> +53bb). The bots don't model it (their
+  3 logged spots. It changes no logged decision on its own (#390's shove +65 -> +53bb). Since v1.8.16 callers too (any
+  player already in with a third of their stack): on 1 Nov Jagger called Dew666's 32bb open with 92bb and was read
+  folding 56-73% to hero's re-raise (he called it with Q5o); AJo there goes from a raise to 128bb (tied with the
+  shove) to all-in (+46 vs +29bb), the only one of 1,018 logged decisions that changes. The bots don't model it (their
   `pfCommit` is opt-in), so a sim would score them folding where friends call. Files: analysis/2026-11-04-session.md
   ("Your two questions"), scripts/2026-11-04-session/questions/.
 - River raise fold (`RIVER_RAISE_FOLD` 0.5, off: `input.riverRaiseFold: true` turns it on, a number sets it): in

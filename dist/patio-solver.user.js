@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.15
+// @version      1.8.16
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1794,11 +1794,13 @@ function ENGINE() {
         const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97);
         return { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
       }
-      // A raiser with a third or more of their stack already in continues (v1.8.15, input.pfCommitCall: false for the old
-      // rule): on #390 Jagger had raised to 131bb of 255bb and needed 24% to call hero's shove, and the rule below had
-      // him folding 23%. Friends with a third or more of their stack in called all 3 such logged spots. It changes no
-      // logged decision (the #390 shove 65 -> 53bb).
-      if (raised && ctx.pfCommitCall !== false && opp.committed != null && opp.behind != null && opp.committed >= (opp.committed + opp.behind) / 3) {
+      // A player with a third or more of their stack already in continues (input.pfCommitCall: false for the old rule):
+      // raisers since v1.8.15, callers since v1.8.16. On #390 Jagger had raised to 131bb of 255bb and needed 24% to call
+      // hero's shove, and the rule below had him folding 23%; on 1 Nov he had called Dew666's 32bb open with 92bb (a
+      // third in) and was read folding 56-73% to hero's re-raise, then called it with Q5o. Friends with a third or more
+      // of their stack in called all 3 such logged spots. Raisers change no logged decision on their own (the #390 shove
+      // 65 -> 53bb); callers change one (that 1 Nov AJo: raise to 128bb, tied with the shove -> all-in +46bb vs +29bb).
+      if (ctx.pfCommitCall !== false && opp.committed != null && opp.behind != null && opp.committed >= (opp.committed + opp.behind) / 3) {
         return { cont: 0.97, nut: 0.965, reraise: 0.11 };
       }
       // Callers (mostly limpers) continue at their learned rate against a raise.
