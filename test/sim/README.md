@@ -219,6 +219,12 @@ bots, seed and block size), so a third arm can be added later without replaying 
   0.06; re-raise share 0.08-0.11 / 0.11-0.125 / 0.10-0.115. The forced shoves stay (a re-raise to 40%+ of the stack is
   all-in), so short bots still shove some value hands. The sim's stacks are 150bb unless `--stack` or `--seat-stacks`
   say otherwise; jams are rare there, as with the friends.
+  What it judged: v1.8.17's all-in re-raise read (`SHOVE_RANGE`) lost -10 ± 6 bb/100 on v8 (5-handed, v1.8.13 to
+  v1.8.17), mostly calls against v8's tight 150bb shoves. On v10, main d9d23a3 with `{"shoveRange":false}` against
+  `{}`, 5-handed, live budget, 1,000 deals each: 150bb (seed 3850) +8.4 ± 8.3, two bot seats at 40bb and 80bb
+  (`--seat-stacks 40,80`, seed 3871) +5.2 ± 9.8, pooled about +7 ± 6. Hands whose first difference is calling a jam
+  hero used to fold: 5 at +47bb a hand at 150bb, 31 at +7.3 ± 2.9 with the short seats. Files:
+  sims/2026-11-05-v10bots/ in the project folder.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
