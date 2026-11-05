@@ -38,6 +38,12 @@ function run(spec) {
       }
       for (const x of d) if (bet(x) && x.p > 0) { const f = x.to / Math.max(1, v.pot); add(f >= 0.95 ? `${key}: hand strength of bets >= pot` : f <= 0.55 ? `${key}: hand strength of bets <= 0.55 pot` : `${key}: hand strength of other bets`, hp, x.p / tot); }
       if (v.heroIn && strong && v.street <= 4) add(`${key}: strong hand bets in hero's pot`, pb);
+      if (v.heroIn && v.heroChecked && v.street === 5) {
+        add('river: bets after hero checked', pb);
+        add('river: hand strength of bets after hero checked', hp, pb);
+        add('river: hand strength of checks after hero checked', hp, 1 - pb);
+        add('river: share of bets after hero checked under 0.4', hp < 0.4 ? 1 : 0, pb);
+      }
     } else {
       const checked = (v.seq[key] || []).includes('check');
       if (checked && v.raises === 1) add(`${key}: check-raises after checking`, m(bet));

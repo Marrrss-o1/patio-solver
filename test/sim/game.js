@@ -261,6 +261,8 @@ function playHand(cfg) {
       rk: cfg.seed, nAct: g.nAct,
       // Hero's seat and whether hero is still in the hand (bots with a habit for hero's pots, bots.js hp*).
       heroSeat: hero, heroIn: !g.folded[hero],
+      // Whether hero has checked on this street (bots with a habit for answering hero's check, exploiters.js riverxb).
+      heroChecked: (g.seq[hero][STREET_KEY[g.board.length]] || []).includes('check'),
       // The last bettor or raiser of the street before (-1: none) and whether they have acted on this street yet.
       prevAgg: g.prevAgg, prevAggActed: g.prevAgg >= 0 && g.seq[g.prevAgg][STREET_KEY[g.board.length]].length > 0,
       hist: g.hist[i],

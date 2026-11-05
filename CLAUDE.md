@@ -105,6 +105,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 
 ## Known gaps / ideas
 
+- Merge bar (Marwin, 5 Nov): a change goes in switched on when it wins in the simulator (v12r regulars) with npm test
+  passing. A fix the simulator can't judge (the bots don't have the habit it reads) is decided on the logs and how the
+  group plays: on if the log evidence is clear and the simulator shows no real loss (checkBetTilt, mwBetFold, bigRaiseRange).
 - Seat order (verified on Marwin's live 3-5 handed tables): seats run in ascending number, except `s3_v2`, which
   sits between s9 and s10 (seatKey 9.5). `seatOrder()` pins SB, BB and UTG from `game:dealer_updated`
   (`h.sbPos/bbPos/utgPos`); 111 of 111 logged hands match the server's action order.
@@ -889,6 +892,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   / 0.3 / 0.5: 20.4 / 23.1 / 23.5 / 21.2 nats over a random guess. River bets fit best untilted (n 220). Log replay:
   2 of the 9 river decisions facing a raise change, both calls -> folds that the shows back (31 Oct #25 QT vs mkorn777's
   AA, #126 AK vs MaPokerrk's KT full house). Too rare for the simulator to judge.
+- Bets into hero's river check read stronger (v1.8.28, `CHECK_BET_TILT` {tilt 0.2, street 5}; `input.checkBetTilt:
+  false` turns it off, a number sets the tilt): facing a river bet after hero checked the river, the bettor's range gets
+  0.2 of strength tilt in buildRange, like `RIVER_RAISE_TILT` (the larger of the three applies; none stacks on the
+  hero-pot tilt). Logs (reads from earlier hands): hero's heads-up river check-calls won 0 of 11 at a predicted equity
+  of 0.36 (about a 0.005 chance), costing 103bb where the solver valued them at +37bb; his river calls of bets he had
+  not checked into won 0.59 against 0.39 predicted (n 11). Shown river bets after hero's check sat at 0.63 ± 0.05 of
+  the read's range (n 28; every day above 0.5), after a friend's check 0.51 (n 33), leads 0.48-0.55; best tilt 0.2
+  (+2.9 nats). When hero checks and the friend checks back, hero's share is 0.58 against 0.40 predicted (n 25): after
+  his check friends bet good hands and check back weak ones. Turn bets after hero's check are on target (0.44, n 19).
+  It changes 4 of 40 logged decisions facing such a bet, all losing calls becoming folds (+41bb; in-sample). Simulator,
+  v12r regulars, live budget, 1,000 deals each, on vs off: plain regulars heads-up +4.7 ± 20.2, 4-handed +5.4 ± 15.8,
+  5-handed -5.1 ± 17.5 (pooled +1.7 ± 10.1; about one hand in 200 changes); against `xp:riverxb` (after hero's river
+  check, hands at a made-hand percentile 0.6+ bet 85%, 0.4-0.6 check, under 0.4 bet 5%, like the friends' shown bets
+  and check-backs) heads-up +11.2 ± 12.7, 3-handed +15.1 ± 17.7, 4-handed -0.3 ± 13.4 (pooled +7.7 ± 8.2); against
+  `xp:riverxbluff` (air bets 35%, a third of the bets) heads-up -12.7 ± 19.0. On by the merge bar (logs clear, no real
+  loss in the simulator). Files: /mnt/project-files/patio-solver/leakhunt-2026-11-06/ (RESULTS.md round 3,
+  scripts/xb/), sims/2026-11-06-cbt/.
 - Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
   on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
   (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
@@ -930,8 +950,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   don't use check narrowing). Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: 4-handed +10.1 ± 26.3,
   heads-up +13.6 ± 18.6 (pooled +12.4 ± 15.2). Neutral, so off. Files: /mnt/project-files/patio-solver/
   leakhunt-2026-11-06/ (RESULTS.md, scripts/init.js, init2.js, showinit.js), sims/2026-11-06-leakhunt/.
-- Hero's multiway bets (`MW_BET_FOLD` {odds 2, from 0.3, to 0.45}; off: `input.mwBetFold: true` turns it on, a number
-  sets the odds): the first players to answer hero's bet into 2+ opponents (heads-up reads, before anyone stays) fold
+- Hero's multiway bets (v1.8.28, `MW_BET_FOLD` {odds 2, from 0.3, to 0.45}; `input.mwBetFold: false` turns it off, a
+  number sets the odds): the first players to answer hero's bet into 2+ opponents (heads-up reads, before anyone stays) fold
   with odds x2 on the current street, ramped in from 30% to 45% of the pot (`statsHU.betOdds`, read in foldAtSize; Monte
   Carlo and the multiway turn and river solvers). All 113 of hero's postflop bets into 2+ friends in the logs to 5 Nov,
   re-solved at the live budget (251 answers): at 40%+ of the pot the first answers folded 70% where the solver said 52%
@@ -939,8 +959,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   each other's multiway bets of that size as read (64% vs 64%, n 323), hero's not (73% vs 63%). Fold log-odds also rise
   0.71 ± 0.14 per ln(bet in bb) multiway against everyone (both halves of the logs agree), which isn't built in.
   Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: 4-handed +48.2 ± 28.6 and -18.2 ± 28.7, 5-handed
-  +6.4 ± 26.7, 3-handed -1.4 ± 31.3 (pooled +9.1 ± 14.3); phone 4-handed +9.7 ± 28.1. Neutral, so off. Files: as above
-  (scripts/mwsolve.js, mwfit.js, absz*.js).
+  +6.4 ± 26.7, 3-handed -1.4 ± 31.3 (pooled +9.1 ± 14.3); phone 4-handed +9.7 ± 28.1. Neutral; the v12r bots fold to
+  hero's big multiway bets only a third as much more than read as the friends do (everyone folds at 40%+ of the pot:
+  bots 31% vs 25% predicted, n 214; friends 41% vs 23%, n 51), so the simulator can't show most of it. On since v1.8.28
+  on the logs (merge bar above): everyone folding to hero's 40%+ multiway bets with nothing to call, predicted 0.28 ->
+  0.46, actual 0.47 (n 34; log-likelihood -27.6 -> -24.1); under 45% of the pot 0.12 -> 0.15, actual 0.13 (n 60).
+  Re-solving the 355 logged multiway decisions after the flop, 90 change: 37 checks become bets (mostly cheap stabs
+  with 10-30% equity), 39 bets change size (value bets mostly smaller), 11 bets become checks (some strong hands check
+  to keep callers: AA on 2c Ts 9h 3-way, T7 with the straight on 6-8-9). Tests: the multiway product test runs with
+  it off; top set 3-way on Qh 8d 3c now checks (the 1.5x-pot bet is everyone-folded 56% instead of 35%, about 77% of
+  checking's EV); the four real stabs alone are about even (-1.0 to +0.16 chips; were -1.8), the flop king-high
+  half-pot stab +0.6 over checking with the lookahead. Files: as above (scripts/mwsolve.js, mwfit.js, absz*.js).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
