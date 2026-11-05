@@ -716,7 +716,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   change (bluffs into Q8, JJ/88, Q3, A8 become checks; #369 and #475's bluffs get smaller; value bets grow, which
   lose more against QQ and AT and win more against QT), 24 of 155 turn decisions (#66's raise -> call, #189 and #479's
   semi-bluffs -> check), 39 of 243 flop decisions (mostly weak multiway stabs, equity .07-.2, become checks, most of
-  which were called or raised). SIMRESULTS
+  which were called or raised). Simulator, live budget, all three on vs off, 1,000 deals each, v9 bots (v8 plus
+  `heroRiverAbs` 0.55: facing hero's river bet a bot continues iff its made-hand percentile is 0.55+, as the friends
+  do): 4-handed +48.8 ± 22.5, 5-handed +6.8 ± 23.0, 6-handed +36.8 ± 21.7 (pooled +31 ± 13); heads-up river air bets
+  84 -> 44 (5-handed) and their TD -4.8 ± 4.3 -> +9.8 ± 3.9 chips, turn air bets 89 -> 55. On v8 bots, which fold far more than the friends to river bluffs and big
+  bets (audit, 4 Nov), 4-handed -23.8 ± 20.7 (strong hands -17.5 ± 11.6: the bigger value bets get folded). Files:
+  /mnt/project-files/patio-solver/sims/2026-11-05-rivermade/, analysis/2026-11-05-river-bluffs.md.
 - River raises read stronger (v1.8.19, `RIVER_RAISE_TILT` {tilt 0.3, street 5}; `input.riverRaiseTilt: false` turns it
   off, a number sets the tilt): a river raise of any size (raise, check-raise, re-raise lines) adds 0.3 of strength tilt
   to the raiser's range in buildRange, like `OVERBET_TILT` (the larger of the two applies; neither stacks on the
