@@ -1861,7 +1861,14 @@
       // Shares of the range they already continued with: limpers and raisers are part-committed.
       const fadeC = fade + (1 - fade) * inW;
       const floor = Math.max(big * fadeC * (raised ? clamp(2 * callBig, 0.35, 0.75) : clamp(1.5 * callBig, 0.25, 0.6)), 0.75 * inW);
-      const cont0 = clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), rr0 = 0.2 * base;
+      let cont0 = clamp(Math.max(base * (mdf / 0.5), floor), 0.03, 0.97), rr0 = 0.2 * base;
+      // Limpers facing the first raise by its size (input.pfLimpCurve, PF_LIMP_CURVE; see there): the fitted curve
+      // replaces base x mdf / 0.5, which had them folding 33-54% to raises of 2.5-5bb where they fold 11-34%.
+      if (!raised && ctx.pfLimpCurve && kind.openTo > 0) {
+        const f = limpCurveFold(kind.openTo / Math.max(1e-9, ctx.bigBlind), s.limpFold, ctx.pfLimpCurve);
+        cont0 = clamp(Math.max((1 - f) * fade, floor), 0.03, 0.97);
+        rr0 = (ctx.pfLimpCurve.rr != null ? ctx.pfLimpCurve.rr : PF_LIMP_CURVE.rr) * cont0;
+      }
       if (commitW > 0) return withRead({ cont: Math.max(cont0, cont0 + commitW * (0.97 - cont0)), nut: 0.965, reraise: rr0 + commitW * (0.11 - rr0) });
       return withRead({ cont: cont0, nut: 0.965, reraise: rr0 });
     }
@@ -2061,6 +2068,23 @@
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
+  // Limpers facing the first raise (input.pfLimpCurve: true turns it on, an object replaces fields; off by default):
+  // logit(fold) = a + b1 x min(ln(R / ref), ln(hinge / ref)) + b2 x max(0, ln(R / hinge)) + s x (logit(limpFold) -
+  // logit(s0)), R = the raise-to in bb, limpFold = the player's read (size-mixed). Above 30bb the cliff (bigFade)
+  // scales the continue share, and the big-raise floor (callBig) still holds from 8bb. They re-raise rr x their
+  // continue share. Fitted on every first raise a limper faced in the logs (31 Oct - 5 Nov, 335 up to 30bb, reads from
+  // earlier hands): folds 11% at 3.5bb or less (n 90), 34% at 3.5-5bb (164), 52% at 5-8bb (60), re-raised 4.5% of
+  // continues. The old rule (1 - limpFold) x mdf / 0.5 read 46-49% at every size; log-likelihood -222.5 (worse than a
+  // constant, -214.1), the curve -180.1; held out on 5 Nov (fit before) -61.1 against -72.4.
+  const PF_LIMP_CURVE = { a: -0.7, b1: 3.0, ref: 4, hinge: 6, b2: 0.3, s: 0.89, s0: 0.52, rr: 0.045 };
+  function limpCurveFold(R, limpFold, opt) {
+    const C = opt && typeof opt === 'object' ? Object.assign({}, PF_LIMP_CURVE, opt) : PF_LIMP_CURVE;
+    const lg = (p) => Math.log(p / (1 - p));
+    const l = Math.log(Math.max(0.5, R) / C.ref), h = Math.log(C.hinge / C.ref);
+    const lf = limpFold != null ? clamp(limpFold, 0.05, 0.95) : C.s0;
+    const z = C.a + C.b1 * Math.min(l, h) + C.b2 * Math.max(0, l - h) + C.s * (lg(lf) - lg(C.s0));
+    return 1 / (1 + Math.exp(-z));
+  }
   // River bettors facing hero's raise fold at least this share of their betting range (riverSolve; off: input.riverRaiseFold
   // true turns it on, a number sets the share). The read's rule folds only the bluffs, 0.9 x (1 - value share), 25-35%.
   // In the logs (31 Oct - 4 Nov) river bettors who got raised folded 14 of 28 (raised by hero 4 of 7, by a friend 10 of
@@ -5602,7 +5626,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: input.pfLimpCurve === true ? PF_LIMP_CURVE : input.pfLimpCurve && typeof input.pfLimpCurve === 'object' ? input.pfLimpCurve : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
