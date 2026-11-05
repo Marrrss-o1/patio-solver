@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.19
+// @version      1.8.20
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1821,12 +1821,14 @@ function ENGINE() {
       // folding 30-45% and re-raising about 12%. Bigger re-raises keep the rule below: letting the read fade with the size
       // all the way down (to 22% at 50bb+) had the preflop solver open 95% of hands and 4-bet bluff to 35bb+ against bots
       // that never adapt.
-      // input.pfRaisedReadBB (v1.8.17; PF_RAISED_READ_BB, 30 = the step at 30bb) above 30 fades the read into the rule
-      // below from 30bb, gone at that raise-to. The step moves 4-bet EVs by up to 8bb a chip either side of it (multiway
-      // AKo on 1 Nov: a re-raise to 29.5bb +55.6, to 30.5bb +38.7 chips, as the raiser went from continuing 93% /
-      // re-raising 36% to 72% / 11%). Friends continued against all 5 re-raises to 30-45bb (2 re-raised) and folded to 7
-      // of 9 above 45bb. With 45, 22 of 1,017 logged decisions change, all preflop and nearly all near-ties among open sizes
-      // (through the solver's 4-bets deeper in the tree); it waits for the simulator.
+      // From 30bb the read fades into the rule below, gone at input.pfRaisedReadBB (PF_RAISED_READ_BB 45 since v1.8.20;
+      // 30 = the old step at 30bb, v1.8.17 added the option). The step moved 4-bet EVs by up to 8bb a chip either side of
+      // it (multiway AKo on 1 Nov: a re-raise to 29.5bb +55.6, to 30.5bb +38.7 chips, as the raiser went from continuing
+      // 93% / re-raising 36% to 72% / 11%). Friends continued against all 5 re-raises to 30-45bb (2 re-raised) and folded
+      // to 7 of 9 above 45bb. With 45, 22 of 1,017 logged decisions change, all preflop and nearly all near-ties among open
+      // sizes (through the solver's 4-bets deeper in the tree). Simulator, live, v8 bots, 2,000 deals, 45 vs 30: 4-handed
+      // +19.9 ± 15.5, 5-handed +0.8 ± 12.2 (pooled +8.1 ± 9.6); hands that first differ where hero faces a 3-bet +5.4 ± 2.2
+      // (A's 4-bets to 50-80bb become 4-bets to 25-30bb or calls, mostly premium and strong hands).
       let readR = null, wRead = 0;
       const raiseToBB = (kind.amount + (ctx.heroBet || 0)) / ctx.bigBlind;
       const readHi = ctx.raisedReadBB != null ? Math.max(30, +ctx.raisedReadBB) : PF_RAISED_READ_BB;
@@ -2055,7 +2057,7 @@ function ENGINE() {
   // would score their shoves as tight as the old read.
   const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
   // Raise-to (bb) where a raiser's own read of re-raises has faded into continueRule's old rule (see continueRule).
-  const PF_RAISED_READ_BB = 30;
+  const PF_RAISED_READ_BB = 45;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
   // River bettors facing hero's raise fold at least this share of their betting range (riverSolve; off: input.riverRaiseFold
@@ -5548,7 +5550,10 @@ function ENGINE() {
 
     // Preflop all-in is on the menu up to input.pfShoveBB (25bb) or 3 pots (v1.8.17 option, for the simulator). The step
     // is big where it bites: 2 Nov, TT in late position with 25.5bb behind a limper, best raise +9.5 chips; with a chip less
-    // the shove is offered at +23.0. 15 of 499 logged preflop decisions had 25-40bb and no all-in on the menu.
+    // the shove is offered at +23.0. 15 of 499 logged preflop decisions had 25-40bb and no all-in on the menu. But 40 lost
+    // in the simulator (live, v8 bots, 4-handed, 2,000 deals; whole table at 30bb -41.8 ± 6.0, at 35bb -47.5 ± 7.0): hero
+    // shoved 18-24% of hands instead of 5-6%, and those shoves came back 2.5bb below their EV while the 4-6bb raises they
+    // replaced came back 2.5bb above theirs (the preflop TD gap of the 4 Nov audit). So the shove EV past 25bb is too high.
     const pfShoveBB = input.pfShoveBB != null ? +input.pfShoveBB : 25;
     const shoveMakesSense = isFinite(stack) && (street === 0
       ? stack <= pfShoveBB * bigBlind || stack <= 3 * (pot + toCall)
