@@ -242,6 +242,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - `ctx.reraised` (opponent 3-bet or more preflop): fold rates x0.65 in odds (`reraisedFold`).
 - `stats.vsOpen` { small <=2.5bb, medium <=3.5bb, large } x { cont, threeBet, n }: counted by the tracker only for
   players who had not acted yet; prior fitted on 78 responses (cont .75/.72/.49, 3-bet .30/.25/.17).
+  Since v1.8.20 the tracker counts answers to opens of 8bb or more (shoves included) in a fourth tally bucket, `huge`;
+  `large` holds 3.5-8bb opens only. By default the read adds them back together (`stats.vsOpen.largeAll`,
+  bit-identical to v1.8.19). `input.vsOpenSplit: true` (off: simulator neutral, below) reads 8bb+ with `callBig` and
+  blends the large rate into callBig from 5bb to 8bb; `predictAction` takes `vsOpenSplit` in d, reads-bench
+  `--vs-open-split`. Before, one bucket covered 4bb opens and shoves, which friends answer very differently (all logs
+  to 5 Nov, first answers: 3.5-5bb fold 49%, n 205; 5-8bb 54%, n 67; 8-15bb 65%, n 17; 15-30bb 71%, n 14; 30bb+ 89%, n
+  28). In the 5 Nov heads-up session the two averaged out: 4bb opens read as folded 69% (actual 51%), shoves 68%
+  (actual 88%). Reads benchmark, every log: vs-open log-loss 0.932 -> 0.923 (each seen-hands bucket better), nothing
+  else moves. Log replay (1-5 Nov): 21 of 942 decisions change, all preflop near-ties (short-stack shoves with strong
+  aces become raises, open sizes move a step). Older reads keep their past shoves in `large`. Simulator, live budget,
+  v10 bots, 1,000 deals each, on vs off: 4-handed 100bb +13.8 ± 16.7, 150bb +1.4 ± 22.1, 30bb -4.1 ± 6.2, 20bb +0.6 ±
+  3.0, heads-up 20bb +4.1 ± 4.9 (pooled +1.0 ± 2.3: neutral). At 20bb it shoves less first in (heads-up small blind
+  27% -> 21%, raises 49% -> 55%); at 30bb it mostly moves raise sizes (button isolation over a limper 3bb -> 6.5bb,
+  -5.0 ± 2.4 bb a hand, n 22: the bots re-raise hero's iso-raises 19-36% at every size, while friends re-raise 8% of
+  3.5-5bb opens, 7% at 5-8bb and 0 of 17 at 8-15bb). Files: /mnt/project-files/patio-solver/sims/2026-11-05-opensplit/
+  (SHORT-STACKS.md). Off until the logs show more friends facing big opens (the simulator can't judge it: its bots
+  re-raise big opens as often as small ones).
 - Range noise (`applyAction`): each line keeps a share `rangeNoise` (home prior 0.45, MAP per player from showdown
   likelihoods `nl` over `NOISES`) of hands that take it whatever their strength; on bets it scales with bluff share
   and bet size (`rangeNoiseAgg`). Without it shown hands scored worse than a random guess.

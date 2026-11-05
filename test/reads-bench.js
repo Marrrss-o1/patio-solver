@@ -1,7 +1,7 @@
 // Read-accuracy benchmark. Replays exported hand logs in time order and scores how well
 // the reads predict each opponent's actions and shown hands, using only earlier hands.
 //
-//   node test/reads-bench.js [--engine=path/to/engine.js] [--by=player] [--from=ISO time] log.json [more.json ...]
+//   node test/reads-bench.js [--engine=path/to/engine.js] [--by=player] [--from=ISO time] [--vs-open-split] log.json [more.json ...]
 // --from scores only hands from that time on (earlier hands still build the reads), e.g. to score a
 // new log the priors were not fitted on.
 //
@@ -292,7 +292,9 @@ function makeModel(enginePath) {
     const raise = Math.min(bs.raiseFreq, 0.98 - fold);
     return { fold, call: Math.max(0.01, 1 - fold - raise), raise };
   }
-  const predict = E.predictAction ? (st, d) => E.predictAction(st, d) : fallbackPredict;
+  // --vs-open-split: read answers to 8bb+ opens and shoves apart from 3.5-8bb opens (input.vsOpenSplit, off by default).
+  const split = !!opt['vs-open-split'];
+  const predict = E.predictAction ? (st, d) => E.predictAction(st, split && d.kind === 'vo' ? Object.assign({ vsOpenSplit: true }, d) : d) : fallbackPredict;
   return { E, name, predict };
 }
 
