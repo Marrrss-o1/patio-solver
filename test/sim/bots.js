@@ -318,6 +318,7 @@ const HOME_DEFAULT = {
   // fold a little more in big pots (25-110% pot bets: 44% in pots under 10bb, 50% at 20bb+); range-relative bots don't.
   potCall: 0,
   heroRiverAbs: 0, heroRiverW: 0.02, heroRiverHU: 0,   // v9: answers to hero's river bets by absolute strength (0: off)
+  jam: 0, jamK: 1.52, jamTop: 0.7, jamMax: 0.3,        // v10: wide all-in re-raises over one raise, by stack depth (0: off)
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
@@ -377,7 +378,13 @@ function homeBot(params) {
         else if (!big && v.put > (v.pos === 'blinds' ? bb : 0) && v.seq.pre.length) cont = Math.max(cont, 0.85 * P.vpip * pm);
         cont = clamp(cont, 0.02, 0.97);
         const tb = clamp(P.threeBet * Math.pow(P.rrDecay, v.raises - 1), 0.003, cont);
-        const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tb - pct) / (w * 0.7)));
+        // v10 jams (jam > 0): facing one raise, all-in with a share J of the spots, from the hands between their re-raise
+        // range and jamTop x VPIP; the usual re-raises shrink by J, so they re-raise about as often in all (logs: 8 of 649
+        // first raises faced were jammed, mostly from short stacks, shown hands at class rank 0.24-0.64, while the other
+        // re-raises show at a median 0.06; J = jam x (40bb / their chips)^jamK, at most jamMax, fitted by allin-test.js).
+        const J = P.jam > 0 && v.raises === 1 && allinTo > v.cur ? Math.min(P.jamMax, P.jam * Math.pow(40 / Math.max(5, (v.stack + v.put) / bb), P.jamK)) : 0;
+        const tbN = J > 0 ? Math.max(0.003, tb - J) : tb;
+        const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tbN - pct) / (w * 0.7)));
         const out = [];
         if (v.raises < 8) {
           const minTo = v.cur + v.lastRaise;
@@ -392,6 +399,11 @@ function homeBot(params) {
         }
         out.push({ t: 'call', p: pCont - (v.raises < 8 ? pRR : 0) });
         out.push({ t: 'fold', p: 1 - pCont });
+        if (J > 0) {
+          const top = clamp(P.jamTop * P.vpip * pm, tb + 0.05, 0.97);
+          const pj = Math.min(1, J / (top - tb) * sig((top - pct) / w) * sig((pct - tb) / w));
+          if (pj > 0) { for (const o of out) o.p *= 1 - pj; out.push({ t: 'raise', to: allinTo, p: pj }); }
+        }
         return out;
       }
       const si = v.street === 3 ? 0 : v.street === 4 ? 1 : 2;
