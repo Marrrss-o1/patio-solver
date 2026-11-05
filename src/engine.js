@@ -1454,8 +1454,8 @@
   // first), 'none' (nobody bet the street before, or that player folded). The flop's 'aggr' is the c-bet, which has its
   // own read. Fitted on every opponent's first action on a street with nobody's bet yet (all logs to 5 Nov, 2,549 spots,
   // reads from earlier hands only, links as on the panel), against the read's bet rate: turn after betting the flop the
-  // friends bet 58% where the read said 36% (n 154, odds x2.8), into the flop's bettor 11% vs 27% (n 187, x0.38); river
-  // x1.9 (n 142) and x0.40 (n 113); each half of the hands alone gives the same direction everywhere (turn aggr x3.6 /
+  // friends bet 60% where the read said 37% (n 154, odds x2.8), into the flop's bettor 13% vs 27% (n 187, x0.38); river
+  // 67% vs 53% (n 142, x1.9) and 24% vs 43% (n 113, x0.40); each half of the hands alone gives the same direction everywhere (turn aggr x3.6 /
   // x2.0, lead x0.49 / x0.30, river aggr x1.6 / x2.3, lead x0.45 / x0.35). Check-or-bet log-loss on the second half with
   // the first half's fit 0.549 -> 0.536, the other way round 0.572 -> 0.561. The ranges use it for bets and checks
   // (applyAction's betFreq); a bet after calling the street before takes these odds instead of afterCall's.
