@@ -1210,7 +1210,7 @@
   }
 
   const WAR_MIX = 2.2;
-  function preflopRange(stats, action, sizePre, bigWidth, shoveWidth) {
+  function preflopRange(stats, action, sizePre, bigWidth, shoveWidth, deep) {
     const cw = new Float64Array(169);
     let raiseWidth = 1; // re-raising range width, for the floor below
     if (action === 'raise') {
@@ -1243,6 +1243,13 @@
         const wide = topClassWeights(shoveWidth);
         for (let i = 0; i < 169; i++) cw[i] = Math.max(cw[i], wide[i]);
         raiseWidth = shoveWidth;
+      }
+      // Deep all-in re-raises (DEEP_SHOVE, off by default): blended by deep.g toward the part of the range inside the
+      // top deep.width of hands.
+      if (deep && deep.g > 0) {
+        const cap = topClassWeights(deep.width);
+        for (let i = 0; i < 169; i++) cw[i] = (1 - deep.g) * cw[i] + deep.g * Math.min(cw[i], cap[i]);
+        raiseWidth = (1 - deep.g) * raiseWidth + deep.g * Math.min(raiseWidth, deep.width);
       }
     } else if (action === 'call') {
       const v = topClassWeights(stats.vpip), p = topClassWeights(stats.pfr);
@@ -1650,11 +1657,20 @@
   function reraiseShove(pre, sizes, sr) {
     return !!sr && /^\dbet$/.test(pre || '') && !!sizes && sizes.preTo > 0 && sizes.preBehind != null && sizes.preBehind <= sr.behind * sizes.preTo;
   }
+  // How far a deep all-in re-raise has moved toward DEEP_SHOVE's tight read: 0 up to ds.from big blinds, 1 from ds.to.
+  // The depth is the raise-to, capped by the most chips any other player still in had at the start of the hand
+  // (sizes.preCover, from the tracker since v1.8.23): a big stack shoving into short ones risks only theirs.
+  function deepShoveBlend(sizes, ds) {
+    const depth = sizes.preCover != null ? Math.min(sizes.preTo, sizes.preCover) : sizes.preTo;
+    const g = clamp((depth - ds.from) / Math.max(1e-9, ds.to - ds.from), 0, 1);
+    return g > 0 ? { g, width: ds.width } : null;
+  }
 
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
     const pre = position && stats.byPos && stats.byPos[position] ? Object.assign({}, stats, stats.byPos[position]) : stats;
     const shove = reraiseShove(actions.pre, sizes, stats.shoveRange) ? Math.max(pre.vpip * stats.shoveRange.vpip, stats.shoveRange.min) : null;
-    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre, bigRaiseLine(sizes, stats.bigRaise) ? stats.bigRaise.width : null, shove);
+    const deep = stats.deepShove && reraiseShove(actions.pre, sizes, stats.shoveRange || SHOVE_RANGE) ? deepShoveBlend(sizes, stats.deepShove) : null;
+    let W = preflopRange(pre, actions.pre || 'pending', sizes && sizes.pre, bigRaiseLine(sizes, stats.bigRaise) ? stats.bigRaise.width : null, shove, deep);
     const dead = new Uint8Array(52);
     deadCards.forEach((c) => { dead[c] = 1; });
     for (let k = 0; k < NUM_COMBOS; k++) if (dead[COMBO_HI[k]] || dead[COMBO_LO[k]]) W[k] = 0;
@@ -2129,6 +2145,20 @@
   // the 7 logged hero decisions facing an all-in re-raise. The friend bots re-raise by hand strength, so the simulator
   // would score their shoves as tight as the old read.
   const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
+  // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; off by default: input.deepShove true turns it on, an object
+  // replaces the numbers). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
+  // `from` big blinds deep to the part of it inside the top `width` of hands at `to` (depth: the raise-to, capped by
+  // the biggest stack still in that could call it). SHOVE_RANGE was fitted on shoves of 17.5-50bb. On 5 Nov evening
+  // MarkMaodjaoj (MarkMaxMoney's account) shoved 130-692bb deep; his shown deep shoves were AKs, JJ and AJs (and KQo
+  // opening 81bb), all top-11% hands, while the read gave A2o 0.52, Q7o 0.51, 77 0.65 and A9o 0.60 against them, each
+  // hand's equity against a random one (the advice called his 513bb 4-bet shove with 77; he had JJ). All logs to 5 Nov,
+  // shown preflop all-ins by depth: under 40bb mean place in a preflop ranking top 32% (6 shows), 40-100bb 21% (7),
+  // 100bb+ 8% (4, three of them Mark's). The simulator can't judge it (its bots shove by hand strength).
+  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08 };
+  // Near-tie all-ins (v1.8.23, input.allinTie; off by default): an all-in pick gives way to the best option that isn't
+  // all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb over Mark's limp-
+  // re-raise at +2.26 chips, the call was +2.08 (bb 2 chips).
+  const ALLIN_TIE_BB = 1;
   // Raise-to (bb) where a raiser's own read of re-raises has faded into continueRule's old rule (see continueRule).
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
@@ -5545,6 +5575,7 @@
     const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
+    const dsh = input.deepShove === true ? Object.assign({}, DEEP_SHOVE) : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : null;
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
     // Initiative read (INITIATIVE), off until the simulator has judged it: input.initiative true turns it on, an object
     // replaces the table. Roles come from input.history (the tracker's action log for the hand).
@@ -5599,6 +5630,8 @@
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
       if (shr) { stats.shoveRange = shr; if (statsHU) statsHU.shoveRange = shr; }
+      // Deep all-in re-raises read tight (DEEP_SHOVE), only with input.deepShove.
+      if (dsh) { stats.deepShove = dsh; if (statsHU) statsHU.deepShove = dsh; }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
@@ -6796,6 +6829,15 @@
       return finish(ranked, best, runnerUp, margin, close, mix);
     }
 
+    // An option that ends hero's betting: hero's whole stack goes in, or every opponent left is all-in once they match it
+    // (a call of an all-in, or a bet that covers them all).
+    function isAllInOption(o) {
+      if (!o || o.kind === 'fold' || o.kind === 'check') return false;
+      if (o.kind === 'allin' || o.amount >= stack - 1e-9) return true;
+      const hb = +input.heroBet || 0;
+      return input.opponents.length > 0 && input.opponents.every((x) => x.stack != null && isFinite(+x.stack) && hb + o.amount - (+x.bet || 0) >= +x.stack - 1e-9);
+    }
+
     let raiseGated = false;
     function mwRaiseGate() {
       if (input.mwRaiseEq == null || street < 3 || toCall <= 0 || opps.length < 2) return false;
@@ -6840,6 +6882,18 @@
     function finish(ranked, best, runnerUp, margin, close, mix) {
       const bpOut = blueprintBlend(ranked, best);
       if (bpOut && bpOut.used) ({ ranked, best, runnerUp, margin, close, mix } = bpOut);
+      // Near-tie all-ins (input.allinTie, off by default; true = ALLIN_TIE_BB, a number = that many big blinds): when the
+      // pick is all-in and an option that isn't comes within the margin, play that one.
+      let allinTie = null;
+      const tieBB = input.allinTie === true ? ALLIN_TIE_BB : typeof input.allinTie === 'number' ? input.allinTie : 0;
+      if (tieBB > 0 && best && isAllInOption(best)) {
+        const safe = ranked.filter((o) => o && o !== best && o.ev != null && isFinite(o.ev) && !isAllInOption(o) && o.ev >= best.ev - tieBB * bigBlind)
+          .sort((a, b) => b.ev - a.ev)[0];
+        if (safe) {
+          allinTie = { kind: best.kind, amount: best.amount, label: best.label, ev: best.ev, by: best.ev - safe.ev };
+          runnerUp = best; best = safe; margin = best.ev - runnerUp.ev; close = true; mix = null;
+        }
+      }
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
       const base = scenarios.find((s) => s.kind !== 'fold');
       const equity = base ? {
@@ -6858,7 +6912,7 @@
 
       return {
         street, streetName, pot, potWin, toCall, stack, bigBlind, realize, inPosition, lookahead,
-        scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight,
+        scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight, allinTie,
         credibility, blueprint: bpOut ? bpOut.info : null,
         heroPot: hpt ? { tilt: hpt.tilt, n: hpLearned ? hpLearned.n : 0, ramp: Math.round(heroPotRamp * 100) / 100 } : null,
         solver: solved ? { kind: solved.kind || 'river', iterations: solved.iterations, runs: solved.runs || 1, exploitWeight: opps[0].stats.exploitWeight, field: solved.field || solved.multiway || 0 } : null,
