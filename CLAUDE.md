@@ -282,6 +282,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
 - `betcall` street action (bet, then called a raise): buildRange applies the call after the bet; counts as aggressor.
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
+  The tilt also lands on players yet to act preflop, whose hands are dealt, not chosen, so the big blind's range leans
+  toward weak hands (top x0.55, worst x1.8) and the Monte Carlo has them continue less than the read (5 Nov: duke read
+  continuing 37% against a 6bb open, Monte Carlo 24%). `input.pendingTilt: false` (off) drops it for them. Predicted
+  folds at hero's preflop raises, all logs to 5 Nov (n 206): 41% -> 35%, actual 32% (log-likelihood -109.1 -> -102.8);
+  heads-up opens 70% -> 58%, actual 54% (n 68); raises over a lone limper unchanged (55%, actual 37%: limpers acted).
+  56 of 643 logged preflop decisions change, mostly tighter (23 raises become folds, 18 raises get smaller). Simulator,
+  live budget, v10 bots, 4-handed, 1,000 deals, on vs off: -18.8 ± 29.0 (button -24.0 ± 14.3, good hands -19.1 ± 16.8),
+  neutral, so off. Opens beat their EV by 4.7bb in the 4 Nov audit (pfFlopEdge), so the tilt may partly stand in for
+  that edge. Files: /mnt/project-files/patio-solver/sims/2026-11-05-untilt/, analysis/2026-11-05-session2.md.
 - Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
   (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
   showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on
