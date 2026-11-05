@@ -191,7 +191,7 @@ function playHand(cfg) {
     seq: Array.from({ length: n }, () => ({ pre: [], flop: [], turn: [], river: [] })), nAct: 0,
     // Range-aware bots (seat.rangeAware): each of their earlier decisions this hand, to rebuild their own range.
     hist: Array.from({ length: n }, () => []),
-    vseed: (cfg.seed ^ 0x5bd1e995) >>> 0, lastAgg: -1, potAtStreet: 0,
+    vseed: (cfg.seed ^ 0x5bd1e995) >>> 0, lastAgg: -1, prevAgg: -1, potAtStreet: 0,
   };
   const hero = cfg.hero == null ? 0 : cfg.hero;
   const emit = cfg.emit || null;
@@ -261,12 +261,15 @@ function playHand(cfg) {
       rk: cfg.seed, nAct: g.nAct,
       // Hero's seat and whether hero is still in the hand (bots with a habit for hero's pots, bots.js hp*).
       heroSeat: hero, heroIn: !g.folded[hero],
+      // The last bettor or raiser of the street before (-1: none) and whether they have acted on this street yet.
+      prevAgg: g.prevAgg, prevAggActed: g.prevAgg >= 0 && g.seq[g.prevAgg][STREET_KEY[g.board.length]].length > 0,
       hist: g.hist[i],
     };
   }
 
   for (const [name, nb] of STREET_NAMES) {
     if (nb > 0) {
+      g.prevAgg = g.lastAgg;
       g.bet.fill(0); g.cur = 0; g.raises = 0; g.lastRaise = bb; g.lastAgg = -1; g.callsNow = 0; g.foldsNow = 0;
       const prevNb = g.board.length;
       const heroLive = vf && !g.folded[hero] && live().length > 1;
