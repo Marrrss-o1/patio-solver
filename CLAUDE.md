@@ -752,8 +752,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   2.1 / 3.2 / 4.8bb a shove faced at 15 / 25 / 40 / 60 / 100bb. It changes none of the 7 logged hero decisions facing an
   all-in re-raise (equity up to +0.07: ATo heads-up 0.54 -> 0.60, A2o 3-way 0.22 -> 0.29) and no other logged decision.
   The bots re-raise by hand strength, so the simulator would score it against shoves as tight as the old read.
-- Deep all-in re-raises read tight (v1.8.23, `DEEP_SHOVE` {from 40, to 100, width 0.08}; off: `input.deepShove: true`
-  turns it on, an object replaces the numbers): an all-in re-raise (as for SHOVE_RANGE) moves linearly from the usual
+- Deep all-in re-raises read tight (v1.8.23, `DEEP_SHOVE` {from 40, to 100, width 0.08, prior 0.3}; on since v1.8.27,
+  per player: `input.deepShove: false` turns it off, an object replaces the numbers): an all-in re-raise (as for SHOVE_RANGE) moves linearly from the usual
   read at 40bb deep to the part of it inside the top 8% of hands at 100bb. Depth is the raise-to capped by the biggest
   stack still in at the start of the hand (`sizes.preCover`, from the tracker since v1.8.23), so a big stack shoving into
   short ones counts as shallow. On 5 Nov evening MarkMaodjaoj (MarkMaxMoney's account) re-raised all-in 130-692bb deep
@@ -765,7 +765,37 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   On the logs (2,032 hero decisions, 12 facing an all-in re-raise) it changes three: A2o (#868 of the evening) and Q7o
   call -> fold, A9o vs AJs call -> fold (0.60 -> 0.43); 77 vs JJ still calls (0.65 -> 0.51, 0.46 needed). Simulator:
   red-team presets `xp:deepshove` (top 8% re-raise all-in 60% facing a raise 40bb+ deep, nothing else shoves there) and
-  `xp:deepbluff` (plus 15% of the top half: about half bluffs).
+  `xp:deepbluff` (plus 15% of the top half: about half bluffs). Live budget, v12r regulars, 1,000 deals each, on (every
+  player tight) vs off: against deepshove heads-up +35.8 ± 10.6, 3-handed +42.4 ± 17.5; against deepbluff heads-up
+  +23.0 ± 20.8, 3-handed +36.1 ± 23.0; against the plain regulars (who jam wide hands deep now and then, like most
+  friends) 4-handed -4.7 ± 11.0 (-21.5 ± 10.3 at 800 deals), heads-up -5.6 ± 3.0 (good hands and the big blind fold to
+  wide shoves; 9 of 2,000 hand pairs end differently).
+  Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/.
+  Per player since v1.8.27 (`deepShoveTrust`, `DEEP_SHOVE.prior` 0.3; `{ prior: 1 }` is the v1.8.23 rule): the blend
+  is scaled by a trust that starts at the prior and moves by each of the player's own shown all-in re-raises deep
+  enough to count (the newest 10 of `tally.jamShows`: the tracker records every preflop all-in re-raise whose cards are
+  seen, at showdown or shown after a fold, at any board, newest 20, kept out of decay): the log-likelihood ratio of the
+  shown hand under the tight read over the usual one. One AKs at 130bb takes it from 0.10 to 0.36, AKs and JJ (500bb
+  into 250bb) to 0.74, a Q2o at 85bb down to 0.07. The range is then the mix of the usual and the tight read as hand
+  distributions, by the trust (preflopRange `deep.t`; mixing the weights instead left 77's equity at 0.65 up to a trust
+  of 0.74, since the wide part holds most of the mass). Replaying the logs with reads rebuilt in order (deepspots.js),
+  Mark's trust over tonight's deep shoves is 0.10 / 0.35 / 0.35 / 0.74: A2o still calls (0.52 -> 0.51), Q7o call ->
+  fold (0.51 -> 0.47), 77 vs JJ 0.65 -> 0.60 and A9o vs AJs 0.60 -> 0.50 still call (0.46 / 0.47 needed); nothing else
+  of the 12 logged spots facing an all-in re-raise moves by more than 0.01 (the global version folded A2o and A9o too).
+  Those trusts are for a prior of 0.1. With 0.3 (the default) they are 0.30 / 0.67 / 0.68 / 0.92: A2o calls (0.48), Q7o
+  and A9o fold (0.40; 0.45 vs 0.47 needed), 77 calls (0.56 vs 0.46), and the other 8 spots move by 0.02 or less. Shows from hands
+  stored before v1.8.27 are added once from the stored hands (`tagJamShows`, flag `db.jamTagged`; on all logs it finds
+  the same 11 shows as replaying the raw events). Simulator, live budget, v12r regulars, 1,000 deals each, B - A:
+  | opponent | table | prior 0.1 | prior 0.3 |
+  | --- | --- | --- | --- |
+  | xp:deepshove | heads-up | +3.3 ± 11.4; -2.2 ± 4.6 (1,200 warm-up hands) | +41.5 ± 14.0; +18.2 ± 9.7 |
+  | xp:deepshove + friends | 3-handed | +17.7 ± 16.8 | +52.7 ± 21.7 |
+  | xp:deepbluff | heads-up | +9.8 ± 8.6 | -0.2 ± 0.5 |
+  | plain regulars | heads-up | 0 (all 2,000 the same); 0 (1,200 warm-up) | 0 (all 2,000 the same) |
+  | plain regulars | 4-handed | +0.6 ± 11.2 | -0.1 ± 7.6 |
+  With 1,200 warm-up hands the trust is 1.00 by the time hero faces the tight bot (15-18 shows), and A has learned most
+  of it from the showdowns too, so B and A barely differ: the read matters while a player's read is young (Mark's
+  account was new on 5 Nov). Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/ (dsl-*, dsl3-*).
 - Near-tie all-ins (v1.8.23, `ALLIN_TIE_BB` 1; on since v1.8.25: `input.allinTie: false` turns it off, a number sets the
   margin in big blinds): when the pick is all-in (hero's whole stack, or every opponent left is all-in once they match
   it) and an option that isn't comes within the margin of its EV, that option is played; the result's `allinTie` (kind,

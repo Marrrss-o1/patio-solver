@@ -80,6 +80,34 @@ test('tracker: preflop raises carry the raise-to, the chips left behind and the 
   assert.deepStrictEqual(ann.sizes, { pre: 2, preTo: 3, preBehind: 147, preCover: 150 });
 });
 
+test('tracker: shown preflop all-in re-raises go in tally.jamShows at any board; raises with chips behind do not', () => {
+  const t = new T({ players: {} });
+  t.snap = { players: [], heroAuthId: 'H' };
+  const pl = (pos, id, preBehind) => ({ pos, id, auth: id, name: id, shown: [], seq: { pre: ['raise', '3bet'] }, preTop: 3, sizes: { pre: 25, preTo: 500, preBehind, preCover: 258 } });
+  t.hand = { board: [], players: { M: pl('s1', 'M', 0), K: pl('s2', 'K', 200) } };
+  for (const [pos, c] of [['s1', 'Jh'], ['s1', 'Js'], ['s2', 'Ah'], ['s2', 'Kh']]) t.onReveal(pos, c);
+  assert.deepStrictEqual(t.db.players.M.tally.jamShows, [{ cards: ['Jh', 'Js'], pre: '4bet', to: 500, cover: 258 }]);
+  assert.ok(!t.db.players.K || !(t.db.players.K.tally.jamShows || []).length);
+});
+
+test('tracker: tagJamShows fills in shown all-in re-raises from stored hands, once', () => {
+  const t = new T({ players: { M: { name: 'Mark', tally: {} }, J: { name: 'Jo', tally: {} } } });
+  const hand = (t0, cards, behind) => ({
+    t: t0, bigBlind: 2, board: [],
+    players: [{ name: 'Hero', hero: true, stack: 260, shown: [] }, { name: 'Mark', stack: 600, shown: cards }, { name: 'Jo', stack: 400, shown: ['Ah', 'Kh'] }],
+    log: [
+      { st: 'pre', who: 'Hero', act: 'sb', amt: 1 }, { st: 'pre', who: 'Mark', act: 'bb', amt: 2 },
+      { st: 'pre', who: 'Jo', act: 'raise', amt: 6, to: 6, stack: 400 }, { st: 'pre', who: 'Hero', act: 'fold', amt: 0 },
+      { st: 'pre', who: 'Mark', act: '3bet', amt: 598 - behind, to: 600 - behind, stack: 598, allin: !behind }, { st: 'pre', who: 'Jo', act: 'call', amt: 394, to: 400, stack: 394 },
+    ],
+  });
+  // Jo's open isn't a re-raise; Mark's 3-bet keeping 100bb behind isn't all-in.
+  assert.strictEqual(t.tagJamShows([hand(2, ['Jh', 'Js'], 0), hand(1, ['Qd', 'Qs'], 200)]), 1);
+  assert.deepStrictEqual(t.db.players.M.tally.jamShows, [{ cards: ['Jh', 'Js'], pre: '3bet', to: 300, cover: 200 }]);
+  assert.ok(!(t.db.players.J.tally.jamShows || []).length);
+  assert.strictEqual(t.tagJamShows([hand(2, ['Jh', 'Js'], 0)]), 0, 'already there');
+});
+
 test('hand log: every action with amount, pot, stack, advice match and result', () => {
   const t = new T({ players: {} });
   t.on((type, p) => {
@@ -2183,26 +2211,52 @@ test('shoveRange: all-in preflop re-raises read as 0.7 x VPIP, not the narrow re
   near(spot(0, {}, 'raise').equity.share, spot(0, { shoveRange: false }, 'raise').equity.share);
 });
 
-test('deepShove (off by default): deep all-in re-raises read tighter from 40bb, fully from 100bb, depth capped by the cover', () => {
+test('deepShove (on, per player): deep all-in re-raises read tighter from 40bb, fully from 100bb, depth capped by the cover', () => {
   // Hero opened to 2.5bb; a loose player (VPIP about 0.6) re-raises all-in to `to` bb. cover: the biggest stack still in
-  // that could call it, in bb (sizes.preCover, from the tracker).
+  // that could call it, in bb (sizes.preCover, from the tracker). prior 1: every player's deep shoves read tight.
   const loose = { pfFold: 40, pfCall: 40, pfRaise: 40, hands: 120 };
-  const spot = (to, extra, cover, hero = 'Ah 8d') => E.analyzeSync(Object.assign({
+  const spot = (to, extra, cover, hero = 'Ah 8d', jamShows) => E.analyzeSync(Object.assign({
     hero: C(hero), board: [], pot: 2 * to + 6, toCall: 2 * to - 5, stack: 2 * to - 5, bigBlind: 2, inPosition: true, tableStyle: 'typical',
     heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 2.5, preBehind: to - 2.5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
-    opponents: [{ name: 'V', tally: loose, actions: { pre: '3bet' }, sizes: Object.assign({ pre: 25, preTo: to, preBehind: 0 }, cover != null ? { preCover: cover } : {}), pfAggressor: true, position: 'blinds', committed: 2 * to, stack: 0, bet: 2 * to, heroIP: false }],
+    opponents: [{ name: 'V', tally: Object.assign({}, loose, jamShows ? { jamShows } : {}), actions: { pre: '3bet' }, sizes: Object.assign({ pre: 25, preTo: to, preBehind: 0 }, cover != null ? { preCover: cover } : {}), pfAggressor: true, position: 'blinds', committed: 2 * to, stack: 0, bet: 2 * to, heroIP: false }],
     iterations: 3000, mix: false, seed: 1,
   }, extra)).equity.share;
-  const off = spot(150), on = spot(150, { deepShove: true });
-  near(off, spot(150, { deepShove: false }));
+  const all = { deepShove: { prior: 1 } }, none = { deepShove: false };
+  const off = spot(150, none), on = spot(150, all), def = spot(150);
   assert.ok(on < off - 0.08, `A8o vs a 150bb shove: on ${on} off ${off}`);
-  assert.ok(spot(150, { deepShove: { width: 0.2 } }) > on + 0.02, 'an object replaces the numbers');
+  // The default: a player with no shown deep shoves is the tight kind with chance 0.3.
+  assert.ok(def < off - 0.01 && def > on + 0.03, `default ${def} between ${on} and ${off}`);
+  near(spot(150, { deepShove: true }), def);
+  assert.ok(spot(150, { deepShove: { prior: 1, width: 0.2 } }) > on + 0.02, 'an object replaces the numbers');
   // The ramp: nothing at 40bb, part of it at 70bb.
-  near(spot(40, { deepShove: true }), spot(40));
-  const mid = spot(70, { deepShove: true }), midOff = spot(70);
-  assert.ok(mid < midOff - 0.02 && mid > spot(70, { deepShove: { from: 40, to: 41 } }) + 0.01, `70bb: ${midOff} -> ${mid}`);
+  near(spot(40, all), spot(40, none));
+  near(spot(40), spot(40, none));
+  const mid = spot(70, all), midOff = spot(70, none);
+  assert.ok(mid < midOff - 0.02 && mid > spot(70, { deepShove: { prior: 1, from: 40, to: 41 } }) + 0.01, `70bb: ${midOff} -> ${mid}`);
   // A 150bb shove that only a 30bb stack can call is a 30bb shove.
-  near(spot(150, { deepShove: true }, 30), spot(150, {}, 30));
+  near(spot(150, all, 30), spot(150, none, 30));
+});
+
+test('deepShove learns per player: shown deep shoves of strong hands tighten the read, weak ones loosen it (prior 0.1)', () => {
+  const loose = { pfFold: 40, pfCall: 40, pfRaise: 40, hands: 120 };
+  const spot = (jamShows, extra) => E.analyzeSync(Object.assign({
+    hero: C('Ah 8d'), board: [], pot: 306, toCall: 295, stack: 295, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 2.5, preBehind: 147.5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
+    opponents: [{ name: 'V', tally: Object.assign({}, loose, { jamShows }), actions: { pre: '3bet' }, sizes: { pre: 25, preTo: 150, preBehind: 0 }, pfAggressor: true, position: 'blinds', committed: 300, stack: 0, bet: 300, heroIP: false }],
+    iterations: 3000, mix: false, seed: 1, deepShove: { prior: 0.1 },
+  }, extra));
+  const trust = (r) => r.opponents[0].stats.deepShove.trust;
+  near(trust(spot([], { deepShove: undefined })), 0.3);
+  const strong = [{ cards: ['As', 'Ks'], pre: '3bet', to: 130, cover: 170 }, { cards: ['Jh', 'Js'], pre: '4bet', to: 500, cover: 250 }];
+  const weak = [{ cards: ['2c', 'Qd'], pre: '3bet', to: 85, cover: 220 }];
+  const none = spot([]), s1 = spot(strong.slice(0, 1)), s2 = spot(strong), w = spot(weak);
+  assert.ok(Math.abs(trust(none) - 0.1) < 1e-9, `prior ${trust(none)}`);
+  assert.ok(trust(s1) > 0.3 && trust(s2) > trust(s1) + 0.2 && trust(w) < 0.08, `${trust(s1)} ${trust(s2)} ${trust(w)}`);
+  const off = spot([], { deepShove: false }).equity.share;
+  assert.ok(s2.equity.share < none.equity.share - 0.04 && w.equity.share > s2.equity.share + 0.04 && Math.abs(w.equity.share - off) < 0.02,
+    `${off} ${none.equity.share} ${s2.equity.share} ${w.equity.share}`);
+  // Shallow shows (under `from`) say nothing.
+  near(trust(spot([{ cards: ['As', 'Ks'], pre: '3bet', to: 30, cover: 200 }])), trust(none));
 });
 
 test('allinTie (on, 1bb): an all-in pick gives way to the best option that is not all-in within the margin (false: off)', () => {

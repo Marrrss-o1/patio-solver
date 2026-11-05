@@ -29,6 +29,7 @@
     return Object.prototype.hasOwnProperty.call(SEAT_KEY, pos) ? SEAT_KEY[pos] : seatNum(pos);
   }
   const MAX_SHOWS = 80;
+  const MAX_JAM_SHOWS = 20;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -38,7 +39,7 @@
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows') continue;
+      if (k === 'shows' || k === 'jamShows') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -91,6 +92,9 @@
       pos: { early: posTally(), late: posTally(), blinds: posTally() },
       // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
       shows: [],
+      // Preflop all-in re-raises whose cards were seen, at any point of the hand (v1.8.27, DEEP_SHOVE's per-player read):
+      // { cards, pre, to, cover } with the raise-to and the biggest stack still in, in big blinds. Newest MAX_JAM_SHOWS.
+      jamShows: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -120,7 +124,7 @@
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows') continue;
+      if (k === 'shows' || k === 'jamShows') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -134,6 +138,9 @@
     const shows = [];
     for (const t of list) for (const sh of t.shows || []) shows.push(sh);
     out.shows = shows.slice(-MAX_SHOWS);
+    const jams = [];
+    for (const t of list) for (const sh of t.jamShows || []) jams.push(sh);
+    out.jamShows = jams.slice(-MAX_JAM_SHOWS);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -898,6 +905,55 @@
       return n;
     }
 
+    // Shown all-in re-raises from hands stored before v1.8.27, which recorded no `jamShows` (DEEP_SHOVE's per-player read):
+    // found in each stored hand's action log (the player's last preflop raise was a re-raise that left under a tenth of
+    // the raise-to behind, and their cards were shown) and added to that player's read, oldest first, newest
+    // MAX_JAM_SHOWS kept, skipping any already there. The player is the account id the hand's raw events give that name,
+    // else the one read that used the name around that time. Returns how many were added.
+    tagJamShows(entries) {
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log) && Array.isArray(e.players) && e.bigBlind > 0).sort((a, b) => (a.t || 0) - (b.t || 0));
+      let n = 0;
+      for (const e of list) {
+        const bb = e.bigBlind;
+        const pre = e.log.filter((x) => x && x.st === 'pre');
+        for (const p of e.players) {
+          if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
+          let i = -1;
+          for (let j = 0; j < pre.length; j++) if (pre[j].who === p.name && (pre[j].act === 'raise' || pre[j].act === '3bet')) i = j;
+          if (i < 0) continue;
+          const x = pre[i];
+          const top = 1 + pre.slice(0, i).filter((y) => y.act === 'raise' || y.act === '3bet').length;
+          if (top < 2 || !(x.to > 0)) continue;
+          const to = Math.round((x.to / bb) * 100) / 100;
+          const behind = x.stack != null ? Math.max(0, x.stack - (x.amt || 0)) / bb : x.allin ? 0 : null;
+          if (behind == null || behind > 0.1 * to) continue;
+          const folded = new Set(pre.slice(0, i).filter((y) => y.act === 'fold').map((y) => y.who));
+          let cover = 0;
+          for (const q of e.players) if (q && q.name !== p.name && !folded.has(q.name) && q.stack > cover) cover = q.stack;
+          const id = idFor(p.name, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) continue;
+          const t = r.tally || (r.tally = blankTally());
+          if (!t.jamShows) t.jamShows = [];
+          const cards = p.shown.slice();
+          const key = cards.slice().sort().join('');
+          if (t.jamShows.some((s) => s && Array.isArray(s.cards) && s.cards.slice().sort().join('') === key && Math.abs((s.to || 0) - to) < 0.02)) continue;
+          t.jamShows.push({ cards, pre: top >= 4 ? '5bet' : top === 3 ? '4bet' : '3bet', to, cover: Math.round((cover / bb) * 100) / 100 });
+          if (t.jamShows.length > MAX_JAM_SHOWS) t.jamShows.splice(0, t.jamShows.length - MAX_JAM_SHOWS);
+          n++;
+        }
+      }
+      return n;
+    }
+
     heroPotShows() {
       const out = { hi: null, hiN: 0, ho: null, hoN: 0 };
       for (const r of Object.values(this.db.players)) {
@@ -1140,6 +1196,17 @@
       if (!p.shown.includes(card)) p.shown.push(card);
       if (p.shown.length !== 2 || p.logged) return;
       p.logged = true;
+      // A preflop all-in re-raise, shown at showdown or after everyone folded (DEEP_SHOVE's per-player read).
+      const pre0 = PatioTracker.preAction(p);
+      if (/^\dbet$/.test(pre0) && p.sizes.preTo > 0 && p.sizes.preBehind != null && p.sizes.preBehind <= 0.1 * p.sizes.preTo) {
+        const rj = this.record(p.auth, p.name);
+        if (rj) {
+          if (!rj.tally.jamShows) rj.tally.jamShows = [];
+          rj.tally.jamShows.push({ cards: p.shown.slice(), pre: pre0, to: p.sizes.preTo, cover: p.sizes.preCover != null ? p.sizes.preCover : null });
+          if (rj.tally.jamShows.length > MAX_JAM_SHOWS) rj.tally.jamShows.splice(0, rj.tally.jamShows.length - MAX_JAM_SHOWS);
+          if (h.board.length < 3) this.emit('save', this.db);
+        }
+      }
       if (h.board.length < 3) return;
       const r = this.record(p.auth, p.name);
       if (!r) return;
