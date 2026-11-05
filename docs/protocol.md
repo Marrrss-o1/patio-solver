@@ -55,8 +55,9 @@ Card `value` is `"2".."10","J","Q","K","A"` and `suite` is `clubs|diamonds|heart
 * There is no separate "bet" action. A first bet on a street comes through as `"raise"`. The tracker turns it into
   `bet` when nobody has bet yet this street.
 * Outgoing `player:game:perform_action` uses `raiseAmount` = **raise-by on top of the call** (sending
-  `raiseAmount: 100` while facing 20 produced `makeBetValue: 120`). The overlay never sends actions. This is only
-  noted so nobody misreads it.
+  `raiseAmount: 100` while facing 20 produced `makeBetValue: 120`). The overlay never sends actions. The site's raise
+  box takes the same raise-by number (Marwin: pressing raise 3 facing 2 makes the bet 5), so since v1.8.22 both panels
+  show raises as "Raise by $X" with the street total after it (`actionParts` in overlay.js and userscript-core.js).
 * Sending `check` when there is a bet to call was treated by the server as a **fold**.
 * Uncalled bets are refunded and announced in chat logs (`chat_message` with `log.e === "ur"`).
 

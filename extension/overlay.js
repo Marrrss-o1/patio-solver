@@ -96,14 +96,32 @@
   const SUITSYM = { c: '♣', d: '♦', h: '♥', s: '♠' };
   const cardHtml = (c) => `<span class="cd ${c[1] === 'h' || c[1] === 'd' ? 'red' : ''}">${c[0] === 'T' ? '10' : c[0]}${SUITSYM[c[1]]}</span>`;
 
+  // Raises read the way the site's raise box takes them: the chips on top of the call ("raise by"),
+  // with the street total after it. On Poker Patio, raise 3 facing a bet of 2 makes the bet 5.
+  function actionParts(sc, heroStageBet, toCall) {
+    if (!sc) return { main: '' };
+    if (sc.kind === 'fold') return { main: 'Fold' };
+    if (sc.kind === 'check') return { main: 'Check' };
+    if (sc.kind === 'call') return { main: 'Call ' + money(sc.amount) };
+    if (sc.kind === 'allin') return { main: sc.amount <= toCall + 1e-9 ? 'Call all-in ' + money(sc.amount) : 'All-in ' + money(heroStageBet + sc.amount) };
+    if (sc.kind === 'bet' && heroStageBet <= 0) return { main: 'Bet ' + money(sc.amount) };
+    const to = Math.round(heroStageBet + sc.amount);
+    return { main: 'Raise by ' + money(to - Math.round(heroStageBet + toCall)), to: money(to) };
+  }
   function actionText(sc, heroStageBet, toCall) {
-    if (!sc) return '';
-    if (sc.kind === 'fold') return 'Fold';
-    if (sc.kind === 'check') return 'Check';
-    if (sc.kind === 'call') return 'Call ' + money(sc.amount);
-    if (sc.kind === 'allin') return sc.amount <= toCall + 1e-9 ? 'Call all-in ' + money(sc.amount) : 'All-in ' + money(heroStageBet + sc.amount);
-    if (sc.kind === 'bet' && heroStageBet <= 0) return 'Bet ' + money(sc.amount);
-    return 'Raise to ' + money(heroStageBet + sc.amount);
+    const a = actionParts(sc, heroStageBet, toCall);
+    return a.to ? a.main + ' (to ' + a.to + ')' : a.main;
+  }
+  function actionHtml(sc, heroStageBet, toCall) {
+    const a = actionParts(sc, heroStageBet, toCall);
+    return esc(a.main) + (a.to ? ' <span class="to">to ' + esc(a.to) + '</span>' : '');
+  }
+  // A row of "All options": the action, then the raise's total, size and play share, muted.
+  function optionHtml(sc, heroStageBet, toCall) {
+    const a = actionParts(sc, heroStageBet, toCall);
+    const notes = [a.to && 'to ' + a.to, sc.sizeLabel && sc.sizeLabel !== 'raise' && sc.sizeLabel].filter(Boolean);
+    if (sc.freq != null) notes.push((notes.length ? '' : '· ') + 'play ' + pct(sc.freq));
+    return esc(a.main) + (notes.length ? ' <span class="muted">' + esc(notes.join(' · ')) + '</span>' : '');
   }
   function tone(sc) {
     if (!sc) return '';
@@ -137,6 +155,7 @@
     .status { color: #aab3ad; font-size: 12px; }
     .rec { border-radius: 10px; padding: 10px 12px; background: rgba(255,255,255,.06); }
     .rec .act { font-size: 22px; font-weight: 700; line-height: 1.15; }
+    .rec .act .to { font-size: 13px; font-weight: 500; color: #95a09a; }
     .rec.aggr .act { color: #4be08a; } .rec.passive .act { color: #6cb8ff; } .rec.fold .act { color: #ff7a7a; }
     .rec .sub { color: #c4ccc6; font-size: 12px; margin-top: 3px; }
     .rec.stale { opacity: .45; }
@@ -574,7 +593,7 @@
       const best = r.best;
       const evLine = best.kind === 'fold' ? 'Every other option loses chips' : (best.ev >= 0 ? '+' : '−') + money(Math.abs(best.ev)) + ' expected';
       html += `<div class="rec ${tone(best)} ${advice.stale ? 'stale' : ''}">
-        <div class="act">${esc(actionText(best, c.heroStageBet, r.toCall))}${r.close ? '<span class="badge">close</span>' : ''}</div>
+        <div class="act">${actionHtml(best, c.heroStageBet, r.toCall)}${r.close ? '<span class="badge">close</span>' : ''}</div>
         <div class="sub">${best.sizeLabel && best.sizeLabel !== 'raise' ? esc(best.sizeLabel) + ' · ' : ''}${evLine}${advice.stale ? ' · last turn' : ''}</div>
         ${r.mix ? `<div class="sub">Close spot, so mix it up: ${r.mix.map((m) => esc(m.label) + ' ' + pct(m.freq)).join(' · ')}. This time: ${esc(best.label)}.</div>` : ''}
         ${advice.stale && sizing.note ? `<div class="sub neg">${esc(sizing.note)}</div>` : ''}
@@ -598,7 +617,7 @@
       html += `<div><div class="sec" style="cursor:pointer" data-a="toggleOpts">All options ${ui.showOptions ? '▾' : '▸'}</div>`;
       if (ui.showOptions) {
         html += `<table>${r.ranked.map((s) => `<tr class="${s === r.ranked.find((x) => x.kind === best.kind && x.amount === best.amount) ? 'best' : ''}">
-          <td>${esc(actionText(s, c.heroStageBet, r.toCall))}${s.sizeLabel && s.sizeLabel !== 'raise' ? ' <span class="muted">' + esc(s.sizeLabel) + '</span>' : ''}${s.freq != null ? ' <span class="muted">· play ' + pct(s.freq) + '</span>' : ''}</td>
+          <td>${optionHtml(s, c.heroStageBet, r.toCall)}</td>
           <td class="${s.ev < 0 ? 'neg' : s.ev > 0 ? 'pos' : ''}">${s.ev >= 0 ? '+' : '−'}${money(Math.abs(s.ev))}</td></tr>`).join('')}</table>`;
       }
       html += `</div>`;
