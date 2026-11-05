@@ -20,6 +20,7 @@ node test/sim/calibrate.js <hand-log.json> ... --names <private file>         # 
 node test/sim/range-test.js <hand-log.json> ...                              # do they fold by absolute or range-relative strength?
 node test/sim/range-test.js --bots test/sim/profiles-v8.json                 # ... the same test on bots
 node test/sim/allin-test.js <hand-log.json> ...                              # preflop all-in re-raises by stack depth (--bots too)
+node test/sim/fold-cal.js --hands 1000 --players 4 --bots friends --budget live   # do the bots fold to hero's bets as read?
 node test/sim/v8-ref.js --out test/sim/v8-ref.json                           # the v8 bots' usual ranges (BOTPROFILES=...)
 ```
 
@@ -225,6 +226,19 @@ bots, seed and block size), so a third arm can be added later without replaying 
   (`--seat-stacks 40,80`, seed 3871) +5.2 ± 9.8, pooled about +7 ± 6. Hands whose first difference is calling a jam
   hero used to fold: 5 at +47bb a hand at 150bb, 31 at +7.3 ± 2.9 with the short seats. Files:
   sims/2026-11-05-v10bots/ in the project folder.
+* Friend bots v11 (5 Nov; `BOTPROFILES=test/sim/profiles-v11.json`): v10 plus `heroHuCut` 0.12. The first heads-up
+  answer to a flop or turn bet by the hero seat moves the continue cut up by 0.12. Why: replaying every log through
+  `range-test.js` (first answers to bets, not re-raised), the friends fold to Marwin's heads-up flop and turn bets 46%
+  (n 110; under 45% / 45-85% / 85%+ pot: 38 / 50 / 67%) and to each other's 41% (n 187), and they fold about as the
+  solver's read says (audit, 4 Nov: slope 0.96 ± 0.36). The v10 bots facing the solver (`fold-cal.js` with
+  `--entries`, then `range-test.js` on those hands; 4-handed, live budget, seed 3901, 1,000 deals) folded 33% (n 1,191;
+  18 / 43 / 41%) and to each other 34%, and everyone folded to the solver's heads-up flop and turn bets 31% where it
+  predicted 43% (n 974). So the sim scored hero's flop and turn bets against players who call them more than the
+  friends do. The same deals with v11: first answers to hero 43% (n 1,168; 28 / 53 / 52%), everyone folded 43% against
+  46% predicted (n 932, slope 1.06 ± 0.13); answers to the other bots (34%), hero's multiway bets (16 / 18%) and river
+  bets (41%, the v9 habit) as before. Plain bot-against-bot play is v10's. `fold-cal.js` prints this table for any
+  bot file; `range-test.js` rows now carry `cb` (the bettor raised last before the flop; it explains none of the gap).
+  Files: sims/2026-11-05-v10bots/v11/ in the project folder.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
