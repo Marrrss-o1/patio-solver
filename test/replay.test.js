@@ -2157,6 +2157,28 @@ test('overbetTilt: river bets and raises of 3x pot or more read stronger, not ot
   near(spot(3, { heroPotTilt: 0.5 }).equity.share, spot(3, { heroPotTilt: 0.5, overbetTilt: false }).equity.share);
 });
 
+test('riverRaiseTilt: river raises of any size read stronger, river bets do not; no stacking on the overbet tilt (false: off)', () => {
+  // 31 Oct #126: AK on Tc Td 8s 2s Kd, hero bets 12 into 25 and MaPokerrk check-raises to 49 (he had KcTh).
+  const spot = (riverAct, size, extra, heroRiver = 'bet') => E.analyzeSync(Object.assign({
+    hero: C('Kh Ac'), board: C('Tc Td 8s 2s Kd'), pot: 74, toCall: 37, stack: 300, bigBlind: 2, inPosition: true,
+    tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: heroRiver }, heroSizes: {},
+    heroPosition: 'late', heroPfAggressor: true, heroPotTilt: false,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: riverAct },
+      sizes: { river: size }, position: 'blinds', committed: 61, stack: 250, bet: 49 }],
+    iterations: 4000, riverIterations: 200, mix: false, seed: 1,
+  }, extra));
+  const on = spot('checkraise', 1.2), off = spot('checkraise', 1.2, { riverRaiseTilt: false });
+  assert.ok(on.equity.share < off.equity.share - 0.03, `check-raise: on ${on.equity.share} off ${off.equity.share}`);
+  assert.ok(spot('checkraise', 1.2, { riverRaiseTilt: 0.5 }).equity.share < on.equity.share - 0.01);
+  near(spot('raise', 0.5).equity.share, spot('raise', 0.5, { overbetTilt: false }).equity.share); // a small raise: this tilt, not the overbet one
+  assert.ok(spot('raise', 0.5).equity.share < spot('raise', 0.5, { riverRaiseTilt: false }).equity.share - 0.03);
+  // A river bet (hero checked to them): no tilt.
+  near(spot('bet', 1.2, {}, 'check').equity.share, spot('bet', 1.2, { riverRaiseTilt: false }, 'check').equity.share);
+  // A 3x+ raise gets 0.3 from either tilt, once.
+  near(spot('checkraise', 3).equity.share, spot('checkraise', 3, { riverRaiseTilt: false }).equity.share);
+  near(spot('checkraise', 3).equity.share, spot('checkraise', 3, { overbetTilt: false }).equity.share);
+});
+
 test('bigRaiseRange: an open to 30bb+ that keeps chips behind reads as the top 12%, not shoves or re-raises (false: off)', () => {
   // 4 Nov #390: A9s in the big blind against a 131bb open with 124bb behind. A wide raiser (pfr ~33%).
   const wide = { pfFold: 40, pfCall: 40, pfRaise: 40, hands: 120 };
