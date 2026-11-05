@@ -78,8 +78,9 @@
       stOld: { flop: streetTally(), turn: streetTally(), river: streetTally() },
       // Reaction to a bet by its size (fraction of the pot before the bet): <45%, 45-85%, >85%.
       vs: { small: sizeTally(), medium: sizeTally(), large: sizeTally() },
-      // Response to a single open raise preflop by its raise-to size: <=2.5bb, <=3.5bb, more ('raise' = 3-bet).
-      vsOpen: { small: facingTally(), medium: facingTally(), large: facingTally() },
+      // Response to a single open raise preflop by its raise-to size: <=2.5bb, <=3.5bb, under 8bb, and 8bb or more
+      // ('huge': shoves and huge opens, kept apart since v1.8.20; older reads have them in 'large'). 'raise' = 3-bet.
+      vsOpen: { small: facingTally(), medium: facingTally(), large: facingTally(), huge: facingTally() },
       // Their own bet sizes postflop, as fractions of the pot.
       betSize: { n: 0, sum: 0 },
       // Read accuracy on every action: decisions scored, and the summed surprise (-log of the
@@ -679,7 +680,7 @@
           // Response to an open by size, for players who had not acted yet (limpers facing a raise
           // keep most of their limping range, and the solver asks only about players still to act).
           const toBB = h.bigBlind > 0 && p.seq.pre.length === 1 ? (p.stageBet - added + facing) / h.bigBlind : 0;
-          const vo = toBB > 0 && r.tally.vsOpen && r.tally.vsOpen[toBB <= 2.5 ? 'small' : toBB <= 3.5 ? 'medium' : 'large'];
+          const vo = toBB > 0 && r.tally.vsOpen && r.tally.vsOpen[toBB <= 2.5 ? 'small' : toBB <= 3.5 ? 'medium' : toBB < 8 ? 'large' : 'huge'];
           const k2 = kind === '3bet' ? 'raise' : kind;
           if (vo && vo[k2] != null) vo[k2]++;
         }

@@ -242,6 +242,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - `ctx.reraised` (opponent 3-bet or more preflop): fold rates x0.65 in odds (`reraisedFold`).
 - `stats.vsOpen` { small <=2.5bb, medium <=3.5bb, large } x { cont, threeBet, n }: counted by the tracker only for
   players who had not acted yet; prior fitted on 78 responses (cont .75/.72/.49, 3-bet .30/.25/.17).
+  Since v1.8.20 (`input.vsOpenSplit`, on unless false) answers to opens of 8bb or more (shoves included) go to a fourth
+  tally bucket, `huge`, and are read with `callBig`; `large` holds 3.5-8bb opens only, and vsOpenRead blends the large
+  rate into callBig from 5bb to 8bb. Before, one bucket covered 4bb opens and shoves, which friends answer very
+  differently (all logs to 5 Nov, first answers: 3.5-5bb fold 49%, n 205; 5-8bb 54%, n 67; 8-15bb 65%, n 17; 15-30bb
+  71%, n 14; 30bb+ 89%, n 28). In the 5 Nov heads-up session the two averaged out: 4bb opens read as folded 69%
+  (actual 51%), shoves 68% (actual 88%). Reads benchmark, every log: vs-open log-loss 0.932 -> 0.923 (each seen-hands
+  bucket better), nothing else moves. Log replay (1-5 Nov): 21 of 942 decisions change, all preflop near-ties
+  (short-stack shoves with strong aces become raises, open sizes move a step). `stats.vsOpen.largeAll` is the old
+  bucket (vsOpenSplit false is bit-identical to v1.8.19). Older reads keep their past shoves in `large`.
 - Range noise (`applyAction`): each line keeps a share `rangeNoise` (home prior 0.45, MAP per player from showdown
   likelihoods `nl` over `NOISES`) of hands that take it whatever their strength; on bets it scales with bluff share
   and bet size (`rangeNoiseAgg`). Without it shown hands scored worse than a random guess.

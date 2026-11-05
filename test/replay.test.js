@@ -485,6 +485,33 @@ test('reads: vsOpen counts the response to a single open by its size', () => {
   assert.ok(st.vsOpen.large.cont < 0.2 && st.vsOpen.small.cont > 0.5, JSON.stringify(st.vsOpen));
 });
 
+test('reads: answers to 8bb+ opens and shoves are kept apart from 4bb opens (vsOpenSplit, v1.8.20)', () => {
+  // A 10bb shove answered: counted in 'huge', not in 'large'.
+  const t = new T({ players: {} });
+  const snap = { tableType: 'private', heroAuthId: 'H', bigBlind: 2, players: [
+    { id: 1, authUserId: 'H', name: 'Hero', stack: 20, posType: 's1', playState: 'playing' },
+    { id: 2, authUserId: 'V', name: 'Vic', stack: 200, posType: 's2', playState: 'playing' }] };
+  for (const [ev, data] of [
+    ['game:stage_began', { stageType: 'set_blinds' }], ['game:dealer_updated', { dealerSeatPos: 's1' }],
+    ['game:small_blind_paid', { amount: 1, playerId: 1 }], ['game:big_blind_paid', { amount: 2, playerId: 2 }],
+    ['game:stage_began', { stageType: 'pre_flop' }],
+    ['player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 19 }],
+    ['player:game:action_taken', { playerID: 2, actionType: 'fold', makeBetValue: 0 }],
+  ]) t.handle(ev, data, snap);
+  const vo = t.db.players.V.tally.vsOpen;
+  assert.strictEqual(vo.huge.fold, 1, JSON.stringify(vo));
+  assert.strictEqual(vo.large.fold + vo.large.call + vo.large.raise, 0, JSON.stringify(vo));
+  // A player who calls 4bb opens and folds every shove: each size gets its own read.
+  const f = (n) => ({ fold: n, call: 0, raise: 0 }), c = (n) => ({ fold: 0, call: n, raise: 0 });
+  const tally = Object.assign(T.blankTally(), { pfBigOpp: 20, pfBigCall: 0, vsOpen: { small: f(0), medium: f(0), large: c(20), huge: f(20) } });
+  const st = E.computeStats(tally, 'typical');
+  const open4 = E.predictAction(st, { kind: 'vo', toBB: 4 }), shove = E.predictAction(st, { kind: 'vo', toBB: 15 });
+  assert.ok(open4.fold < 0.25, JSON.stringify(open4));
+  assert.ok(shove.fold > 0.75, JSON.stringify(shove));
+  // The old single bucket ('largeAll', input.vsOpenSplit: false) mixes the two.
+  assert.ok(st.vsOpen.largeAll.cont > 0.35 && st.vsOpen.largeAll.cont < 0.65, JSON.stringify(st.vsOpen.largeAll));
+});
+
 test('reads: a bet that then calls a raise reads stronger than a plain bet', () => {
   assert.strictEqual(T.streetAction(['bet', 'call'], 4), 'betcall');
   assert.strictEqual(T.streetAction(['bet'], 4), 'bet');
