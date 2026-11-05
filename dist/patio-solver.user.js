@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.21
+// @version      1.8.22
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -5513,7 +5513,13 @@ function ENGINE() {
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
-      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position);
+      // A player yet to act preflop holds a dealt hand, not a chosen one, so the showdown tilt (fitted on the hands their
+      // lines showed) arguably doesn't apply to it. input.pendingTilt: false drops it for them; by default it stays (the
+      // simulator was neutral, see CLAUDE.md). With the home prior's passive tilt of -0.15 the big blind's range leans
+      // toward weak hands (top hands x0.55, worst x1.8): the Monte Carlo had duke (5 Nov) continue 24% against a 6bb open
+      // where his read said 37%, and the preflop solver meets a weaker range.
+      const untilted = street === 0 && pending && input.pendingTilt === false;
+      const W = buildRange(stats, actions, strengths, dead, o.sizes, o.pfAggressor, o.position, untilted);
       const qCont = rangeQuantiles(W, respNow);
       const displayW = street === 0 && pending ? buildRange(stats, { pre: 'call' }, strengths, dead, null, null, o.position) : W;
       const aggressor = street === 0
@@ -8439,14 +8445,25 @@ function slim(r) {
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   var SUITSYM = { c: '♣', d: '♦', h: '♥', s: '♠' };
   function cardHtml(c) { return '<span class="cd' + (c[1] === 'h' || c[1] === 'd' ? ' red' : '') + '">' + (c[0] === 'T' ? '10' : c[0]) + SUITSYM[c[1]] + '</span>'; }
+  // Raises read the way the site's raise box takes them: the chips on top of the call ("raise by"),
+  // with the street total after it. On Poker Patio, raise 3 facing a bet of 2 makes the bet 5.
+  function actionParts(sc, heroStageBet, toCall) {
+    if (!sc) return { main: '' };
+    if (sc.kind === 'fold') return { main: 'Fold' };
+    if (sc.kind === 'check') return { main: 'Check' };
+    if (sc.kind === 'call') return { main: 'Call ' + money(sc.amount) };
+    if (sc.kind === 'allin') return { main: sc.amount <= toCall + 1e-9 ? 'Call all-in ' + money(sc.amount) : 'All-in ' + money(heroStageBet + sc.amount) };
+    if (sc.kind === 'bet' && heroStageBet <= 0) return { main: 'Bet ' + money(sc.amount) };
+    var to = Math.round(heroStageBet + sc.amount);
+    return { main: 'Raise by ' + money(to - Math.round(heroStageBet + toCall)), to: money(to) };
+  }
   function actionText(sc, heroStageBet, toCall) {
-    if (!sc) return '';
-    if (sc.kind === 'fold') return 'Fold';
-    if (sc.kind === 'check') return 'Check';
-    if (sc.kind === 'call') return 'Call ' + money(sc.amount);
-    if (sc.kind === 'allin') return sc.amount <= toCall + 1e-9 ? 'Call all-in ' + money(sc.amount) : 'All-in ' + money(heroStageBet + sc.amount);
-    if (sc.kind === 'bet' && heroStageBet <= 0) return 'Bet ' + money(sc.amount);
-    return 'Raise to ' + money(heroStageBet + sc.amount);
+    var a = actionParts(sc, heroStageBet, toCall);
+    return a.to ? a.main + ' (to ' + a.to + ')' : a.main;
+  }
+  function actionHtml(sc, heroStageBet, toCall) {
+    var a = actionParts(sc, heroStageBet, toCall);
+    return esc(a.main) + (a.to ? ' <span class="to">to ' + esc(a.to) + '</span>' : '');
   }
   function tone(sc) { return !sc ? '' : sc.kind === 'fold' ? 'fold' : (sc.kind === 'check' || sc.kind === 'call') ? 'passive' : 'aggr'; }
   function sizeNote(s) {
@@ -8470,6 +8487,7 @@ function slim(r) {
     '.ev{font-size:12px;color:#aab3ad;flex:none}' +
     '.chev{flex:none;width:30px;height:30px;border:0;border-radius:8px;background:rgba(255,255,255,.08);color:inherit;font-size:15px}' +
     '.stale .act{opacity:.45}' +
+    '.act .to{font-weight:500;font-size:12px;color:#95a09a}' +
     '.badge{font-size:11px;padding:1px 6px;border-radius:99px;background:rgba(255,204,51,.18);color:#ffd866;flex:none}' +
     '.bd{padding:2px 12px 10px;display:flex;flex-direction:column;gap:10px;max-height:min(62vh,520px);overflow:auto;-webkit-overflow-scrolling:touch;border-top:1px solid rgba(255,255,255,.08)}' +
     '.hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:8px}' +
@@ -8695,7 +8713,7 @@ function slim(r) {
     else if (thinking && !fresh) mainEl.innerHTML = '<span class="act idle"><span class="spin"></span>Thinking…</span>';
     else if (advice) {
       var b = advice.result.best;
-      mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + esc(actionText(b, advice.ctx.heroStageBet, advice.result.toCall)) + '</span>' +
+      mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + actionHtml(b, advice.ctx.heroStageBet, advice.result.toCall) + '</span>' +
         (advice.result.close && fresh ? '<span class="badge">close</span>' : '') +
         '<span class="ev' + (advice.stale && sizing.note ? ' neg' : '') + '">' + (advice.stale ? (sizing.note ? 'bet under the advice' : 'last turn') : (b.kind === 'fold' ? '' : (b.ev >= 0 ? '+' : '−') + money(Math.abs(b.ev)))) + '</span>' + logBadge;
     } else if (hookProblem) mainEl.innerHTML = '<span class="act idle">No game events: needs an update</span>';
@@ -8728,8 +8746,9 @@ function slim(r) {
       if (ui.showOptions) {
         html += '<table>' + r.ranked.map(function (s) {
           var isBest = s.kind === best.kind && s.amount === best.amount;
-          var note = sizeNote(s);
-          return '<tr class="' + (isBest ? 'best' : '') + '"><td>' + esc(actionText(s, c.heroStageBet, r.toCall)) + (note ? ' <span class="muted">' + esc(note) + '</span>' : '') + '</td>' +
+          var a = actionParts(s, c.heroStageBet, r.toCall);
+          var note = [a.to ? 'to ' + a.to : '', sizeNote(s)].filter(Boolean).join(' · ');
+          return '<tr class="' + (isBest ? 'best' : '') + '"><td>' + esc(a.main) + (note ? ' <span class="muted">' + esc(note) + '</span>' : '') + '</td>' +
             '<td class="' + (s.ev < 0 ? 'neg' : s.ev > 0 ? 'pos' : '') + '">' + (s.ev >= 0 ? '+' : '−') + money(Math.abs(s.ev)) + '</td></tr>';
         }).join('') + '</table>';
       }

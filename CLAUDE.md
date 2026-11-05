@@ -422,6 +422,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   session. In the 31 Oct + 1 Nov logs hero's smaller bets cluster at a third of the pot and at the minimum bet, often
   with strong hands (min-bets with 94-96% equity against advised 50-150% pot); in the simulator, 4 in 10 strong bets at
   0.4x the advice cost about -87 ± 25 bb/100 (cliff bots, live, 1,000 deals).
+- Raise advice reads as raise-by (v1.8.22, display only): the site's raise box adds its number on top of the call
+  (raise 3 facing 2 makes the bet 5), so both panels show "Raise by $X" big with the total ("to $Y") small after it
+  (`actionParts`: by = round(heroStageBet + amount) - round(heroStageBet + toCall)). Bets, calls and all-ins are
+  unchanged. Hand-log `text` and `options[].a` read "Raise by $X (to $Y)" from this version on ("Raise to $Y" before);
+  the log tools read `kind`/`amount`, which are unchanged.
 - Bigger preflop raise heads-up (v1.8.6): with one opponent left, the preflop menu (toCall + f x (pot + toCall), f =
   0.6 / 1 / 1.6) also has f = 2.6 (`input.pfBigRaise: false` drops it), offered only while the raise-to stays at or
   under 30bb (`input.pfRaiseCapBB`), where friends stop calling raises. Logs: friends answer opens of 3.5-5bb and
