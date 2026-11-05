@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.24
+// @version      1.8.25
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -2171,9 +2171,11 @@ function ENGINE() {
   // shown preflop all-ins by depth: under 40bb mean place in a preflop ranking top 32% (6 shows), 40-100bb 21% (7),
   // 100bb+ 8% (4, three of them Mark's). The simulator can't judge it (its bots shove by hand strength).
   const DEEP_SHOVE = { from: 40, to: 100, width: 0.08 };
-  // Near-tie all-ins (v1.8.23, input.allinTie; off by default): an all-in pick gives way to the best option that isn't
-  // all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb over Mark's limp-
-  // re-raise at +2.26 chips, the call was +2.08 (bb 2 chips).
+  // Near-tie all-ins (v1.8.23, input.allinTie; on since v1.8.25, false turns it off): an all-in pick gives way to the
+  // best option that isn't all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb
+  // over Mark's limp-re-raise at +2.26 chips, the call was +2.08 (bb 2 chips). Simulator, live budget, v12r regulars,
+  // 1,000 deals each, on vs off: 4-handed 25bb +8.7 ± 5.0 and +21.8 ± 5.3, heads-up 25bb +10.6 ± 7.8, heads-up 150bb
+  // +7.0 ± 9.2, 4-handed 150bb -10.7 ± 11.5 (pooled +11.7 ± 3.0; 25bb +14.1 ± 3.3, 150bb +0.1 ± 7.2).
   const ALLIN_TIE_BB = 1;
   // Raise-to (bb) where a raiser's own read of re-raises has faded into continueRule's old rule (see continueRule).
   const PF_RAISED_READ_BB = 30;
@@ -6901,10 +6903,10 @@ function ENGINE() {
     function finish(ranked, best, runnerUp, margin, close, mix) {
       const bpOut = blueprintBlend(ranked, best);
       if (bpOut && bpOut.used) ({ ranked, best, runnerUp, margin, close, mix } = bpOut);
-      // Near-tie all-ins (input.allinTie, off by default; true = ALLIN_TIE_BB, a number = that many big blinds): when the
-      // pick is all-in and an option that isn't comes within the margin, play that one.
+      // Near-tie all-ins (input.allinTie, on since v1.8.25: ALLIN_TIE_BB; false turns it off, a number = that many big
+      // blinds): when the pick is all-in and an option that isn't comes within the margin, play that one.
       let allinTie = null;
-      const tieBB = input.allinTie === true ? ALLIN_TIE_BB : typeof input.allinTie === 'number' ? input.allinTie : 0;
+      const tieBB = input.allinTie === false ? 0 : typeof input.allinTie === 'number' ? input.allinTie : ALLIN_TIE_BB;
       if (tieBB > 0 && best && isAllInOption(best)) {
         const safe = ranked.filter((o) => o && o !== best && o.ev != null && isFinite(o.ev) && !isAllInOption(o) && o.ev >= best.ev - tieBB * bigBlind)
           .sort((a, b) => b.ev - a.ev)[0];
