@@ -1,20 +1,20 @@
 // How well the starting read (a player we know nothing about) predicts the hands people really
 // showed, over every live showdown in one or more exported hand logs. For each shown hand it
 // rebuilds the range street by street from the player's line and reports where the hand fell out.
-// Usage: node test/calibrate-reads.js <log.json> [more logs...]   (V=1 lists the misses)
+// Usage: node test/calibrate-reads.js <log.json> [more logs or folders...]   (V=1 lists the misses)
 //   vsGuess: geometric mean of (weight of the shown hand / average weight). 1 = a random guess.
 //   hits: shown hand in the likelier half of the range (calibrated: 50%).
 //   outside: shown hand below the top 90% of the range's weight (calibrated: 10%).
-const fs = require('fs');
+const { loadHands } = require('./merge-logs.js');
 const E = require('../src/engine.js');
 const T = require('../src/tracker.js');
 
 const files = process.argv.slice(2);
-if (!files.length) { console.log('usage: node test/calibrate-reads.js <log.json> [more logs...]'); process.exit(1); }
+if (!files.length) { console.log('usage: node test/calibrate-reads.js <log.json> [more logs or folders...]'); process.exit(1); }
 const rows = [];
 const steps = {};
-for (const f of files) {
-  for (const x of JSON.parse(fs.readFileSync(f, 'utf8'))) {
+{
+  for (const x of loadHands(files)) {
     if (!x.board || x.board.length < 3) continue;
     for (const p of x.players) {
       if (p.hero || !p.shown || p.shown.length !== 2 || p.folded) continue;

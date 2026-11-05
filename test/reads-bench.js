@@ -32,22 +32,8 @@ for (const a of args) {
   else files.push(a);
 }
 
-function loadHands(list) {
-  const seen = new Set();
-  const hands = [];
-  for (const f of list) {
-    const data = JSON.parse(fs.readFileSync(f, 'utf8'));
-    const arr = Array.isArray(data) ? data : data.history || [];
-    for (const h of arr) {
-      const key = h.t + ':' + (h.hero || []).join('');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      hands.push(h);
-    }
-  }
-  hands.sort((a, b) => a.t - b.t);
-  return hands;
-}
+// Exports and folders of exports, each hand once, in time order (test/merge-logs.js).
+const { loadHands } = require('./merge-logs.js');
 
 const PF_RANK = { fold: 0, check: 0, call: 1, raise: 2, '3bet': 2, '4bet': 2, '5bet': 2 };
 function pfCat(seq) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.20
+// @version      1.8.21
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -8529,7 +8529,9 @@ function slim(r) {
     else if (what === 'opts') { ui.showOptions = !ui.showOptions; save(UI_KEY, ui); render(); }
     else if (what === 'log') {
       var hands = tracker.db.history || [];
-      var url = URL.createObjectURL(new Blob([JSON.stringify(hands, null, 1)], { type: 'application/json' }));
+      // One hand per line (as the computer's export): about 40% smaller than indenting every field.
+      var text = '[\n' + hands.map(function (h) { return JSON.stringify(h); }).join(',\n') + '\n]\n';
+      var url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
       if (hands.length) { ui.loggedAt = hands[hands.length - 1].t || Date.now(); save(UI_KEY, ui); render(); }
       var link = document.createElement('a');
       link.href = url; link.download = 'patio-hand-log.json';

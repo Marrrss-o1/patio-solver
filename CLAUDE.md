@@ -29,6 +29,8 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
                          have changed (advice still runs). test/harness-watchdog.js checks both builds.
   overlay.js             Isolated-world panel (shadow DOM), owns the tracker, stores reads in chrome.storage.
   handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
+                         Exports (v1.8.21): "Hand log" opens a list: New hands (since the export mark, `nextMark`),
+                         one session (45-minute breaks, `sessions`) or everything; one hand per line (`toFile`).
   backup.js              A copy of the reads (and the newest 150 hands, no raw events) in pokerpatio.com's IndexedDB,
                          which survives removing the extension; a fresh install loads it (v1.8.5).
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
@@ -76,6 +78,9 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # and --budget phone: judge every solver change at live, and run both for any change
                          # touching flops or turns. The default (3,000 Monte Carlo, 120 river) is for quick checks.
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
+node test/merge-logs.js <out.json> <exports or folders...>  # one merged log: each hand once, fuller copy kept
+                         # (exports since v1.8.21 hold only new hands; every log tool below takes several
+                         # exports or folders and merges them the same way, `loadHands` in merge-logs.js)
 node test/reads-bench.js <logs>  # how well reads predict actions and shown hands (see Known gaps)
 node test/fit-priors.js <logs>   # refits the home-game read prior (READ_PRIORS.home) from hand-log exports
 node test/replay-log.js <log> [hands] [--vs <checkout>]  # re-runs the solver at every hero decision of an export
@@ -316,8 +321,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Close spots return `mix` (two options with frequencies) and `best` is picked from it with the input `seed`, which
   the tracker randomizes per decision. Pass `mix: false` and a fixed `seed` for deterministic tests.
 - `db.history` keeps the last 150 hands in the page; the extension stores each hand under its own key
-  (extension/handlog.js, unlimitedStorage), keeps the newest 1,000 with raw events, and the "Hand log" export has all
-  of them (#59). Each entry has `log` (every action in order with
+  (extension/handlog.js, unlimitedStorage) and keeps the newest 1,000 with raw events (#59). Until v1.8.20 the "Hand
+  log" export had all of them, so every export repeated every older hand (612 hands, 20 MB on 5 Nov). Since v1.8.21
+  "Hand log" opens a list on the panel: "New hands" (the hands after the export mark, `patioSolverLogMark`, kept apart
+  from the reads), one of the newest 6 sessions, or "Everything". The mark moves over the hands an export or an Import
+  covers without a gap (`nextMark`); the newest hand counts only once it has its result and ended a minute ago, so it
+  can be in two exports. With no mark yet (first export of this version), a session export counts the hands before
+  it as exported. Files are named by their hands' local time range and hold one hand per line (about 40% smaller than
+  the old indented JSON; a session is about 20 KB a hand). Analysis: pass the folder of exports (or several files) to
+  any log tool, or merge them with `node test/merge-logs.js`. The phone's export is unchanged (its 150 hands), one
+  hand per line too. Each entry has `log` (every action in order with
   `amt` added, `to`, `pot` before it, `facing`, `stack` before it, `potPct` for bets/raises, blinds as `sb`/`bb`),
   each player's starting `stack`, `advice` (pot, price, equity, hand, top 5 options with EVs, reads, hero's actual
   action in `did` and `followed`), and `net`/`heroNet`/`heroNetBB`, filled in from the next hand's starting stacks.
@@ -481,7 +494,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     hero's 15bb+ pots after a passive flop show at 0.74 of the read's range (n 23), bots 0.50-0.59.
 - Extra tally fields: `limpOpp/limp`, `f3betOpp/f3bet`, `donkOpp/donk`, `xrOpp/xr`, `wonSD/wonNoSD` (from stack
   changes), `tt` (think time per action kind). Shows carry `ms` per action. Not used by the engine yet.
-  `node test/analyze-log.js <export.json>` prints hero results by kind of spot.
+  `node test/analyze-log.js <exports or folders...>` prints hero results by kind of spot.
 - Showdown reads only see hands that were shown, so they over-sample hands that got called. Bluffs that won
   uncontested are invisible unless the player shows voluntarily.
 - Tally format (tracker.js `blankTally`): flat counts plus `st` (per street), `vs` (reaction by facing-bet size),

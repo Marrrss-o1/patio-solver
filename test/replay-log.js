@@ -1,9 +1,10 @@
 // Replays a real session from an exported hand log: rebuilds the tracker and the reads from each
 // hand's raw events, and re-runs the solver at every hero decision with this version's code.
 // Usage:
-//   node test/replay-log.js <patio-hand-log.json> [hands]            advice at every decision
+//   node test/replay-log.js <patio-hand-log.json> [more logs or folders] [hands]  advice at every decision
 //   node test/replay-log.js <log.json> [hands] --vs <other checkout>  only decisions that changed
-// `hands` is "all" or a list of hand numbers (0 = first hand in the log), e.g. 9,25,26.
+// Several exports (or a folder of them) are merged in time order (test/merge-logs.js).
+// `hands` is "all" or a list of hand numbers (0 = first hand in the merged log), e.g. 9,25,26.
 // `--vs` takes another checkout of the repo (git worktree add /tmp/main origin/main) and prints the
 // decisions where its advice differs from this one. Runs are deterministic (mix off, fixed seed).
 // Env: ITER=<n> overrides the Monte Carlo iterations, DB=<file> writes the rebuilt reads.
@@ -13,9 +14,12 @@ const path = require('path');
 const args = process.argv.slice(2);
 const vsAt = args.indexOf('--vs');
 const vsRepo = vsAt >= 0 ? path.resolve(args[vsAt + 1]) : null;
-const [logPath, which] = args.filter((a, i) => vsAt < 0 || (i !== vsAt && i !== vsAt + 1));
-if (!logPath) { console.log('usage: node test/replay-log.js <log.json> [all|0,5,9] [--vs <other checkout>]'); process.exit(1); }
-const hands = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+// Logs: exports or folders of them, merged (test/merge-logs.js); hands are numbered in the merged list.
+const rest = args.filter((a, i) => vsAt < 0 || (i !== vsAt && i !== vsAt + 1));
+const which = rest.find((a) => /^(all|[\d,]+)$/.test(a) && !fs.existsSync(a));
+const logPaths = rest.filter((a) => a !== which);
+if (!logPaths.length) { console.log('usage: node test/replay-log.js <log.json> [more logs or folders...] [all|0,5,9] [--vs <other checkout>]'); process.exit(1); }
+const hands = require('./merge-logs.js').loadHands(logPaths);
 const only = which && which !== 'all' ? which.split(',').map(Number) : null;
 
 function run(repo) {

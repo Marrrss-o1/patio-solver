@@ -37,10 +37,8 @@ function botHands(profFile, N, stacksBB) {
 }
 
 function logHands(fs_) {
-  const byT = new Map();
-  for (const f of fs_) for (const h of JSON.parse(fs.readFileSync(f, 'utf8'))) if (!byT.has(h.t)) byT.set(h.t, h);
   const card = (c) => { const x = E.parseCard(c); return x == null || x < 0 ? null : x; };
-  return [...byT.values()].map((h) => ({ entry: h, hole: (nm) => {
+  return require('../merge-logs.js').loadHands(fs_).map((h) => ({ entry: h, hole: (nm) => {
     const p = (h.players || []).find((x) => x.name === nm), s = p && p.shown;
     const c = s && s.length === 2 ? s.map(card) : null;
     return c && c.every((x) => x != null) ? c : null;

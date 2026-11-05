@@ -81,6 +81,39 @@ const fs = require('fs');
     const split = await text();
     console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT: ' + split.split('\n').find((l) => /Split:/.test(l)) : 'NOT SPLIT\n' + split);
   }
+  // EXPORT=1: "Hand log" opens the export list; "New hands" downloads the hands since the last
+  // export (here every replayed hand), one per line; a session's button downloads that session.
+  if (process.env.EXPORT) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (sel) => page.evaluate((q) => document.getElementById('patio-solver-host').shadowRoot.querySelector(q).click(), sel);
+    const grab = async (sel) => {
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), click(sel)]);
+      const file = path.join(out, dl.suggestedFilename());
+      await dl.saveAs(file);
+      const body = fs.readFileSync(file, 'utf8');
+      const hands = JSON.parse(body);
+      return { name: dl.suggestedFilename(), hands, lines: body.split('\n').length, bytes: body.length };
+    };
+    await page.waitForTimeout(1200); // the hand's save
+    await click('[data-a="log"]');
+    await page.waitForFunction(() => /New hands \(|No new hands/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 10000 });
+    console.log('--- hand log list ---');
+    console.log((await text()).split('\n').filter((l) => /stored|New hands|Everything|Sessions|·/.test(l)).join('\n'));
+    await page.screenshot({ path: path.join(out, 'ext_handlog.png') });
+    const a = await grab('[data-a="logNew"]');
+    const ok = a.hands.length > 0 && a.hands.every((h) => h.t && h.log) && a.lines === a.hands.length + 3 && /^patio-hand-log-\d{4}-\d\d-\d\d-\d{4}-to-/.test(a.name);
+    console.log((ok ? 'EXPORTED NEW: ' : 'BAD EXPORT: ') + `${a.name}, ${a.hands.length} hands, ${a.bytes} bytes`);
+    await page.waitForFunction(() => /Saved patio-hand-log/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 10000 });
+    // The newest hand ended under a minute ago, so it stays new for the next export.
+    const after = await text();
+    console.log(/New hands \(1\)/.test(after) ? 'NEWEST HAND STAYS NEW' : 'MARK WRONG\n' + after);
+    const b = await grab('[data-a="logSession"]');
+    console.log(b.hands.length === a.hands.length ? 'EXPORTED SESSION: ' + b.name : 'BAD SESSION EXPORT: ' + b.hands.length);
+    let [sw] = ctx.serviceWorkers();
+    if (!sw) sw = await ctx.waitForEvent('serviceworker');
+    const mark = await sw.evaluate(() => new Promise((res) => chrome.storage.local.get('patioSolverLogMark', res)));
+    console.log('MARK ' + JSON.stringify(mark));
+  }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'ext_end.png') });
   const panel = await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; });
