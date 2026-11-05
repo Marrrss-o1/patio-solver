@@ -755,7 +755,19 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   On the logs (2,032 hero decisions, 12 facing an all-in re-raise) it changes three: A2o (#868 of the evening) and Q7o
   call -> fold, A9o vs AJs call -> fold (0.60 -> 0.43); 77 vs JJ still calls (0.65 -> 0.51, 0.46 needed). Simulator:
   red-team presets `xp:deepshove` (top 8% re-raise all-in 60% facing a raise 40bb+ deep, nothing else shoves there) and
-  `xp:deepbluff` (plus 15% of the top half: about half bluffs).
+  `xp:deepbluff` (plus 15% of the top half: about half bluffs). Live budget, v12r regulars, 1,000 deals each, on (every
+  player tight) vs off: against deepshove heads-up +35.8 ± 10.6, 3-handed +42.4 ± 17.5; against deepbluff heads-up
+  +23.0 ± 20.8, 3-handed +36.1 ± 23.0; against the plain regulars (who jam wide hands deep now and then, like most
+  friends) 4-handed -21.5 ± 10.3 (800 deals), heads-up -5.6 ± 3.0 (good hands and the big blind fold to wide shoves).
+  Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/.
+  Per player since v1.8.26 (`deepShoveTrust`, `DEEP_SHOVE.prior` 0.1; `{ prior: 1 }` is the v1.8.23 rule): the blend
+  is scaled by a trust that starts at the prior and moves by each of the player's own shown all-in re-raises deep
+  enough to count (the newest 10 of `tally.jamShows`: the tracker records every preflop all-in re-raise whose cards are
+  seen, at showdown or shown after a fold, at any board, newest 20, kept out of decay): the log-likelihood ratio of the
+  shown hand under the tight read over the usual one. One AKs at 130bb takes it from 0.10 to 0.36, AKs and JJ (500bb
+  into 250bb) to 0.74, a Q2o at 85bb down to 0.07. Replaying the logs with reads rebuilt in order (deepspots.js), Mark's
+  trust over tonight's deep shoves is 0.10 / 0.35 / 0.35 / 0.74, and no logged decision changes (the global version
+  changed three).
 - Near-tie all-ins (v1.8.23, `ALLIN_TIE_BB` 1; on since v1.8.25: `input.allinTie: false` turns it off, a number sets the
   margin in big blinds): when the pick is all-in (hero's whole stack, or every opponent left is all-in once they match
   it) and an option that isn't comes within the margin of its EV, that option is played; the result's `allinTie` (kind,

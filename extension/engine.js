@@ -1660,10 +1660,36 @@
   // How far a deep all-in re-raise has moved toward DEEP_SHOVE's tight read: 0 up to ds.from big blinds, 1 from ds.to.
   // The depth is the raise-to, capped by the most chips any other player still in had at the start of the hand
   // (sizes.preCover, from the tracker since v1.8.23): a big stack shoving into short ones risks only theirs.
+  // ds.trust (deepShoveTrust) scales it per player.
+  const deepRamp = (to, cover, ds) => clamp(((cover != null ? Math.min(to, cover) : to) - ds.from) / Math.max(1e-9, ds.to - ds.from), 0, 1);
   function deepShoveBlend(sizes, ds) {
-    const depth = sizes.preCover != null ? Math.min(sizes.preTo, sizes.preCover) : sizes.preTo;
-    const g = clamp((depth - ds.from) / Math.max(1e-9, ds.to - ds.from), 0, 1);
+    const g = deepRamp(sizes.preTo, sizes.preCover, ds) * (ds.trust != null ? ds.trust : 1);
     return g > 0 ? { g, width: ds.width } : null;
+  }
+  // How far a player's own shown all-in re-raises (tally.jamShows, from the tracker since v1.8.26) say their deep ones
+  // are the tight kind: the prior odds (ds.prior) times, for each of the newest 10 shows deep enough to count, the
+  // likelihood of the shown hand under the tight read over the usual one. ds.prior 1 skips the learning: every player's
+  // deep shoves read tight (the v1.8.23 option).
+  function deepShoveTrust(stats, ds, jamShows) {
+    const prior = ds.prior != null ? +ds.prior : DEEP_SHOVE.prior;
+    if (prior >= 1) return 1;
+    const p0 = clamp(prior, 1e-6, 1 - 1e-6);
+    let lo = Math.log(p0 / (1 - p0));
+    const sr = stats.shoveRange || SHOVE_RANGE;
+    const shove = Math.max(stats.vpip * sr.vpip, sr.min);
+    for (const s of (jamShows || []).slice(-10)) {
+      if (!s || !s.cards || s.cards.length !== 2 || !(s.to > 0) || !/^\dbet$/.test(s.pre || '')) continue;
+      const g = deepRamp(s.to, s.cover, ds);
+      if (!(g > 0)) continue;
+      const a = typeof s.cards[0] === 'number' ? s.cards[0] : parseCard(s.cards[0]), b = typeof s.cards[1] === 'number' ? s.cards[1] : parseCard(s.cards[1]);
+      if (!(a >= 0 && b >= 0) || a === b) continue;
+      const k = COMBO_INDEX[a * 52 + b];
+      const W = preflopRange(stats, s.pre, null, null, shove, null), T = preflopRange(stats, s.pre, null, null, shove, { g, width: ds.width });
+      const sw = sumWeights(W), st = sumWeights(T);
+      if (!(W[k] > 0 && T[k] > 0 && sw > 0 && st > 0)) continue;
+      lo += Math.log((T[k] / st) / (W[k] / sw));
+    }
+    return 1 / (1 + Math.exp(-lo));
   }
 
   function buildRange(stats, actions, strengths, deadCards, sizes, pfAggressor, position, noTilt) {
@@ -2154,7 +2180,10 @@
   // hand's equity against a random one (the advice called his 513bb 4-bet shove with 77; he had JJ). All logs to 5 Nov,
   // shown preflop all-ins by depth: under 40bb mean place in a preflop ranking top 32% (6 shows), 40-100bb 21% (7),
   // 100bb+ 8% (4, three of them Mark's). The simulator can't judge it (its bots shove by hand strength).
-  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08 };
+  // Per player since v1.8.26 (deepShoveTrust): the tight read applies by how much that player's own shown all-in
+  // re-raises fit it, from a prior of `prior`. Against the friend bots, who jam wide hands at 150bb now and then, the
+  // v1.8.23 version (prior 1, everyone tight) lost (4-handed, see CLAUDE.md), as the logs say for most friends.
+  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.1 };
   // Near-tie all-ins (v1.8.23, input.allinTie; on since v1.8.25, false turns it off): an all-in pick gives way to the
   // best option that isn't all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb
   // over Mark's limp-re-raise at +2.26 chips, the call was +2.08 (bb 2 chips). Simulator, live budget, v12r regulars,
@@ -5636,7 +5665,10 @@
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
       if (shr) { stats.shoveRange = shr; if (statsHU) statsHU.shoveRange = shr; }
       // Deep all-in re-raises read tight (DEEP_SHOVE), only with input.deepShove.
-      if (dsh) { stats.deepShove = dsh; if (statsHU) statsHU.deepShove = dsh; }
+      if (dsh) {
+        const ds = Object.assign({}, dsh, { trust: deepShoveTrust(stats, dsh, o.tally && o.tally.jamShows) });
+        stats.deepShove = ds; if (statsHU) statsHU.deepShove = ds;
+      }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;

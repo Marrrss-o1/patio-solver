@@ -29,6 +29,7 @@
     return Object.prototype.hasOwnProperty.call(SEAT_KEY, pos) ? SEAT_KEY[pos] : seatNum(pos);
   }
   const MAX_SHOWS = 80;
+  const MAX_JAM_SHOWS = 20;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -38,7 +39,7 @@
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows') continue;
+      if (k === 'shows' || k === 'jamShows') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -91,6 +92,9 @@
       pos: { early: posTally(), late: posTally(), blinds: posTally() },
       // Hands they showed after betting or raising: { cards, board, agg: [{ n: boardLen, frac }] }.
       shows: [],
+      // Preflop all-in re-raises whose cards were seen, at any point of the hand (v1.8.26, DEEP_SHOVE's per-player read):
+      // { cards, pre, to, cover } with the raise-to and the biggest stack still in, in big blinds. Newest MAX_JAM_SHOWS.
+      jamShows: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -120,7 +124,7 @@
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows') continue;
+      if (k === 'shows' || k === 'jamShows') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -134,6 +138,9 @@
     const shows = [];
     for (const t of list) for (const sh of t.shows || []) shows.push(sh);
     out.shows = shows.slice(-MAX_SHOWS);
+    const jams = [];
+    for (const t of list) for (const sh of t.jamShows || []) jams.push(sh);
+    out.jamShows = jams.slice(-MAX_JAM_SHOWS);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -1140,6 +1147,17 @@
       if (!p.shown.includes(card)) p.shown.push(card);
       if (p.shown.length !== 2 || p.logged) return;
       p.logged = true;
+      // A preflop all-in re-raise, shown at showdown or after everyone folded (DEEP_SHOVE's per-player read).
+      const pre0 = PatioTracker.preAction(p);
+      if (/^\dbet$/.test(pre0) && p.sizes.preTo > 0 && p.sizes.preBehind != null && p.sizes.preBehind <= 0.1 * p.sizes.preTo) {
+        const rj = this.record(p.auth, p.name);
+        if (rj) {
+          if (!rj.tally.jamShows) rj.tally.jamShows = [];
+          rj.tally.jamShows.push({ cards: p.shown.slice(), pre: pre0, to: p.sizes.preTo, cover: p.sizes.preCover != null ? p.sizes.preCover : null });
+          if (rj.tally.jamShows.length > MAX_JAM_SHOWS) rj.tally.jamShows.splice(0, rj.tally.jamShows.length - MAX_JAM_SHOWS);
+          if (h.board.length < 3) this.emit('save', this.db);
+        }
+      }
       if (h.board.length < 3) return;
       const r = this.record(p.auth, p.name);
       if (!r) return;
