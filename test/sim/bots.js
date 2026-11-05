@@ -317,6 +317,7 @@ const HOME_DEFAULT = {
   // v8: the continue cut also moves by potCall x ln(pot / 10bb) (fitted, pooled). At the same fraction of the pot friends
   // fold a little more in big pots (25-110% pot bets: 44% in pots under 10bb, 50% at 20bb+); range-relative bots don't.
   potCall: 0,
+  heroRiverAbs: 0, heroRiverW: 0.02, heroRiverHU: 0,   // v9: answers to hero's river bets by absolute strength (0: off)
 };
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
@@ -450,6 +451,13 @@ function homeBot(params) {
       if (P.commit && v.put > 0) {
         const c = v.put / Math.max(1e-9, v.put + v.stack), fo = clamp(1 - pCont, 1e-4, 1 - 1e-4), m = Math.exp(P.commit * c);
         pCont = 1 - (fo * m) / (fo * m + 1 - fo);
+      }
+      // Facing hero's river bet (v9): the friends answer hero's river bets by absolute strength whatever the size or the
+      // read (river-bluff thread, 5 Nov: heads-up they continued iff the hand beat about 55% of all hands, n 30; against
+      // each other's bets they fold as read). Continue iff hp clears heroRiverAbs (soft edge heroRiverW); heroRiverHU 1
+      // limits it to heads-up answers.
+      if (P.heroRiverAbs && v.street === 5 && v.lastAgg === v.heroSeat && (!P.heroRiverHU || v.nOpp === 1)) {
+        pCont = sig((hp - P.heroRiverAbs) / (P.heroRiverW || 0.02));
       }
       const reR = P.reRaise !== 1 && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? P.reRaise : 1;
       const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hpC - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
