@@ -743,7 +743,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   same. A softer edge (w 0.1-0.24 instead of 0.04) fits much better still on every set but hero's multiway flops, which
   says the answer model is noisy, not that the read's fold level is off. Log replay (live budget, with riverMadeCall):
   25 of 243 flop decisions change (medium hands check or bet smaller, a few semi-bluffs grow), 6 of 155 turn decisions
-  (near ties). Off is identical to before (80 flop and turn decisions checked). Sims:
+  (near ties). Off is identical to before (80 flop and turn decisions checked). Simulator, v9 bots, on vs off, 1,000
+  deals each: live 4-handed -41.7 ± 22.6, 5-handed +16.9 ± 25.3, 6-handed +3.0 ± 15.7 (pooled -6 ± 12), phone
+  4-handed +24.2 ± 25.0. No win, so it stays off. The bots keep strong draws (drawCall) but fold weak made hands by a
+  fixed strength line, so they are only partly like the friends' floats. Files:
   /mnt/project-files/patio-solver/sims/2026-11-05-respdraw/.
 - Check-line reads (#47): facing a bet after checking on that street, friends fold more (fold odds x1.25) and check-
   raise half as often as their raise rate says; facing a bet before acting on the street (a lead) they raise 1.4x as
