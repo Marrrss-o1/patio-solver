@@ -2079,7 +2079,11 @@
       const aggScale = ctx.aggro ? clamp(o.stats.foldAfterAgg / Math.max(0.05, o.stats.foldToBet), 0.15, 1) : 1;
       for (let g = 0; g <= 60; g++) grid[g] = q(aggScale * foldAtSize(o.stats, g * 0.05, s));
       const callCut = (f) => grid[Math.min(60, Math.round(f * 20))];
-      const c0 = lowerBound(x, callCut(HERO_BET));
+      // Made hands call hero's river bets (ctx.madeCall, RIVER_MADE_CALL): river strengths here are each hand's share
+      // of all hands on the board it beats, so against hero's bet they continue from min(read's cut, madeCall).
+      const madeA = s === 5 && ctx.madeCall > 0 ? ctx.madeCall : 0;
+      const heroCallCut = madeA ? (f) => Math.min(callCut(f), madeA) : callCut;
+      const c0 = lowerBound(x, heroCallCut(HERO_BET));
       // After they check a later street of the lookahead and face hero's bet, the answer comes from
       // the hands that checked (below vCut, less the bluffs that bet instead), at the read's
       // after-check fold rate (stats.line, #47). Cutting the whole street's range there instead made
@@ -2099,11 +2103,15 @@
         const kf = (o.stats.line && o.stats.line.checkedFold) || 1;
         const g2 = new Float64Array(61);
         for (let g = 0; g <= 60; g++) g2[g] = qc(oddsScale(aggScale * foldAtSize(o.stats, g * 0.05, s), kf));
-        const cut = (f) => g2[Math.min(60, Math.round(f * 20))];
+        const cut0 = (f) => g2[Math.min(60, Math.round(f * 20))];
+        // Only hero bets into a checked later street of the heads-up lookahead, so the made-hand floor goes in here.
+        const cut = madeA ? (f) => Math.min(cut0(f), madeA) : cut0;
         const c = Math.min(lowerBound(x, cut(HERO_BET)), V);
+        let fh = oddsScale(aggScale * foldAtSize(o.stats, HERO_BET, s), kf);
+        if (madeA && Wc > 0) { const L = lb(madeA); fh = Math.min(fh, (keepA * Math.min(L, A) + Math.max(0, Math.min(L, V) - A)) / Wc); }
         chk = {
-          callCut: cut,
-          foldHero: oddsScale(aggScale * foldAtSize(o.stats, HERO_BET, s), kf),
+          callCut: cut0, heroCallCut: cut,
+          foldHero: fh,
           // Hero value-bets when it beats 55% of the checked hands that would call.
           valueCut: c < V ? x[c + Math.floor(0.55 * (V - 1 - c))] : vCut,
           eqVsCall: (h) => (c < V ? clamp((lb(h) - c) / (V - c), 0, 1) : 1),
@@ -2123,8 +2131,8 @@
         eqVsRaise: (h) => (cumR[n] > 0 ? cumR[lb(h)] / cumR[n] : 1),
         vCut, airCut, pBluff,
         betFrac: o.stats.betSize,
-        foldHero: aggScale * foldAtSize(o.stats, HERO_BET, s),
-        callCut, checked,
+        foldHero: madeA ? Math.min(aggScale * foldAtSize(o.stats, HERO_BET, s), lb(madeA) / n) : aggScale * foldAtSize(o.stats, HERO_BET, s),
+        callCut, heroCallCut, checked,
         // Hero value-bets when it beats 55% of the hands that would call.
         valueCut: c0 < n ? x[c0 + Math.floor(0.55 * (n - 1 - c0))] : 2,
         eqVsCall: (h) => (c0 < n ? Math.max(0, lb(h) - c0) / (n - c0) : 1),
@@ -5308,6 +5316,8 @@
     const RMC = input.riverMadeCall === false ? 0 : typeof input.riverMadeCall === 'number' ? input.riverMadeCall : RIVER_MADE_CALL;
     // The turn solver's river subgames: the same rule unless input.turnMadeCall is false.
     const TMC = input.turnMadeCall === false ? 0 : RMC;
+    // And the Monte Carlo's lookahead (plans for the flop and the turn), unless input.planMadeCall is false.
+    const PMC = input.planMadeCall === false ? 0 : RMC;
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const aggScaleOf = (st) => (AGGRO_FOLD === 'none' ? 1 : clamp(st.foldAfterAgg / Math.max(0.05, st.foldToBet), 0.15, 1));
@@ -5675,7 +5685,7 @@
         st.foldShift = (VARIANTS[v].foldShift || 0) + (opps[i].stats.foldShift || 0);
         plans[key] = makePlan({ stats: st, sampler: opps[i].sampler },
           { street, dead, current, runouts, seed: (seed ^ (0x5bd1e995 + i * 7919)) >>> 0, samples: input.planSamples, aggro: opps[i].aggroFold,
-            draws: planDraws[i] || (planDraws[i] = {}) });
+            draws: planDraws[i] || (planDraws[i] = {}), madeCall: PMC });
       }
       return plans[key];
     }
@@ -5721,7 +5731,7 @@
           const bluff = !value && s === 5 && c.eqVsCall(sh) < 0.2 && c.foldHero * P - (1 - c.foldHero) * B > 0.05 * P;
           if (!value && !bluff) return 'check';
           const raises = left > B && (so >= t.rCut || (so < t.airCut && rng() < t.pBluffR));
-          if (!raises && so < c.callCut(B / P)) return 'won';
+          if (!raises && so < (c.heroCallCut || c.callCut)(B / P)) return 'won';
           if (raises) {
             raisedNow = true;
             const R = Math.min(left, roundChips(B + (P + 2 * B), bigBlind));
@@ -5776,6 +5786,8 @@
     // chance against every live range beats the price. When hero checked and opponents are
     // still to act, the current street is played first, so checking isn't a free card.
     // Once a single opponent is left, the heads-up playout (with river bluffs) takes over.
+    // The cut an opponent continues from against a bet: hero's bets get the made-hand floor (heroCallCut).
+    const respCut = (t, chk, heroBet) => { const c = chk ? t.checked() : t; return heroBet && c.heroCallCut ? c.heroCallCut : c.callCut; };
     const multiAlive = new Uint8Array(opps.length);
     const multiState = new Uint8Array(opps.length); // 0 checked/unknown, 1 bet, 2 called, 3 raised
     const multiPut = new Float64Array(opps.length);
@@ -5881,7 +5893,7 @@
               if (raiser === -2 && so >= t.rCut && left > B) {
                 R = Math.min(left + heroPut, roundChips(B + (P + B), bigBlind));
                 raiser = a; multiState[a] = 3; P += R - multiPut[a]; multiPut[a] = R;
-              } else if (raiser === -2 ? so >= (laChecked && s !== street && multiLine[a] === LINE_CHECK ? t.checked() : t).callCut(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
+              } else if (raiser === -2 ? so >= respCut(t, laChecked && s !== street && multiLine[a] === LINE_CHECK, bettor === HERO)(B / Math.max(1, P - B)) : so >= t.raiseCallCut) {
                 P += target - multiPut[a]; multiPut[a] = target; if (multiState[a] !== 1) multiState[a] = 2;
               } else multiAlive[a] = 0;
             }
