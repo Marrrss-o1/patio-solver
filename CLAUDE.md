@@ -790,9 +790,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   | --- | --- | --- | --- |
   | xp:deepshove | heads-up | +3.3 ± 11.4; -2.2 ± 4.6 (1,200 warm-up hands) | +41.5 ± 14.0; +18.2 ± 9.7 |
   | xp:deepshove + friends | 3-handed | +17.7 ± 16.8 | +52.7 ± 21.7 |
+  | xp:deepshove + friends | 4-handed | | +24.4 ± 14.6; +27.1 ± 20.8 |
   | xp:deepbluff | heads-up | +9.8 ± 8.6 | -0.2 ± 0.5 |
   | plain regulars | heads-up | 0 (all 2,000 the same); 0 (1,200 warm-up) | 0 (all 2,000 the same) |
-  | plain regulars | 4-handed | +0.6 ± 11.2 | -0.1 ± 7.6 |
+  | plain regulars | 4-handed | +0.6 ± 11.2 | -0.1 ± 7.6; -10.9 ± 7.0; -2.8 ± 3.8; -2.5 ± 3.6 |
+  Pooled at 0.3: with a tight deep shover at the table about +28 ± 6 (five runs), plain regulars 4-handed about
+  -3.3 ± 2.3 (four runs, 23-110 of 4,000 hands differ: the 30% tight share folds a few good hands to their wide deep
+  jams before any of them is shown). The merge (#110) was on the first five prior-0.3 runs; the 4-handed seeds 936
+  and 942-945 came after it.
   With 1,200 warm-up hands the trust is 1.00 by the time hero faces the tight bot (15-18 shows), and A has learned most
   of it from the showdowns too, so B and A barely differ: the read matters while a player's read is young (Mark's
   account was new on 5 Nov). Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/ (dsl-*, dsl3-*).
@@ -816,6 +821,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   morning); after the flop 0.23 vs 0.07 (n 15: friends call hero's postflop shoves); equity when called on target (0.67
   vs 0.63, n 19). Equity of calls and called shoves by predicted bucket: 0-0.5 real +0.14, 0.5-0.65 -0.10, 0.65-0.8
   -0.11, 0.8+ on target (n 36): the read's all-in equities are too far from 0.5 in the middle.
+  After the flop in full (v1.8.27, pf-allin.js, pf-sum.js; all 1,108 postflop decisions, 47 all-in spots): calls plus
+  called shoves (n 27) predicted 0.67, real 0.70 (+0.03 ± 0.06); flop -0.13 ± 0.11 (n 8: AQ vs Q7, KK vs 97, AJ vs Q5
+  trips), turn -0.02 ± 0.13, river +0.18 ± 0.08 (friends' river shoves weaker than read); by depth (<30 / 30-80 / 80+
+  bb) +0.03 / -0.02 / +0.12, Mark +0.05, others +0.02; spots the panel advised -0.05 ± 0.08 (n 17). Of 10 calls, the real
+  hand flips 3 advised calls and 3 advised folds. Hero's postflop all-ins: everyone folded 1 of 15, predicted 29%, but
+  all were value shoves (equity when called 0.6-1.0), so it under-rates them; none is a low-equity shove. No group is
+  clearly overconfident, so no fix. Every postflop bet (pf-bigbets.js, 494): heads-up folds on target at every share of
+  the stack; multiway bets of 45%+ pot all-fold 44% vs 23% predicted (n 45), the leak hunt's mwBetFold finding.
+  Files: sims/2026-11-05-allin/pf-*.
 - Leak hunt (5 Nov, /mnt/project-files/patio-solver/leakhunt-2026-11-05/, REPORT.md, scripts/): every logged decision
   re-solved with 1-chip changes (pot, stack, a bet, an opponent's stack) and with bet-size, preflop-size and depth
   sweeps, against seed-to-seed noise, plus shown hands against the read by line. Steps found: pfRaisedRead at 30bb
