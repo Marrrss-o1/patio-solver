@@ -444,6 +444,24 @@
   // extra folds above pot made weak overbets look profitable (they lost real money). `ftb` is read as the
   // fold rate against a third of the pot, about the usual bet in the home game.
   const FOLD_CURVE = { ref: 0.33, k: 0.9, flat: 0.8, k2: 0.2 };
+  // On the river the curve is flatter (v1.8.17, foldAtSizeRead; input.riverFoldCurve: false turns it off, a number
+  // sets k): fold odds x (clamp(f, lo, hi) / lo)^k on top of everything else, so from a third of the pot to 0.8 pot
+  // the river odds grow with the size to the power 0.3, not 0.9. All 275 first answers to river bets in the logs
+  // (31 Oct - 4 Nov, every bettor, reads from earlier hands only, test/reads-bench.js): bets of 0.55-1.2 pot were
+  // folded to 54% where the read said 70% (n 96, z -3; hero's bets 50% vs 68%, n 22), 0.3-0.55 pot 52% vs 54%, flop
+  // and turn on target at every size. Pot size and preflop action add nothing once the size is in (ln pot +0.07 ±
+  // 0.13, 3-bet pots +0.25 ± 0.40 in log-odds). k fitted on all river answers -0.61 ± 0.23 (-0.57 on 31 Oct - 2 Nov
+  // alone, which then predicts 3-4 Nov's 80 answers 1.9 nats better).
+  // Overbets fold about as read (1.2-1.6 pot 73% vs 70%, n 15; bigger ones more, mostly into pots under 10bb), so the
+  // shift fades out between 1.2 and 2 pot (`fade`).
+  const RIVER_FOLD_CURVE = { k: -0.6, lo: 0.33, hi: 0.8, fade: [1.2, 2] };
+  function riverCurve(stats, f, p) {
+    const rc = stats.riverCurve !== undefined ? stats.riverCurve : RIVER_FOLD_CURVE;
+    if (!rc || !rc.k) return p;
+    const w = rc.fade ? clamp((rc.fade[1] - f) / (rc.fade[1] - rc.fade[0]), 0, 1) : 1;
+    if (!(w > 0)) return p;
+    return clamp(sigmoid(logit(clamp(p, 0.02, 0.98)) + w * rc.k * Math.log(clamp(f, rc.lo, rc.hi) / rc.lo)), 0.02, 0.98);
+  }
   function modelFold(ftb, f) {
     const C = FOLD_CURVE;
     const x = Math.max(0.05, f);
@@ -1391,7 +1409,7 @@
     // players call overbets more than the pot-odds math suggests.
     const top = SIZE_BUCKETS[SIZE_BUCKETS.length - 1][1];
     const base = f <= top ? modelFold(ftb, f) : modelFold(ftb, top) + 0.3 * (modelFold(ftb, f) - modelFold(ftb, top));
-    if (!stats.foldBySize) return base;
+    if (!stats.foldBySize) return n === 5 ? riverCurve(stats, f, base) : base;
     const at = stats.sizeAnchor || {};
     const corr = SIZE_BUCKETS.map(([k, c]) => { const f = at[k] != null ? at[k] : c; return [f, stats.foldBySize[k] - modelFold(stats.foldToBet, f)]; });
     let d;
@@ -1403,7 +1421,8 @@
       const w = (f - corr[i][0]) / (corr[i + 1][0] - corr[i][0]);
       d = corr[i][1] * (1 - w) + corr[i + 1][1] * w;
     }
-    return clamp(base + d + (stats.foldShift || 0), 0.02, 0.98);
+    const p = clamp(base + d + (stats.foldShift || 0), 0.02, 0.98);
+    return n === 5 ? riverCurve(stats, f, p) : p;
   }
 
   function aggressionProbs(W, st, freq, vr) {
@@ -5284,6 +5303,11 @@
       if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
+      // The river's flatter fold curve (RIVER_FOLD_CURVE). input.riverFoldCurve: false turns it off, a number sets k.
+      if (input.riverFoldCurve != null) {
+        const rc = input.riverFoldCurve === false ? null : typeof input.riverFoldCurve === 'number' ? Object.assign({}, RIVER_FOLD_CURVE, { k: input.riverFoldCurve }) : input.riverFoldCurve;
+        stats.riverCurve = rc; if (statsHU) statsHU.riverCurve = rc;
+      }
       const actions = Object.assign({ pre: 'call', flop: '', turn: '', river: '' }, o.actions || {});
       const currentAction = actions[streetName] || '';
       const pending = street === 0 ? (actions.pre || 'pending') === 'pending' : !currentAction;
