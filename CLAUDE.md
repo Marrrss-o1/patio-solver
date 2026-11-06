@@ -923,7 +923,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   tawan 2: 0.11, gunner 2: 0.29); all 24 together fit best at 0.3 (0.15-0.3 within 0.4 nats), so 0.2 stays the centre.
   Out of sample (each show at the tilt from the player's earlier shows): no tilt 15.64 nats, flat 0.2 18.72, k 15 18.39,
   k 30 18.46, k 60 18.61: the shows can't tell players apart yet. Log replay: 2 decisions change, both river calls that
-  lost becoming folds (31 Oct 45 vs Tad on 9-6-5-4-3, 5 Nov J8 vs mewnow on 9-9-7-8-K; +31.5bb).
+  lost becoming folds (31 Oct 45 vs Tad on 9-6-5-4-3, 5 Nov J8 vs mewnow on 9-9-7-8-K; +31.5bb). Simulator: with
+  mwBetFold's per-player read, see "Hero's multiway bets" below.
 - Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
   on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
   (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
@@ -1001,7 +1002,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   2,032 decisions, reads and answers from earlier hands): 24 decisions change, all multiway after the flop and near ties
   (bet sizes in 6-24 chip pots, a few bets become checks and back); everyone folding to hero's multiway bets, predicted
   at hero's size: 40%+ of the pot flat 0.464 (log-likelihood -24.15), per player 0.444 (-23.60), actual 0.471 (n 34);
-  all sizes -49.87 -> -49.29 (n 96).
+  all sizes -49.87 -> -49.29 (n 96). Simulator, v12r regulars, live budget, 1,000 deals each, per player (both reads)
+  vs flat (`{"mwBetFold":{"tau":0},"checkBetTilt":{"learn":false}}`): 4-handed +28.3 ± 26.8, 5-handed +0.2 ± 21.2,
+  `xp:riverxb` heads-up +1.0 ± 5.2 (53 of 2,000 hands differ), `xp:riverxb` + friends 3-handed -20.8 ± 21.9 (pooled
+  +0.8 ± 4.8; the three multiway runs -0.6 ± 13.2): no real loss. Files: /mnt/project-files/patio-solver/sims/
+  2026-11-06-perplayer/ (replay/ has the log replay and the split scripts).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
