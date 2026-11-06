@@ -2211,7 +2211,12 @@
   // after 200 hands and 0.3 from 250 (13 shows in hero's pots). A prior of 0.3 cost -5 +- 4 bb/100 on bots that
   // don't trap (18 runs) and -20 +- 8 on bots that tighten up in hero's big pots (4 runs); 0 is neutral on both.
   // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only; that was no better).
-  const HERO_POT_TILT = { tilt: 0, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3 };
+  // Per player since v1.8.32 (`own`, heroPotOwn): the table's learned tilt is each player's starting point, and their own
+  // shows in hero's pots move it, shrunk to it by `own` pseudo-shows (0: the table's tilt for everyone, as before).
+  // Clean full log (31 Oct - 6 Nov, 68 such shows, each scored at the tilt from earlier shows only): no tilt 37.67 nats,
+  // the table's tilt 37.25, per player own 5 / 15 / 30 / 60: 39.22 / 39.20 / 38.95 / 38.24. The table's tilt fell from
+  // 0.29 (3 Nov) to 0-0.15 (5-6 Nov) as MarkMaodjaoj's shows came in (his own about 0); others' stay near 0.15-0.3.
+  const HERO_POT_TILT = { tilt: 0, flopAgg: 0, from: 10, to: 25, learn: true, k: 15, kBase: 10, min: 0, street: 3, own: 15 };
   // River overbets read stronger (v1.8.14, input.overbetTilt): a river bet or raise of `size` x the pot or more (the
   // tracker caps sizes at 3, so 3 means 300% or more) gets an extra strength tilt (buildRange's bias). In the logs
   // (31 Oct - 4 Nov) the 9 shown river bets and raises of 3x pot or more sat at 0.68 of the read's range (0.5 = on
@@ -2228,7 +2233,12 @@
   // for raises under 3x the pot (n 19); log-likelihood of the 21 by tilt 0 / 0.15 / 0.3 / 0.5: 20.4 / 23.1 / 23.5 /
   // 21.2 nats over a random guess. River bets fit best with no tilt (n 220). The read keeps a quarter of the range
   // noise on turn and river raises already; 8 of 10 shown river raises were strong in the older logs.
-  const RIVER_RAISE_TILT = { tilt: 0.3, street: 5 };
+  // Per player since v1.8.32 (riverRaiseLearned; `{ learn: false }` is the flat rule): 0.3 is the table's number, the
+  // player's own shown river raises move it, shrunk to it by k pseudo-shows, never below `min`. All logs to 6 Nov
+  // afternoon (33 shown river raises, 17 players, each scored at the tilt from the player's earlier raises only): no tilt
+  // 31.53 nats, flat 0.3 33.24, per player k 5 / 15 / 30: 34.68 / 34.07 / 33.69 (MarkMaodjaoj's three on 6 Nov sat at
+  // 0.48, 0.40 and 0.20 of the tilted read; his seven before at 0.71). Overbets stay flat: 13 shows, per player ties.
+  const RIVER_RAISE_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: 0, max: 0.75 };
   // Bets into hero's river check read stronger (v1.8.28, CHECK_BET_TILT; input.checkBetTilt: false turns it off, a number
   // sets the tilt): facing a river bet after hero checked the river, the bettor's range gets this strength tilt, like
   // RIVER_RAISE_TILT (the larger applies; neither stacks on the hero-pot tilt). Leak hunt, 6 Nov: shown river bets after
@@ -2241,6 +2251,21 @@
   const CHECK_BET_TILT = { tilt: 0.2, street: 5, learn: true, k: 15, min: -0.3, max: 0.75 };
   // A player's shown river bets made after hero checked the river: their tilt log-likelihoods summed, and the tilt that
   // fits them on top of cfg.tilt's prior (cfg.k). Shows scored by another FIT_VERSION are left out. Returns { tilt, n }.
+  // A player's own river-raise tilt (RIVER_RAISE_TILT): their shown river raises (any raise line), shrunk to cfg.tilt.
+  function riverRaiseLearned(shows, cfg) {
+    if (cfg.learn === false) return { tilt: cfg.tilt, n: 0 };
+    let sum = null, n = 0;
+    for (const s of shows || []) {
+      const f = s && s.fit;
+      if (!s || s.folded || !f || f.v !== FIT_VERSION || !Array.isArray(f.tl) || f.tl.length !== TILTS.length || !f.tl.every(Number.isFinite)) continue;
+      if (STREET_ACTION_MAP[(s.actions && s.actions.river) || ''] !== 'raise') continue;
+      sum = sum ? sum.map((x, i) => x + f.tl[i]) : f.tl.slice();
+      n++;
+    }
+    if (!n) return { tilt: cfg.tilt, n: 0 };
+    const x = tiltArgmax((t) => tiltLL(sum, t) - cfg.k * (t - cfg.tilt) * (t - cfg.tilt), cfg.min, cfg.max);
+    return { tilt: Math.round(x * 1000) / 1000, n };
+  }
   function checkBetLearned(shows, cfg) {
     if (cfg.learn === false) return { tilt: cfg.tilt, n: 0 };
     let sum = null, n = 0;
@@ -2376,6 +2401,24 @@
     if (!(hps && ok(hps.hi) && hps.hiN > 0)) return { tilt: cfg.tilt, base, n: 0 };
     const d = argmax((x) => at(hps.hi, base + x) - cfg.k * (x - cfg.tilt) * (x - cfg.tilt), Number.isFinite(cfg.min) ? cfg.min : -0.3, 0.75);
     return { tilt: Math.round(d * 1000) / 1000, base: Math.round(base * 1000) / 1000, n: hps.hiN };
+  }
+  // A player's own hero-pot tilt (HERO_POT_TILT.own): their shows in hero's pots after a flop they did not bet or raise,
+  // with 15bb+ in (as heroPotShows counts them), measured on top of the table's base like heroPotLearned and shrunk to
+  // the table's learned tilt by cfg.own pseudo-shows. No such shows: the table's tilt.
+  function heroPotOwn(shows, table, cfg) {
+    if (!table || !(cfg.own > 0)) return { tilt: table ? table.tilt : cfg.tilt, n: 0 };
+    let sum = null, n = 0;
+    for (const s of shows || []) {
+      const f = s && s.fit;
+      if (!s || s.folded || !s.hp || !s.hp.in || !(s.hp.put >= 15) || !f || f.v !== FIT_VERSION || !Array.isArray(f.tl) || f.tl.length !== TILTS.length || !f.tl.every(Number.isFinite)) continue;
+      if (/bet|raise/.test((s.actions && s.actions.flop) || '')) continue;
+      sum = sum ? sum.map((x, i) => x + f.tl[i]) : f.tl.slice();
+      n++;
+    }
+    if (!n) return { tilt: table.tilt, n: 0 };
+    const base = table.base || 0;
+    const x = tiltArgmax((t) => tiltLL(sum, base + t) - cfg.own * (t - table.tilt) * (t - table.tilt), Number.isFinite(cfg.min) ? cfg.min : -0.3, 0.75);
+    return { tilt: Math.round(x * 1000) / 1000, n };
   }
   const lineCont = (cont) => (1 + Math.round(clamp(cont, 0, 1) * 20)) << 4;
   // Opponent versions the lookahead plays against (Pluribus-style leaves): as read, then
@@ -5196,6 +5239,19 @@
   // target with what came back. The leaves split the pot by realized equity against the read's player and don't see
   // that hero's postflop play exploits the reads.
   const PF_FLOP_EDGE = 0.06;
+  // Multiway spots (the field solves: opens with 2+ to act, limpers, callers) take PF_FLOP_EDGE_MW in place of it
+  // (v1.8.32; input.pfFlopEdgeMw: false gives them PF_FLOP_EDGE as before, a number replaces it). Clean full-log audit
+  // (6 Nov, 2,167 decisions, reads from earlier hands): with 0.06 preflop raises still came back above their EV at the
+  // next decision, multiway +3.2 +- 1.0 bb (opens +3.3, over limpers +3.8; n 175) against heads-up +0.7 +- 0.5
+  // (n 255). Simulator, v12r regulars, live budget, 0.10 vs 0.06: 3-, 4- and 5-handed all up, pooled about +45 +- 16.
+  const PF_FLOP_EDGE_MW = 0.10;
+  // pfFlopEdge false: no edge anywhere; a number: that edge everywhere (unless pfFlopEdgeMw sets the multiway one).
+  function pfFlopEdgeFor(input, field) {
+    if (input.pfFlopEdge === false) return 0;
+    if (field && input.pfFlopEdgeMw != null && input.pfFlopEdgeMw !== false) return +input.pfFlopEdgeMw;
+    if (input.pfFlopEdge != null) return +input.pfFlopEdge;
+    return field && input.pfFlopEdgeMw !== false ? PF_FLOP_EDGE_MW : PF_FLOP_EDGE;
+  }
 
   function preflopSolve(cfg) {
     const { heroW, oppW, heroClass, pot: P0, toCall, stack: E, bigBlind, heroIP, rootActs, option, p } = cfg;
@@ -5728,7 +5784,7 @@
     const RD = input.respDraw === true ? RESP_DRAW : typeof input.respDraw === 'number' ? input.respDraw : 1;
     const respNow = respScore(current, RD);
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
-    const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : {});
+    const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : input.riverRaiseTilt && typeof input.riverRaiseTilt === 'object' ? input.riverRaiseTilt : {});
     // input.checkBetTilt: false off, a number sets the table's tilt, an object replaces fields ({ learn: false }: the same
     // tilt for everyone, as in v1.8.28).
     const cbt = input.checkBetTilt === false ? null : Object.assign({}, CHECK_BET_TILT, typeof input.checkBetTilt === 'number' ? { tilt: input.checkBetTilt } : input.checkBetTilt && typeof input.checkBetTilt === 'object' ? input.checkBetTilt : {});
@@ -5781,12 +5837,18 @@
         const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
         stats.afterCall = ac; if (statsHU) statsHU.afterCall = ac;
       }
-      const heroPotTilt = heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpt.tilt || 0) : 0;
+      const hpOwn = heroPotRamp > 0 && hpLearned ? heroPotOwn(o.tally && o.tally.shows, hpLearned, hpt) : null;
+      const heroPotTilt = heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpOwn ? hpOwn.tilt : hpt.tilt || 0) : 0;
+      if (hpOwn) stats.heroPotOwn = hpOwn;
       if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
       // River overbets read stronger (OVERBET_TILT). input.overbetTilt: false turns it off, a number sets the tilt.
       if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
       // River raises read stronger (RIVER_RAISE_TILT). input.riverRaiseTilt: false turns it off, a number sets the tilt.
-      if (rrt && rrt.tilt) { stats.tiltRaise = rrt; if (statsHU) statsHU.tiltRaise = rrt; }
+      if (rrt && rrt.tilt) {
+        const own = riverRaiseLearned(o.tally && o.tally.shows, rrt);
+        const c = Object.assign({}, rrt, { tilt: own.tilt, n: own.n });
+        stats.tiltRaise = c; if (statsHU) statsHU.tiltRaise = c;
+      }
       // Bets after hero's check on the river read stronger (CHECK_BET_TILT), unless input.checkBetTilt is false.
       if (cbt && street === cbt.street && STREET_ACTION_MAP[(input.heroActions || {})[STREET_KEYS[street]]] === 'check' && STREET_ACTION_MAP[(o.actions || {})[STREET_KEYS[street]]] === 'bet') {
         const own = checkBetLearned(o.tally && o.tally.shows, cbt);
@@ -6827,7 +6889,7 @@
         raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
-        implied: +input.pfImplied || 0, flopEdge: input.pfFlopEdge === false ? 0 : input.pfFlopEdge != null ? +input.pfFlopEdge : PF_FLOP_EDGE,
+        implied: +input.pfImplied || 0, flopEdge: pfFlopEdgeFor(input, field),
       });
       if (pf) {
         // Name each action as the matching option in the list.
@@ -7087,7 +7149,7 @@
         street, streetName, pot, potWin, toCall, stack, bigBlind, realize, inPosition, lookahead,
         scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight, allinTie,
         credibility, blueprint: bpOut ? bpOut.info : null,
-        heroPot: hpt ? { tilt: hpt.tilt, n: hpLearned ? hpLearned.n : 0, ramp: Math.round(heroPotRamp * 100) / 100 } : null,
+        heroPot: hpt ? { tilt: hpt.tilt, n: hpLearned ? hpLearned.n : 0, ramp: Math.round(heroPotRamp * 100) / 100, own: opps.map((o) => o.stats.heroPotOwn || null) } : null,
         solver: solved ? { kind: solved.kind || 'river', iterations: solved.iterations, runs: solved.runs || 1, exploitWeight: opps[0].stats.exploitWeight, field: solved.field || solved.multiway || 0 } : null,
         equity, potOdds, hero: heroInfo, impliedOddsNeeded,
         iterations: done,
@@ -7236,7 +7298,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),

@@ -79,6 +79,9 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # touching flops or turns. The default (3,000 Monte Carlo, 120 river) is for quick checks.
                          # Main check for solver changes (since 5 Nov): BOTPROFILES=test/sim/profiles-v12r.json,
                          # the regulars Marwin usually plays (one bot per regular account, v12 habits).
+                         # profiles-v13r.json (v12r with heroRiverFloor: answers to hero's river bets by made-hand
+                         # strength) is closer to the friends' heads-up folds to hero's river bets and further from
+                         # their 3-4-handed ones (test/sim/README.md); a second look, not the yardstick.
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/merge-logs.js <out.json> <exports or folders...>  # one merged log: each hand once, fuller copy kept
                          # (exports since v1.8.21 hold only new hands; every log tool below takes several
@@ -398,7 +401,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   prior 0.75 x VPIP, clamped 0.18-0.45). The old size math had them folding 85%+ to a shove, so it shoved 9-5 at 25bb.
   Players already in the pot (limpers, raisers) get a higher floor. Hand log players carry `fit` and `accuracy`
   (`accuracySummary` in tracker.js); advice `reads` carry trust, accuracy, strengthBias and callBig (since v1.8.29 also
-  mwOdds and cbTilt, the player's own mwBetFold odds and checkBetTilt).
+  mwOdds and cbTilt, the player's own mwBetFold odds and checkBetTilt; since v1.8.32 hpOwn and rrTilt, their own
+  hero-pot and river-raise tilts).
   Big-raise cliff (v1.8.3, `bigFade`): the first time a friend faces a raise to 8bb+ in a hand they continue
   72/69/67% at 8-12/12-20/20-35bb, then 9% at 35-60bb and 4% above (96 spots, three logs; players already in the
   pot: 0 of 24 above 35bb). The callBig floors (pending, limper/raiser, BB seat, vsOpenRead's large opens) were
@@ -732,6 +736,20 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   10bb+ pots (a 44 turn barrel into AA becomes a check, QQ stops betting and calling into AA, three losing calls
   fold; an AK river value bet halves, an A4 turn raise that won becomes a call). Fold rates don't move, so a few
   river checks become bluffs. Scripts and tables: /mnt/project-files/patio-solver/sims/2026-11-03-night/heropottilt/.
+  Per player since v1.8.32 (`heroPotOwn`, HERO_POT_TILT.own 15; `{ own: 0 }` is the v1.8.31 rule): the table's learned
+  tilt is where each player starts, and the player's own shows in hero's pots (flop-passive, 15bb+ in, as heroPotShows
+  counts them, from `o.tally.shows`) move it, measured on the table's base and shrunk to the table's tilt by 15
+  pseudo-shows, never below 0. Clean full log (31 Oct - 6 Nov, reads rebuilt in order, 68 such shows, each scored at the
+  tilt from earlier shows only): no tilt 37.67 nats over a random guess, the table's tilt 37.25 (it no longer beats no
+  tilt), per player own 5 / 15 / 30 / 60: 39.22 / 39.20 / 38.95 / 38.24. The table's tilt fell from 0.29 (3 Nov) to
+  0-0.15 (5-6 Nov) as MarkMaodjaoj's shows came in (17; his own tilt is 0), while PermPot (3 shows) reads 0.32 and
+  PermPocket (2) 0.36. Re-solving the 1,187 logged postflop decisions (frozen captures): 18 change, 7 of them in kind,
+  mostly bigger flop bets and a bet for a check against Mark; #306 QQ's river bet into trips and AA becomes a check,
+  #1060's losing river call a fold. Advice reads carry `hpOwn` {tilt, n}. Simulator (no-loss check; the bots don't
+  trap), v12r regulars, live budget, 1,000 deals each, per player vs `{"heroPotTilt":{"own":0}}`: 4-handed -9.7 ± 22.0,
+  5-handed -3.7 ± 20.5 (640 of 5,000 hands differ), `xp:trap` + friends 4-handed -12.4 ± 20.3 (677 of 4,000); pooled
+  about -9 ± 12, no real loss. Files: /mnt/project-files/patio-solver/sims/2026-11-06-ablation/ (RESULTS.md section 3,
+  scripts/hp/seq.js), sims/2026-11-06-hpown/.
 - River overbets read stronger (v1.8.14, `OVERBET_TILT` {tilt 0.3, size 2.99, street 5}; `input.overbetTilt: false`
   turns it off, a number sets the tilt): a river bet or raise of 3x the pot or more (the tracker caps sizes at 3, so
   `sizes.river` 3 is 3x+) adds 0.3 of strength tilt to that player's range in buildRange. It does not stack with the
@@ -936,6 +954,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   / 0.3 / 0.5: 20.4 / 23.1 / 23.5 / 21.2 nats over a random guess. River bets fit best untilted (n 220). Log replay:
   2 of the 9 river decisions facing a raise change, both calls -> folds that the shows back (31 Oct #25 QT vs mkorn777's
   AA, #126 AK vs MaPokerrk's KT full house). Too rare for the simulator to judge.
+  Per player since v1.8.32 (`riverRaiseLearned`, RIVER_RAISE_TILT {learn, k 15, min 0, max 0.75}; `{ learn: false }` is
+  the flat rule): 0.3 is the table's number and the player's own shown river raises (scoreShow's `fit.tl`, shows whose
+  river action is a raise line) move it, shrunk to 0.3 by 15 pseudo-shows, never below 0. All logs to 6 Nov afternoon
+  (33 shown river raises, 17 players, each scored at the tilt from the player's earlier raises only): no tilt 31.53
+  nats, flat 0.3 33.24, per player k 5 / 15 / 30: 34.68 / 34.07 / 33.69 (MarkMaodjaoj's three on 6 Nov sat at 0.48, 0.40
+  and 0.20 of the tilted read, his seven before at 0.71). Log replay (frozen captures): of the 274 river decisions one
+  changes, #126 AK vs MaPokerrk's river raise back to a call (0.37 vs 0.33 needed; he had a full house, -18.5bb). Advice
+  reads carry `rrTilt` {tilt, n} once a player has shows. The overbet tilt stays flat: 13 shows, per player ties
+  (15.93 vs 15.88), too few to tell players apart.
 - Bets into hero's river check read stronger (v1.8.28, `CHECK_BET_TILT` {tilt 0.2, street 5}; `input.checkBetTilt:
   false` turns it off, a number sets the tilt): facing a river bet after hero checked the river, the bettor's range gets
   0.2 of strength tilt in buildRange, like `RIVER_RAISE_TILT` (the larger of the three applies; none stacks on the
@@ -1157,6 +1184,21 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   decisions (fold -> raise 25, call -> raise 11, fold -> call 10, check -> bet 8; folds 51% -> 43%), 0.10 150. Tried:
   implied odds at the leaves (`pfImplied`, simulator only; s -> s + implied x t x (s - 0.5)): 0.5 lost -55.3 ± 18.0
   (4-handed) and the preflop gap did not close. At 4-handed the edge moves hero's VPIP / PFR 44 / 33% -> 54 / 42%.
+  Multiway spots take 0.10 since v1.8.32 (`PF_FLOP_EDGE_MW`, `pfFlopEdgeFor`; `input.pfFlopEdgeMw: false` gives them
+  0.06 again, a number replaces it; `pfFlopEdge: false` is no edge anywhere and a pfFlopEdge number with no
+  pfFlopEdgeMw sets both): the preflop solver's field spots (opens with 2+ to act, limpers, callers). Clean full-log
+  TD audit (6 Nov, 2,167 decisions, reads from earlier hands; sims/2026-11-06-ablation/ RESULTS.md section 2): with 0.06
+  preflop raises still came back above their EV at the next decision, multiway +3.18 ± 0.96 bb (unopened +3.28, over
+  limpers +3.83; weaker raises, equity 0.25-0.35, +3.5 ± 1.7, n 25) against heads-up +0.66 ± 0.48; multiway checks over
+  limpers +1.43 ± 0.63, multiway calls +1.9 ± 1.0 (but calls under 0.25 equity +0.05 ± 0.49, n 41: on target). Simulator,
+  v12r regulars, live budget, 1,000 deals each, 0.10 vs 0.06: 3-handed +61.6 ± 31.0, 4-handed +38.9 ± 29.7 (2,652 of
+  4,000 hands the same), 5-handed +38.4 ± 27.8; pooled about +45 ± 16, good hands most (+12 to +31 each run), weak hands
+  +3 to +17. On the logs it changes 114 of 626 multiway preflop decisions (0.09: 91, 0.12: 154): 36 folds become raises
+  (first-in opens like J4o and Q2o 3-handed, 89o and T7s 5-handed, K5s and A5o 6-handed), 12 folds become calls (mostly
+  small-blind completes with junk), 16 calls become raises, 38 raises change size. The edge is the same for every hand,
+  where the audit's gap is in raises and medium hands, so weak hands' calls get about 0.4bb more than the logs support;
+  a per-hand edge is an idea. Not per player: it is hero's edge against a field, and by opponent nobody's TD gap is
+  outside 2 SE but Marker's postflop (n 15). Files: sims/2026-11-06-edgemw/, ablation/scripts/ (premw-edge replays).
 - Short raises (v1.8.13, `input.raisePrice`: false for the old rule): an opponent facing hero's raise that costs them
   under a quarter of the pot over the call (an all-in a chip over the call) folds no more of their range than to a bet of
   that price, in the river, turn and flop solvers' fixed strategies. The 4 Nov log had QQ facing 40 into 208 with 41
@@ -1172,6 +1214,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   are overvalued on the bots on every street (river -9.9 ± 2.9, turn -6.5 ± 3.3, flop -2.8 to -10.8 chips TD) because
   the bots fold to them far more than read (river 12 of 13, predicted .40; flop .47 vs .31); the friends fold to flop and
   turn raises 8-13% (n 55) and to hero's flop raises as read (.16 vs .15, n 19).
+- Fix ablation and TD audit on the clean full log (6 Nov; /mnt/project-files/patio-solver/sims/2026-11-06-ablation/
+  RESULTS.md, scripts/, out/, td/): 1,080 hands to 6 Nov morning, reads rebuilt in order, each input copied when taken
+  (2,169 hero decisions), live budget, mix off. Each merged fix switched off in turn changes few decisions (bigRaiseRange
+  3 of 981 preflop, deepShove 3, allinTie 30 of 2,168, checkBetTilt 5 of 274 river, mwBetFold 83 of 385 multiway
+  postflop, riverMadeCall 199 of 1,187 postflop, heroPotTilt 44); scored on the shown cards the changed calls and folds
+  mostly agree (riverRaiseTilt +33.5bb, checkBetTilt +25.0; afterCall and heroPotTilt's minus is one hand, #300's fold
+  against SPECTATEMK's turn shove), so none is reverted. TD audit (what came back - main's EV): all non-fold decisions
+  +0.06 ± 0.33 bb; river -2.70 ± 1.76, mostly two coolers in the value bets (the river solver's own fold prediction at
+  hero's size is on target heads-up, 0.353 vs 0.371, n 70, and so is equity when called); preflop raises +1.69 ± 0.49,
+  multiway +3.18 ± 0.96 (led to PF_FLOP_EDGE_MW); by opponent nobody outside 2 SE but Marker postflop (-4.5 ± 1.4, n 15).
+  Hero's heads-up river calls after checking the river won 1 of 12 at 0.29 predicted (main still calls 7): thin, watch.
 - Simulator caveat (4 Nov audit): the v7 bots continue by absolute hand strength, so where their range is weak they fold
   far more than any read of their average rate. Hero's heads-up bets of 0.85 pot or more: bots fold 81% (predicted 57%,
   river 96% vs 67%, n 26), friends 49% (50%; river 55% vs 61%, n 11); small bets the other way (bots 28% vs 42%). The

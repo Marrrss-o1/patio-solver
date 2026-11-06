@@ -2211,7 +2211,7 @@
   // after 200 hands and 0.3 from 250 (13 shows in hero's pots). A prior of 0.3 cost -5 +- 4 bb/100 on bots that
   // don't trap (18 runs) and -20 +- 8 on bots that tighten up in hero's big pots (4 runs); 0 is neutral on both.
   // `street`: the first street it applies on, as a board size (3 flop, 4 turn and river only; that was no better).
-  // Per player since v1.8.31 (`own`, heroPotOwn): the table's learned tilt is each player's starting point, and their own
+  // Per player since v1.8.32 (`own`, heroPotOwn): the table's learned tilt is each player's starting point, and their own
   // shows in hero's pots move it, shrunk to it by `own` pseudo-shows (0: the table's tilt for everyone, as before).
   // Clean full log (31 Oct - 6 Nov, 68 such shows, each scored at the tilt from earlier shows only): no tilt 37.67 nats,
   // the table's tilt 37.25, per player own 5 / 15 / 30 / 60: 39.22 / 39.20 / 38.95 / 38.24. The table's tilt fell from
