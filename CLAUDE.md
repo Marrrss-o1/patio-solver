@@ -1281,6 +1281,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   v1.8.32 as a whole (this, the per-player hero-pot and river-raise tilts) against v1.8.31, v12r regulars, live budget,
   1,000 deals each: 4-handed +33.3 ± 29.2 (1,380 of 4,000 hands differ), 5-handed +116.1 ± 32.5 (1,232 of 5,000; button
   +41, every hand group but strong up); pooled about +70 ± 22. Files: sims/2026-11-06-v1832/.
+  Tried and dropped (6 Nov night): the heads-up edge at 0.10 too (`{"pfFlopEdge":0.10}`), since two-player small-blind
+  opens still came back +1.50 ± 0.58 bb above their EV (n 136) on v1.8.35. v12r regulars, live budget, 1,000 deals
+  each, rule set before the runs: heads-up +29.2 ± 20.0 (seed 9351) and -24.9 ± 27.2 (9352), 3-handed -28.8 ± 28.1
+  (9353; big blind -38.1 ± 13.6), 4-handed -5.1 ± 18.8 (9354); pooled about -1 ± 11. No win, so 0.06 stays. Files:
+  sims/2026-11-06-edgehu/.
 - Short raises (v1.8.13, `input.raisePrice`: false for the old rule): an opponent facing hero's raise that costs them
   under a quarter of the pot over the call (an all-in a chip over the call) folds no more of their range than to a bet of
   that price, in the river, turn and flop solvers' fixed strategies. The 4 Nov log had QQ facing 40 into 208 with 41
