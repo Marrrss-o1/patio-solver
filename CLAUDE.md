@@ -430,6 +430,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   userscript, whose localStorage is shared with the game; `save` drops raw first when full). Both hooks forward all
   `game:`/`player:game:`/`admin:game:` events and `game_log` chat for this; the tracker ignores unknown ones.
   Replay a raw hand by feeding `d` back through `handle`.
+  When a replay script keeps solver inputs to solve later, copy each one when it is taken
+  (`JSON.parse(JSON.stringify(t.solverInput(...).input))`): an unlinked player's input shares its nested read (per-street
+  counts, size answers, shows, jamShows, mwFolds) with the live tally, so an input written at the end of the replay carries
+  later hands (6 Nov: 15 of 136 re-solved picks changed with the copy; the 5 Nov evening and leak-hunt captures had it).
 - Import (v1.8.1, panel button "Import"): removing the extension in Chrome deletes its storage, so a fresh install
   starts with no reads and no hand log (1 Nov: Marwin deletes and re-adds it for every version, so the reads started
   from zero although Jagger and PermPetch were 31 Oct's phuketdemon and MaPokerrk). Updating in place (same folder,
@@ -809,6 +813,23 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   With 1,200 warm-up hands the trust is 1.00 by the time hero faces the tight bot (15-18 shows), and A has learned most
   of it from the showdowns too, so B and A barely differ: the read matters while a player's read is young (Mark's
   account was new on 5 Nov). Files: /mnt/project-files/patio-solver/sims/2026-11-05-allin/ (dsl-*, dsl3-*).
+  From 20bb (v1.8.30, `DEEP_SHOVE.low` 20; `{ low: false }` is the v1.8.29 rule): every shown all-in re-raise from 20bb
+  deep counts toward the trust (each against the fully tight read; before, only shows past 40bb, against the ramp's
+  read there), and a player whose shows lift the trust above the prior by a share x of the way to 1
+  ((trust - prior) / (1 - prior)) reads at least x of the way tight at any depth from 20bb, not only along the 40-100bb
+  ramp (`deepShoveBlend`). A player with no counted shows reads exactly as before; one whose shows say wider than the
+  prior keeps the ramp. Found on 6 Nov #21: Mark (trust 0.98 from AKs, JJ, AJs) re-raised all-in to 47.5bb with AQo,
+  the ramp gave the tight read an eighth, so QJo read 0.51 and called (real 0.27); now 0.39, a fold. Mark's preflop
+  all-ins, all logs: 7 shown, every one top 14% (AKs, KQo, AQs, JJ, AJs, A9o, AQo), at 30-692bb. Shown all-in re-raises,
+  all logs (11, reads and shows from earlier hands only; logcheck/jamscore.js in the files below): +1.84 nats over the v1.8.29 rule (Mark's AQo
+  0.22 -> 2.00 nats over a random guess, Jagger's 135bb A2s +0.10 once his 25bb Q6o counts, Dew666's AJo -0.04); a
+  floor version (log-odds of a 0.05 group prior plus the player's evidence) scored +1.66 but read players without shows
+  differently. Of the 14 logged hero decisions facing an all-in re-raise only #21 changes. Simulator, live budget, v12r
+  regulars, 1,000 deals each, B - A: tight shover (`xp:tightshove`: the top 8% re-raise all-in 60% from 20bb deep)
+  heads-up 50bb +2.6 ± 3.0 (29 of 2,000 hands differ), 4-handed 50bb with friends +3.9 ± 8.1; a bluffier one
+  (`xp:shallowbluff`, plus 15% of the top half) heads-up 50bb -5.0 ± 5.8; plain regulars 4-handed 50bb -1.6 ± 2.0 (20 of
+  4,000 hands differ), 4-handed 150bb 0 (every hand the same). Pooled about -0.5 ± 1.6: no real loss. Merged on the logs
+  (merge bar). Files: /mnt/project-files/patio-solver/sims/2026-11-06-shove20/ (RESULTS.md).
 - Near-tie all-ins (v1.8.23, `ALLIN_TIE_BB` 1; on since v1.8.25: `input.allinTie: false` turns it off, a number sets the
   margin in big blinds): when the pick is all-in (hero's whole stack, or every opponent left is all-in once they match
   it) and an option that isn't comes within the margin of its EV, that option is played; the result's `allinTie` (kind,

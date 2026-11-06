@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.29
+// @version      1.8.30
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1743,15 +1743,25 @@ function ENGINE() {
   // The depth is the raise-to, capped by the most chips any other player still in had at the start of the hand
   // (sizes.preCover, from the tracker since v1.8.23): a big stack shoving into short ones risks only theirs.
   // ds.trust (deepShoveTrust) is how likely this player's deep shoves are the tight kind (preflopRange's deep.t).
-  const deepRamp = (to, cover, ds) => clamp(((cover != null ? Math.min(to, cover) : to) - ds.from) / Math.max(1e-9, ds.to - ds.from), 0, 1);
+  const shoveDepth = (to, cover) => (cover != null ? Math.min(to, cover) : to);
+  const deepRamp = (to, cover, ds) => clamp((shoveDepth(to, cover) - ds.from) / Math.max(1e-9, ds.to - ds.from), 0, 1);
+  // Learning from `low` big blinds (ds.low, v1.8.30; ds.low false: the v1.8.29 rule). A player whose own shows lift their
+  // trust above the group's prior by a share x of the way to 1 ((trust - prior) / (1 - prior)) reads at least x of the
+  // way tight at any depth from ds.low, not only along the ramp: Mark's shows (AKs, JJ, AJs from 130bb up; trust 0.98)
+  // left his 47.5bb shove at an eighth of the tight read. A player with no shows, or whose shows say wider than the
+  // group (trust at or under the prior), reads exactly as before.
   function deepShoveBlend(sizes, ds) {
-    const g = deepRamp(sizes.preTo, sizes.preCover, ds), t = ds.trust != null ? ds.trust : 1;
-    return g > 0 && t > 0 ? { g, width: ds.width, t } : null;
+    const g = deepRamp(sizes.preTo, sizes.preCover, ds), prior = +ds.prior, t = ds.trust != null ? ds.trust : 1;
+    if (ds.low == null || ds.low === false || !(prior < 1)) return g > 0 && t > 0 ? { g, width: ds.width, t } : null;
+    if (!(shoveDepth(sizes.preTo, sizes.preCover) >= ds.low)) return null;
+    const G = Math.max(g, clamp((t - prior) / (1 - prior), 0, 1));
+    return G > 0 && t > 0 ? { g: G, width: ds.width, t } : null;
   }
   // How far a player's own shown all-in re-raises (tally.jamShows, from the tracker since v1.8.27) say their deep ones
   // are the tight kind: the prior odds (ds.prior) times, for each of the newest 10 shows deep enough to count, the
   // likelihood of the shown hand under the tight read over the usual one. ds.prior 1 skips the learning: every player's
-  // deep shoves read tight (the v1.8.23 option).
+  // deep shoves read tight (the v1.8.23 option). With ds.low (v1.8.30) every show at least ds.low deep counts, against
+  // the fully tight read; without it (v1.8.29) only shows past ds.from, against the read the depth ramp gives there.
   function deepShoveTrust(stats, ds, jamShows) {
     const prior = ds.prior != null ? +ds.prior : DEEP_SHOVE.prior;
     if (prior >= 1) return 1;
@@ -1759,9 +1769,10 @@ function ENGINE() {
     let lo = Math.log(p0 / (1 - p0));
     const sr = stats.shoveRange || SHOVE_RANGE;
     const shove = Math.max(stats.vpip * sr.vpip, sr.min);
+    const learnLow = ds.low != null && ds.low !== false;
     for (const s of (jamShows || []).slice(-10)) {
       if (!s || !s.cards || s.cards.length !== 2 || !(s.to > 0) || !/^\dbet$/.test(s.pre || '')) continue;
-      const g = deepRamp(s.to, s.cover, ds);
+      const g = learnLow ? (shoveDepth(s.to, s.cover) >= ds.low ? 1 : 0) : deepRamp(s.to, s.cover, ds);
       if (!(g > 0)) continue;
       const a = typeof s.cards[0] === 'number' ? s.cards[0] : parseCard(s.cards[0]), b = typeof s.cards[1] === 'number' ? s.cards[1] : parseCard(s.cards[1]);
       if (!(a >= 0 && b >= 0) || a === b) continue;
@@ -2284,7 +2295,8 @@ function ENGINE() {
   // would score their shoves as tight as the old read.
   const SHOVE_RANGE = { behind: 0.1, vpip: 0.7, min: 0.15 };
   // Deep all-in re-raises read tight (v1.8.23, DEEP_SHOVE; on since v1.8.27, per player: input.deepShove false turns it
-  // off, an object replaces the numbers, { prior: 1 } reads every player's deep shoves tight). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
+  // off, an object replaces the numbers, { prior: 1 } reads every player's deep shoves tight, { low: false } learns and
+  // applies only past `from` as before v1.8.30). An all-in 3-bet, 4-bet or 5-bet (as for SHOVE_RANGE) moves linearly from the usual read at
   // `from` big blinds deep to the part of it inside the top `width` of hands at `to` (depth: the raise-to, capped by
   // the biggest stack still in that could call it). SHOVE_RANGE was fitted on shoves of 17.5-50bb. On 5 Nov evening
   // MarkMaodjaoj (MarkMaxMoney's account) shoved 130-692bb deep; his shown deep shoves were AKs, JJ and AJs (and KQo
@@ -2299,7 +2311,15 @@ function ENGINE() {
   // heads-up +41.5 ± 14.0 and +18.2 ± 9.7, 3-handed +52.7 ± 21.7; against one that bluffs half its deep shoves -0.2 ± 0.5;
   // against the plain regulars heads-up 0 (every hand the same), 4-handed -0.1 ± 7.6. Prior 0.1 was safe but slow (+3.3,
   // -2.2, +17.7 against the tight shover).
-  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.3 };
+  // From 20bb (v1.8.30, `low`; { low: false } is the v1.8.29 rule): shows from 20bb deep count, each against the fully
+  // tight read, and a player whose trust is lifted above the prior by a share x of the way to 1 reads at least x of the
+  // way tight at any depth from 20bb (deepShoveBlend). 6 Nov #21: Mark (trust 0.98 from AKs, JJ and AJs) re-raised
+  // all-in to 47.5bb with AQo; the ramp gave the tight read an eighth, so QJo read 0.51 and called (real 0.27). Shown
+  // all-in re-raises, all logs, each scored on the read from the player's earlier hands and shows: +1.84 nats over the
+  // v1.8.29 rule (Mark's AQo 0.22 -> 2.00 nats over a random guess, Jagger's A2s +0.10 after his 25bb Q6o counted,
+  // Dew666's AJo -0.04); a player with no shows reads exactly as before. Of the 14 logged decisions facing an all-in
+  // re-raise only #21 changes (call -> fold, 0.51 -> 0.39).
+  const DEEP_SHOVE = { from: 40, to: 100, width: 0.08, prior: 0.3, low: 20 };
   // Near-tie all-ins (v1.8.23, input.allinTie; on since v1.8.25, false turns it off): an all-in pick gives way to the
   // best option that isn't all-in when that one is within this many big blinds of it. 5 Nov evening #54: J7s shoved 73bb
   // over Mark's limp-re-raise at +2.26 chips, the call was +2.08 (bb 2 chips). Simulator, live budget, v12r regulars,
@@ -7232,7 +7252,7 @@ function ENGINE() {
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
