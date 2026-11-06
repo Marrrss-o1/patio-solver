@@ -279,6 +279,12 @@ bots, seed and block size), so a third arm can be added later without replaying 
   (51). Regulars lead into the aggressor heads-up 15% (48) on the flop and 13% (61) on the turn; v12r bots against each
   other 12% / 11%, multiway 19% / 14% (regulars 18% / 17%). Bot against bot (range-test.js --bots, 3,000 hands), the
   answers to the other bots' heads-up flop and turn bets fold 35% (v12: 40%).
+* v13r (6 Nov; `BOTPROFILES=test/sim/profiles-v13r.json`): v12r with `heroRiverFloor` 1, so `heroRiverAbs` is a floor:
+  facing hero's river bet, hands beating 55% of all hands continue and the rest answer as their read says (v12r: the rest
+  all fold). Not the main check: against the friends' folds to Marwin's heads-up river bets (clean full log to 6 Nov
+  morning: heads-up tables 21%, n 33; 3-4-handed 55%, n 31) neither set fits both table sizes. fold-cal.js, 1,000 deals:
+  heads-up v12r 44%, v13r 36%; 4-handed v12r 35%, v13r 31% (sims/2026-11-06-v13r/). riverMadeCall on vs off on v13r:
+  4-handed +23.5 ± 23.8, heads-up +58.3 ± 28.5 (pooled +37.8 ± 18.3), so it holds on both bot sets.
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
