@@ -318,6 +318,7 @@ const HOME_DEFAULT = {
   // fold a little more in big pots (25-110% pot bets: 44% in pots under 10bb, 50% at 20bb+); range-relative bots don't.
   potCall: 0,
   heroRiverAbs: 0, heroRiverW: 0.02, heroRiverHU: 0,   // v9: answers to hero's river bets by absolute strength (0: off)
+  heroRiverFloor: 0,   // v13: 1 = heroRiverAbs is a floor only (made hands call; the rest answer as read)
   jam: 0, jamK: 1.52, jamTop: 0.7, jamMax: 0.3,        // v10: wide all-in re-raises over one raise, by stack depth (0: off)
   heroHuCut: 0,                                       // v11: heads-up flop and turn answers to hero's bets fold more (0: off)
   leadHu: null,                                       // v12: [flop, turn] scale on heads-up leads into the aggressor (null: off)
@@ -478,8 +479,12 @@ function homeBot(params) {
       // read (river-bluff thread, 5 Nov: heads-up they continued iff the hand beat about 55% of all hands, n 30; against
       // each other's bets they fold as read). Continue iff hp clears heroRiverAbs (soft edge heroRiverW); heroRiverHU 1
       // limits it to heads-up answers.
+      // v13 (heroRiverFloor 1): a floor only. With the pure rule the bots fold 51% to hero's heads-up river bets where the
+      // friends fold 36% (n 72, all logs to 5 Nov; the made-call read says 36%): weak hands at the top of a weak range
+      // fold although the friends call with them as read.
       if (P.heroRiverAbs && v.street === 5 && v.lastAgg === v.heroSeat && (!P.heroRiverHU || v.nOpp === 1)) {
-        pCont = sig((hp - P.heroRiverAbs) / (P.heroRiverW || 0.02));
+        const abs = sig((hp - P.heroRiverAbs) / (P.heroRiverW || 0.02));
+        pCont = P.heroRiverFloor ? Math.max(pCont, abs) : abs;
       }
       const reR = P.reRaise !== 1 && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? P.reRaise : 1;
       const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hpC - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;

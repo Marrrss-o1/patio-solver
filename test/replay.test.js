@@ -1280,6 +1280,14 @@ test('preflop solver: hero\'s flop edge (pfFlopEdge) makes marginal opens worth 
   // A number replaces the default; 0 and false are the old leaves.
   assert.strictEqual(ev(open('Ks 9h', { pfFlopEdge: 0 })), ev(k9off));
   assert.ok(ev(open('Ks 9h', { pfFlopEdge: 0.15 })) > ev(k9));
+  // Multiway spots take PF_FLOP_EDGE_MW (0.10, v1.8.32); pfFlopEdgeMw false gives them the heads-up edge (0.06).
+  assert.strictEqual(ev(open('Ks 9h', { pfFlopEdgeMw: 0.10 })), ev(k9));
+  const k9hu = open('Ks 9h', { pfFlopEdgeMw: false });
+  assert.strictEqual(ev(k9hu), ev(open('Ks 9h', { pfFlopEdge: 0.06 })));
+  assert.ok(ev(k9) > ev(k9hu), ev(k9) + ' vs ' + ev(k9hu));
+  // Heads-up spots keep 0.06.
+  const hu = (extra) => pfSpot('Ks 9h', Object.assign({ toCall: 1, stack: 100, inPosition: false, opponents: [{ name: 'P1', tally: {}, actions: { pre: 'pending' } }] }, extra));
+  assert.strictEqual(ev(hu()), ev(hu({ pfFlopEdgeMw: false })));
 });
 
 test('preflop solver: limped and raised multiway pots use multiway equity', () => {
@@ -1288,12 +1296,15 @@ test('preflop solver: limped and raised multiway pots use multiway equity', () =
   const aa = bb('As Ad'), junk = bb('9c 4d');
   assert.ok(['raise', 'bet', 'allin'].includes(aa.best.kind));
   assert.strictEqual(junk.best.kind, 'check');
-  const vsRaise = (h) => pfSpot(h, { pot: 7.5, toCall: 2, inPosition: false, heroActions: {},
-    opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] });
-  const big = vsRaise('As Ad'), weak = vsRaise('9c 4d');
+  const vsRaise = (h, extra) => pfSpot(h, Object.assign({ pot: 7.5, toCall: 2, inPosition: false, heroActions: {},
+    opponents: [{ name: 'R', tally: {}, actions: { pre: 'raise' }, pfAggressor: true }, { name: 'C', tally: {}, actions: { pre: 'call' } }] }, extra));
+  const big = vsRaise('As Ad'), weak = vsRaise('9c 4d', { pfFlopEdgeMw: false });
   assert.strictEqual(big.solver.kind, 'preflop');
   assert.ok(['raise', 'allin'].includes(big.best.kind));
   assert.strictEqual(weak.best.kind, 'fold');
+  // With the multiway flop edge (0.10, v1.8.32) the big blind's 9-4 offsuit call is a near tie (about +0.25bb).
+  const weakCall = vsRaise('9c 4d').ranked.find((x) => x.kind === 'call');
+  assert.ok(weakCall && Math.abs(weakCall.ev) < 0.6, weakCall && weakCall.ev);
   // Hero's multiway share is below the share against the strongest single hand.
   const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
   const m = E._pf.preflopMulti(opps, [], [], (x) => x, 0, 400, 7);
@@ -1398,6 +1409,29 @@ test('checkBetTilt per player (v1.8.29): the table tilt without shows, the shows
   assert.strictEqual(E.checkBetLearned(weak.map((x) => Object.assign({}, x, { hck: false })), cfg).n, 0, 'hero did not check');
   assert.strictEqual(E.checkBetLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'call' } })), cfg).n, 0, 'not a bet');
   assert.strictEqual(E.checkBetLearned(weak, Object.assign({}, cfg, { learn: false })).tilt, cfg.tilt);
+});
+
+test('riverRaiseTilt per player (v1.8.32): the table tilt without shows, the player\'s river raises move it', () => {
+  const cfg = E.RIVER_RAISE_TILT;
+  assert.strictEqual(E.riverRaiseLearned([], cfg).tilt, cfg.tilt);
+  const show = (peak, extra) => Object.assign({ actions: { river: 'raise' }, fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
+  const weak = Array.from({ length: 6 }, () => show(0)), strong = Array.from({ length: 6 }, () => show(0.75));
+  const w = E.riverRaiseLearned(weak, cfg), s = E.riverRaiseLearned(strong, cfg);
+  assert.ok(w.tilt < cfg.tilt - 0.02 && w.tilt >= 0 && w.n === 6, 'weak raises: ' + w.tilt);
+  assert.ok(s.tilt > cfg.tilt + 0.02, 'strong raises: ' + s.tilt);
+  assert.strictEqual(E.riverRaiseLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'checkraise' } })), cfg).n, 6, 'check-raises count');
+  assert.strictEqual(E.riverRaiseLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'bet' } })), cfg).n, 0, 'bets do not');
+  assert.strictEqual(E.riverRaiseLearned(weak, Object.assign({}, cfg, { learn: false })).tilt, cfg.tilt);
+  // In a spot: hero facing a river raise from a player whose shown raises were weak reads them weaker than the table's 0.3.
+  const spot = (shows, extra) => E.analyzeSync(Object.assign({
+    hero: [E.parseCard('Ks'), E.parseCard('Qd')], board: ['Kh', '8c', '4d', '2s', '7h'].map(E.parseCard), pot: 80, toCall: 40, stack: 300, bigBlind: 2,
+    inPosition: false, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'bet', river: 'bet' }, heroSizes: {}, heroPosition: 'early',
+    heroPfAggressor: true, opponents: [{ name: 'V', tally: { shows }, actions: { pre: 'call', flop: 'call', turn: 'call', river: 'raise' }, sizes: { river: 0.5 },
+      position: 'late', committed: 60, stack: 240, bet: 60 }], iterations: 3000, mix: false, seed: 2, heroPotTilt: false,
+  }, extra));
+  const eqTable = spot([]).equity.share, eqWeak = spot(weak).equity.share, eqFlat = spot(weak, { riverRaiseTilt: { learn: false } }).equity.share;
+  assert.ok(eqWeak > eqTable + 0.01, `weak raiser ${eqWeak} vs table ${eqTable}`);
+  assert.strictEqual(eqFlat, eqTable);
 });
 
 test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river checks from stored hands, once', () => {
@@ -2615,6 +2649,33 @@ test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of th
   assert.strictEqual(E.analyzeSync(Object.assign({}, { hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d'].map(E.parseCard), pot: 60, toCall: 0,
     stack: 300, bigBlind: 2, inPosition: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: '' }, bet: 0 }], iterations: 500, mix: false, seed: 1,
     heroPotTilt: 0.2, heroPotShows: { hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 } })).heroPot.tilt, 0.2); // a number: fixed
+});
+
+test('heroPotTilt per player: the table\'s tilt moved by the player\'s own shows in hero\'s pots (own 0: the table\'s)', () => {
+  const curve = (n, peak) => E.TILTS.map((t) => -2.5 * n * (t - peak) * (t - peak));
+  const show = (peak, extra) => Object.assign({ cards: ['2c', '3d'], board: ['Ks', 'Jc', '7d', '4h', '2s'], actions: { pre: 'call', flop: 'call', turn: 'check', river: 'call' },
+    hp: { in: true, put: 30 }, fit: { v: E.FIT_VERSION, tl: curve(1, peak) } }, extra);
+  const run = (shows, extra) => E.analyzeSync(Object.assign({
+    hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot: 60, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: '' }, heroSizes: {},
+    heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: { shows }, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' },
+      sizes: {}, position: 'blinds', committed: 30, stack: 270, bet: 0, heroIP: true }],
+    iterations: 2000, mix: false, seed: 1, heroPotShows: { hi: curve(60, 0.3), hiN: 60, ho: curve(60, 0), hoN: 60 },
+  }, extra)).heroPot;
+  const table = run([]);
+  assert.ok(table.tilt > 0.25, `table ${table.tilt}`);
+  assert.strictEqual(table.own[0].tilt, table.tilt); // no shows of their own: the table's tilt
+  assert.strictEqual(table.own[0].n, 0);
+  const calm = run(Array.from({ length: 20 }, () => show(0)));
+  assert.ok(calm.own[0].tilt < 0.15 && calm.own[0].tilt >= 0, `20 own shows at 0: ${calm.own[0].tilt}`); // moves most of the way down, never below min
+  assert.strictEqual(calm.own[0].n, 20);
+  const few = run([show(0), show(0)]);
+  assert.ok(few.own[0].tilt > calm.own[0].tilt && few.own[0].tilt < table.tilt, `two own shows ${few.own[0].tilt}`);
+  // Shows that don't count: hero not in, under 15bb in, a flop bet, folded, stale fit.
+  const other = run([show(0, { hp: { in: false, put: 30 } }), show(0, { hp: { in: true, put: 10 } }), show(0, { actions: { pre: 'call', flop: 'bet', turn: 'check', river: 'call' } }),
+    show(0, { folded: true }), show(0, { fit: { v: -1, tl: curve(1, 0) } })]);
+  assert.strictEqual(other.own[0].n, 0);
+  assert.strictEqual(run(Array.from({ length: 20 }, () => show(0)), { heroPotTilt: { own: 0 } }).own[0].tilt, table.tilt); // own 0: v1.8.30's rule
 });
 
 // ---------------------------------------------------------------------------
