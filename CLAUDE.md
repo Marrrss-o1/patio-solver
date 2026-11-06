@@ -401,7 +401,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   +0.66 ± 0.41 bb above their EV, +0.87 ± 0.41 with this (the reads lower raise EVs by about 0.2bb); a heads-up flop edge
   of 0.10 / 0.14 would only bring that to +0.73 / +0.58, so the edge was left alone. Simulator, v12r regulars, live
   budget, heads-up, 1,000 deals each, B - A against main: pendingTilt off -14.6 ± 20.6 (seed 9311; strong and premium
-  hands lose), limp curve -1.4 ± 16.2 (9312), both +25.5 ± 23.2 (9313; medium hands +37.5 ± 15.2). Files:
+  hands lose), limp curve -1.4 ± 16.2 (9312), both +25.5 ± 23.2 (9313; medium hands +37.5 ± 15.2), +10.4 ± 30.5 (9314)
+  and -45.8 ± 28.7 (9315; good and weak hands); both pooled about +1 ± 16. The simulator can't judge it: main reads the
+  bots' folds to hero's heads-up raises on target (a 300-deal heads-up run with a preflop dump, 363 raises: predicted
+  0.333, folded 0.344; opens 0.431 vs 0.419), where Mark folds far less than read, so the bots don't have the habit. On by
+  the merge bar (clear log evidence, no real loss in the simulator). Files:
   /mnt/project-files/patio-solver/sims/2026-11-06-hupf/, analysis/2026-11-06-mark-calls.md.
 - Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
   (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
