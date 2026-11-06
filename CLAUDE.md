@@ -262,8 +262,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up decisions after the flop 48 change kind (42 flop bets -> checks), none on the turn or river (the turn and
   river solvers don't take the shift). Simulator (the bots ignore hero's line, so no-loss check), v12r regulars, live
   budget, 1,000 deals each, on vs `{"storyCentre":false}`: heads-up -8.9 ± 23.8 and +19.3 ± 20.8, 3-handed
-  -19.1 ± 19.2, 4-handed -26.2 ± 21.9 (pooled about -9 ± 11; 3-4 handed -22 ± 14, strong and good hands). Merged on the
-  logs (merge bar). Files: /mnt/project-files/patio-solver/sims/2026-11-06-story/.
+  -19.1 ± 19.2, 4-handed -26.2 ± 21.9 (strong and good hands); merged on the logs (merge bar) at that point. Two more
+  after the merge: 3-handed -25.1 ± 26.0 (seed 9305), 4-handed +14.0 ± 21.2 (9306; big blind +27.2 ± 13.7, strong
+  hands -11.8 ± 7.3). All six pooled about -7 ± 9 (heads-up +7 ± 16, 3-4 handed -13 ± 11): no real loss, so it stays
+  on at every table size (it only touches heads-up spots there). Files: /mnt/project-files/patio-solver/sims/
+  2026-11-06-story/.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
   or every caller all-in) also shift the current fold decision in those variants; other bets don't.
