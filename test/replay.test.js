@@ -2587,6 +2587,33 @@ test('heroPotTilt: learned from the table\'s shows in hero\'s pots, on top of th
     heroPotTilt: 0.2, heroPotShows: { hi: curve(60, 0), hiN: 60, ho: curve(60, 0), hoN: 60 } })).heroPot.tilt, 0.2); // a number: fixed
 });
 
+test('heroPotTilt per player: the table\'s tilt moved by the player\'s own shows in hero\'s pots (own 0: the table\'s)', () => {
+  const curve = (n, peak) => E.TILTS.map((t) => -2.5 * n * (t - peak) * (t - peak));
+  const show = (peak, extra) => Object.assign({ cards: ['2c', '3d'], board: ['Ks', 'Jc', '7d', '4h', '2s'], actions: { pre: 'call', flop: 'call', turn: 'check', river: 'call' },
+    hp: { in: true, put: 30 }, fit: { v: E.FIT_VERSION, tl: curve(1, peak) } }, extra);
+  const run = (shows, extra) => E.analyzeSync(Object.assign({
+    hero: [E.parseCard('Ah'), E.parseCard('Jd')], board: ['Ks', 'Jc', '7d', '4h', '2s'].map(E.parseCard), pot: 60, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: '' }, heroSizes: {},
+    heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: { shows }, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' },
+      sizes: {}, position: 'blinds', committed: 30, stack: 270, bet: 0, heroIP: true }],
+    iterations: 2000, mix: false, seed: 1, heroPotShows: { hi: curve(60, 0.3), hiN: 60, ho: curve(60, 0), hoN: 60 },
+  }, extra)).heroPot;
+  const table = run([]);
+  assert.ok(table.tilt > 0.25, `table ${table.tilt}`);
+  assert.strictEqual(table.own[0].tilt, table.tilt); // no shows of their own: the table's tilt
+  assert.strictEqual(table.own[0].n, 0);
+  const calm = run(Array.from({ length: 20 }, () => show(0)));
+  assert.ok(calm.own[0].tilt < 0.15 && calm.own[0].tilt >= 0, `20 own shows at 0: ${calm.own[0].tilt}`); // moves most of the way down, never below min
+  assert.strictEqual(calm.own[0].n, 20);
+  const few = run([show(0), show(0)]);
+  assert.ok(few.own[0].tilt > calm.own[0].tilt && few.own[0].tilt < table.tilt, `two own shows ${few.own[0].tilt}`);
+  // Shows that don't count: hero not in, under 15bb in, a flop bet, folded, stale fit.
+  const other = run([show(0, { hp: { in: false, put: 30 } }), show(0, { hp: { in: true, put: 10 } }), show(0, { actions: { pre: 'call', flop: 'bet', turn: 'check', river: 'call' } }),
+    show(0, { folded: true }), show(0, { fit: { v: -1, tl: curve(1, 0) } })]);
+  assert.strictEqual(other.own[0].n, 0);
+  assert.strictEqual(run(Array.from({ length: 20 }, () => show(0)), { heroPotTilt: { own: 0 } }).own[0].tilt, table.tilt); // own 0: v1.8.30's rule
+});
+
 // ---------------------------------------------------------------------------
 // Linked reads: a friend on a new account id (Jagger, 2 Nov) or a new name
 // ---------------------------------------------------------------------------
