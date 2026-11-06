@@ -1281,6 +1281,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   v1.8.32 as a whole (this, the per-player hero-pot and river-raise tilts) against v1.8.31, v12r regulars, live budget,
   1,000 deals each: 4-handed +33.3 ± 29.2 (1,380 of 4,000 hands differ), 5-handed +116.1 ± 32.5 (1,232 of 5,000; button
   +41, every hand group but strong up); pooled about +70 ± 22. Files: sims/2026-11-06-v1832/.
+  v1.8.35 against v1.8.31 (the day's merges together: v1.8.32, v1.8.34's story recentring, v1.8.35's two-player
+  preflop), v12r regulars, live budget, 1,000 deals each: heads-up -31.4 ± 30.3 (seed 9361) and +13.2 ± 26.1 (9365),
+  3-handed +37.5 ± 32.3 (9362), 4-handed +28.6 ± 31.7 (9363), 5-handed +81.4 ± 28.1 (9364); pooled about +26 ± 13
+  (heads-up -6 ± 20, 3-5 handed +52 ± 18). Files: sims/2026-11-06-day/.
   Tried and dropped (6 Nov night): the heads-up edge at 0.10 too (`{"pfFlopEdge":0.10}`), since two-player small-blind
   opens still came back +1.50 ± 0.58 bb above their EV (n 136) on v1.8.35. v12r regulars, live budget, 1,000 deals
   each, rule set before the runs: heads-up +29.2 ± 20.0 (seed 9351) and -24.9 ± 27.2 (9352), 3-handed -28.8 ± 28.1
