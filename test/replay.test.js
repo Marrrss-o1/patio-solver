@@ -2339,8 +2339,41 @@ test('deepShove learns per player: shown deep shoves of strong hands tighten the
   const off = spot([], { deepShove: false }).equity.share;
   assert.ok(s2.equity.share < none.equity.share - 0.04 && w.equity.share > s2.equity.share + 0.04 && Math.abs(w.equity.share - off) < 0.02,
     `${off} ${none.equity.share} ${s2.equity.share} ${w.equity.share}`);
-  // Shallow shows (under `from`) say nothing.
-  near(trust(spot([{ cards: ['As', 'Ks'], pre: '3bet', to: 30, cover: 200 }])), trust(none));
+  // Shows under `low` (20bb) say nothing; from 20bb they count (v1.8.30). { low: false }: only past `from` (v1.8.29).
+  const ak30 = [{ cards: ['As', 'Ks'], pre: '3bet', to: 30, cover: 200 }];
+  near(trust(spot([{ cards: ['As', 'Ks'], pre: '3bet', to: 15, cover: 200 }])), trust(none));
+  assert.ok(trust(spot(ak30)) > trust(none) + 0.15, `30bb AKs: ${trust(spot(ak30))}`);
+  near(trust(spot(ak30, { deepShove: { prior: 0.1, low: false } })), trust(none));
+});
+
+test('deepShove from 20bb (v1.8.30): a player whose own shows lift the trust reads tight at any depth from 20bb', () => {
+  // Mark at #21 (6 Nov): hero opens QJo, a 0.65-VPIP player re-raises all-in to 47.5bb after three shown deep shoves of
+  // top hands. The depth ramp alone (nothing at 40bb, full at 100bb) gave the tight read an eighth of the range.
+  const loose = { pfFold: 35, pfCall: 45, pfRaise: 40, hands: 120 };
+  const mark = [{ cards: ['As', 'Ks'], pre: '3bet', to: 130.5, cover: 169.5 }, { cards: ['Jh', 'Js'], pre: '4bet', to: 513, cover: 258.5 },
+    { cards: ['Jc', 'Ac'], pre: '3bet', to: 692, cover: 230.5 }];
+  const spot = (to, jamShows, extra) => E.analyzeSync(Object.assign({
+    hero: C('Qs Jd'), board: [], pot: to + 11, toCall: to - 5, stack: to - 5, bigBlind: 1, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'raise' }, heroSizes: { pre: 1.5, preTo: 5, preBehind: to - 5 }, heroPosition: 'late', heroPfAggressor: false, heroCommitted: 5, heroBet: 5,
+    opponents: [{ name: 'V', tally: Object.assign({}, loose, { jamShows }), actions: { pre: '3bet' }, sizes: { pre: 9, preTo: to, preBehind: 0, preCover: 113.5 }, pfAggressor: true, position: 'blinds', committed: to, stack: 0, bet: to, heroIP: false }],
+    iterations: 3000, mix: false, seed: 1,
+  }, extra));
+  const old = { deepShove: { low: false } };
+  const eq = (r) => r.equity.share;
+  const on = spot(47.5, mark), was = spot(47.5, mark, old);
+  assert.ok(on.opponents[0].stats.deepShove.trust > 0.95, `trust ${on.opponents[0].stats.deepShove.trust}`);
+  assert.ok(eq(on) < eq(was) - 0.06, `47.5bb: ${eq(was)} -> ${eq(on)}`);
+  assert.strictEqual(was.best.kind, 'allin');
+  assert.strictEqual(on.best.kind, 'fold');
+  // From 20bb, not under it.
+  assert.ok(eq(spot(25, mark)) < eq(spot(25, mark, old)) - 0.05, '25bb');
+  assert.strictEqual(eq(spot(18, mark)), eq(spot(18, mark, old)));
+  // No shows: exactly the v1.8.29 read at every depth.
+  for (const to of [18, 30, 47.5, 70, 150]) assert.strictEqual(eq(spot(to, [])), eq(spot(to, [], old)), `${to}bb, no shows`);
+  // Shows that say wider than the group keep the ramp: nothing under 40bb.
+  const wide = [{ cards: ['2c', 'Qd'], pre: '3bet', to: 84.5, cover: 222.5 }, { cards: ['Qh', '6d'], pre: '3bet', to: 25, cover: 292 }];
+  assert.ok(spot(30, wide).opponents[0].stats.deepShove.trust < 0.3);
+  assert.strictEqual(eq(spot(30, wide)), eq(spot(30, [])));
 });
 
 test('allinTie (on, 1bb): an all-in pick gives way to the best option that is not all-in within the margin (false: off)', () => {
