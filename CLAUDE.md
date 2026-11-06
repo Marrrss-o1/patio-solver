@@ -245,6 +245,20 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   multiway and the heads-up reads (`o.statsHU`, which multiway first answers use since #39; #41 put the shift back
   there after #39 had dropped it; sim -13.3 ± 21.8, as expected with bots that ignore hero's line). The river solver
   models hero's range directly, so it does not take the shift.
+  Recentred heads-up (v1.8.34, `STORY_CENTRE` 0.05; `input.storyCentre: false` is the old rule, a number sets it): with
+  one opponent the shift is lowered by 0.05. It is measured against all hands, so nearly every line looks strong: on the
+  465 first answers to hero's heads-up bets after the flop in the clean full log (31 Oct - 6 Nov, frozen captures,
+  re-solved on main; postbets-main.json) it averaged +0.05, and the all-fold was predicted 0.414 against 0.342 done
+  (z -3.2; Mark 0.395 vs 0.314, n 315; everyone else 0.452 vs 0.400, n 150), 0.362 without the shift (Mark 0.344, the
+  rest 0.399; by street Mark flop 0.33 vs 0.30, turn 0.35 vs 0.37, river 0.37 vs 0.24). Mark's over-folding heads-up
+  (6 Nov later session) was this shift. Its ups and downs still predict (log-odds slope 2.5 ± 0.8 on top of the read,
+  1 as built; with hero's line in the bottom third answers folded 0.28 against 0.42 predicted), so it is recentred,
+  not dropped. Log-likelihood as built -295.5, no shift -294.1, recentred -290.4 (re-solved); a centre fitted on one
+  half of the log in time (0.055, 0.090) scores +1.5 / +1.1 nats over the old rule on the other. Not per player: on top
+  of the recentred shift a per-player offset from each player's earlier answers loses out of sample (-1.2 / -3.3 /
+  -8.7 nats at sd 0.3 / 0.5 / 1, Mark too; only his river +0.5 over 50 answers), and the 0.05 corrects the
+  measurement, not a habit. Multiway bets keep the shift (MW_BET_FOLD was fitted on top of it). On hero's 465 bets 30
+  picks change, all small flop bets (14-60% equity) becoming checks (19 of them were called, 3 raised).
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
   or every caller all-in) also shift the current fold decision in those variants; other bets don't.
@@ -1258,7 +1272,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   positive (mean +3.3 points over 150 postflop decisions in Marwin's logs, 15 at the +8 cap) while the fitted fold
   rates already describe answers to typical lines. On the logs that does not double-count: over 48 hero postflop bets
   everyone folded 17 times, predicted 14.9 without the story and 16.1-16.5 with it (log-likelihood -31.4 / -30.8), so
-  recentring is not supported (thin data; the sim bots ignore hero's line). Real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
+  recentring was not supported then (thin data; the sim bots ignore hero's line). With 465 heads-up answers it was:
+  recentred heads-up since v1.8.34 (Hero's story, above); multiway is still as built. Real river subgames inside the flop solver (it only has the `flopRiverBet` approximation); multiway
   flops are the biggest pots still on the Monte Carlo (about 35bb on average in Marwin's logs). (Syncing reads between
   devices is not wanted: the owner keeps phone and computer separate.)
 
