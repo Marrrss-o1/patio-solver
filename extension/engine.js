@@ -2203,6 +2203,17 @@
   const LINE_SOFT = 0.5;
   // Fold odds of players still to act once someone has called (see sc.oppAfter).
   const OVERCALL_FOLD = 1.3;
+  // Hero's story recentred heads-up (v1.8.34, input.storyCentre: false is the old rule, a number sets the centre): the
+  // story shift (createAnalysis, `credibility`) compares hero's range on his line with all hands, so nearly every line
+  // looks strong and the shift averaged +0.05 on hero's heads-up bets after the flop. Clean full log (31 Oct - 6 Nov,
+  // 465 first answers to hero's heads-up bets, frozen captures, re-solved on main): predicted all-fold 0.414, actual
+  // 0.342 (z -3.2; Mark 0.395 vs 0.314, n 315; everyone else 0.452 vs 0.400, n 150); without the shift 0.362 (Mark
+  // 0.344, the rest 0.399). The shift's ups and downs still predict (log-odds slope 2.5 +- 0.8 on top of the read, 1 as
+  // built): with hero's line in the bottom third answers folded 0.28 against 0.42 predicted. Log-likelihood: as built
+  // -295.5, no shift -294.1, recentred by 0.05 -292.4; split in time halves, a centre fitted on one half (0.055, 0.090)
+  // scores +1.5 / +1.1 nats over the old rule on the other. Multiway bets keep the old shift: MW_BET_FOLD was fitted on
+  // top of it.
+  const STORY_CENTRE = 0.05;
   // Extra strength tilt on opponents' ranges in hero's pots after the flop, ramped in from `from` to `to` bb of pot
   // (createAnalysis, input.heroPotTilt). With `learn`, `tilt` is the prior of a tilt learned from the table's own
   // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts, never below `min`: a tilt under 0
@@ -5927,7 +5938,9 @@
         a += hW[k] * current.ehs[k]; aw += hW[k]; u += current.ehs[k]; un++;
       }
       if (aw > 0 && un > 0) credibility = a / aw - u / un;
-      const shift = clamp(0.4 * credibility, -0.08, 0.08);
+      // Heads-up the shift is recentred (STORY_CENTRE): measured against all hands, almost every line looks strong.
+      const centre = opps.length === 1 && input.storyCentre !== false ? (typeof input.storyCentre === 'number' ? input.storyCentre : STORY_CENTRE) : 0;
+      const shift = clamp(0.4 * credibility, -0.08, 0.08) - centre;
       for (const o of opps) {
         o.stats = Object.assign({}, o.stats, { foldShift: shift });
         // The heads-up read answers multiway bets until someone stays (sc.oppHU): same story.

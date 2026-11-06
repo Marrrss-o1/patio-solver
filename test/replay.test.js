@@ -1460,17 +1460,25 @@ test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river che
 test("multiway: hero's story moves every player's folds, as heads-up", () => {
   // The credibility shift (hero's line looks strong) used to reach only o.stats; multiway bets are
   // answered with the heads-up read until someone stays (#39), so all-fold rates ignored it.
-  const spot = (n, heroActions) => E.analyzeSync({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 6 * (n + 1), toCall: 0, stack: 300,
+  const spot = (n, heroActions, extra) => E.analyzeSync(Object.assign({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 6 * (n + 1), toCall: 0, stack: 300,
     bigBlind: 2, inPosition: false, heroActions, heroPfAggressor: true, heroCommitted: 6, mix: false, seed: 7, iterations: 4000, lookahead: false,
-    opponents: Array.from({ length: n }, (_, i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'call', flop: '' }, committed: 6, stack: 300 })) });
+    opponents: Array.from({ length: n }, (_, i) => ({ name: 'P' + i, tally: {}, actions: { pre: 'call', flop: '' }, committed: 6, stack: 300 })) }, extra));
+  const bet = (r) => r.ranked.filter((s) => s.kind === 'bet').sort((a, b) => b.amount - a.amount)[0];
   for (const n of [1, 2]) {
-    const plain = spot(n), story = spot(n, { pre: 'raise', flop: '' });
+    const plain = spot(n), story = spot(n, { pre: 'raise', flop: '' }, { storyCentre: false });
     assert.ok(story.credibility > 0.1, 'credibility ' + story.credibility);
-    const bet = (r) => r.ranked.filter((s) => s.kind === 'bet').sort((a, b) => b.amount - a.amount)[0];
     assert.strictEqual(bet(plain).amount, bet(story).amount);
     const d = bet(story).foldPct - bet(plain).foldPct;
     assert.ok(d > 0.04, `${n} opponent(s): all fold ${bet(plain).foldPct} without the story, ${bet(story).foldPct} with it`);
   }
+  // Heads-up the shift is recentred by STORY_CENTRE (0.05); multiway keeps it.
+  const hu = spot(1, { pre: 'raise', flop: '' }, { storyCentre: false }), huC = spot(1, { pre: 'raise', flop: '' });
+  const dc = bet(hu).foldPct - bet(huC).foldPct;
+  assert.ok(dc > 0.03 && dc < 0.07, `heads-up all fold ${bet(hu).foldPct} as built, ${bet(huC).foldPct} recentred`);
+  assert.ok(bet(spot(1, { pre: 'raise', flop: '' }, { storyCentre: 0 })).foldPct === bet(hu).foldPct);
+  const mw = spot(2, { pre: 'raise', flop: '' }, { storyCentre: false }), mwC = spot(2, { pre: 'raise', flop: '' });
+  assert.strictEqual(bet(mw).foldPct, bet(mwC).foldPct);
+  assert.strictEqual(mw.best.kind + mw.best.amount, mwC.best.kind + mwC.best.amount);
 });
 
 test('turn solver: multiway turns are solved against the field on the computer', () => {
