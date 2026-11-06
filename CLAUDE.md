@@ -1108,6 +1108,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   don't use check narrowing). Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: 4-handed +10.1 ± 26.3,
   heads-up +13.6 ± 18.6 (pooled +12.4 ± 15.2). Neutral, so off. Files: /mnt/project-files/patio-solver/
   leakhunt-2026-11-06/ (RESULTS.md, scripts/init.js, init2.js, showinit.js), sims/2026-11-06-leakhunt/.
+  The bots have the habit (turn bet after betting the flop / leading into its bettor, heads-up: friends 60% / 11%,
+  v12r bots 58% / 12%), so the simulator is a fair test. Second round (6 Nov night, v1.8.35, same settings; pooling
+  rule set before the runs): heads-up -18.6 ± 20.3, 3-handed -27.6 ± 28.8, 4-handed +24.5 ± 24.1, 5-handed
+  -5.7 ± 23.8; all six runs pooled about +1 ± 9. No win, so it stays off. Files: sims/2026-11-06-init2/.
 - Hero's multiway bets (v1.8.28, `MW_BET_FOLD` {odds 2, from 0.3, to 0.45}; `input.mwBetFold: false` turns it off, a
   number sets the odds): the first players to answer hero's bet into 2+ opponents (heads-up reads, before anyone stays) fold
   with odds x2 on the current street, ramped in from 30% to 45% of the pot (`statsHU.betOdds`, read in foldAtSize; Monte
