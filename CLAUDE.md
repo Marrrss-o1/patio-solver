@@ -1199,6 +1199,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   where the audit's gap is in raises and medium hands, so weak hands' calls get about 0.4bb more than the logs support;
   a per-hand edge is an idea. Not per player: it is hero's edge against a field, and by opponent nobody's TD gap is
   outside 2 SE but Marker's postflop (n 15). Files: sims/2026-11-06-edgemw/, ablation/scripts/ (premw-edge replays).
+  v1.8.32 as a whole (this, the per-player hero-pot and river-raise tilts) against v1.8.31, v12r regulars, live budget,
+  1,000 deals each: 4-handed +33.3 ± 29.2 (1,380 of 4,000 hands differ), 5-handed +116.1 ± 32.5 (1,232 of 5,000; button
+  +41, every hand group but strong up); pooled about +70 ± 22. Files: sims/2026-11-06-v1832/.
 - Short raises (v1.8.13, `input.raisePrice`: false for the old rule): an opponent facing hero's raise that costs them
   under a quarter of the pot over the call (an all-in a chip over the call) folds no more of their range than to a bet of
   that price, in the river, turn and flop solvers' fixed strategies. The 4 Nov log had QQ facing 40 into 208 with 41
