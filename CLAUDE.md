@@ -257,6 +257,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   On the 1 Nov session faster decay predicts facing-bet answers better (0.9: 0.861 -> 0.840) but preflop actions
   and shown hands worse; nearly all of that gain comes through the table size step (below), which the simulator
   needs, so DECAY stays.
+  Tried and dropped (6 Nov afternoon, Mark's account raising 41% of hands against a read of 9%): faster decay for a
+  player while their read predicts their recent actions worse than an average player's (EWMA of the per-action
+  surprise gap, window 0.93, margin 0.05 nats, decay 0.8 while above it). All logs, 7,418 friend actions:
+  0.7673 -> 0.7657 nats per action (-11 total, parameters picked on the same logs); that afternoon's Mark
+  1.141 -> 1.046. It changes 6 of the session's 58 decisions, all sizes and near-ties; the one fold it should
+  have fixed (KTo against his 4.5bb open, a 3-bet at his real 41%) stays a fold. A global decay of 0.95-0.99
+  predicts all logs no better (0.766-0.771 against 0.767), Mark included. Files:
+  /mnt/project-files/patio-solver/scripts/2026-11-06-session2/ (shift-tracker.js, shift-sweep.txt, pfr41.txt).
 - Preflop ranges are soft (`topClassWeights` uses a sigmoid edge, plus a small floor for every hand). Hard top-X%
   cut-offs gave zero weight to hands people really play (KQo raises at 8% PFR), which made reads predict shown
   hands worse than a random guess in the simulator and led to bad turn/river calls.
