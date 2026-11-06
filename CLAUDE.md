@@ -115,9 +115,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Log captures (6 Nov): `solverInput()` copies each opponent's tally one level deep (Object.assign onto blankTally), so
   nested parts (st, vs, betSize, shows, jamShows, mwFolds) stay live. A script that keeps the inputs while replaying a
   log and writes them at the end gives every decision the counts of later hands. Copy with JSON at capture time
-  (leakhunt-2026-11-06/scripts/capall.js does now). Earlier scripts in /mnt/project-files/patio-solver/scripts/ that keep
-  inputs and write them later: 2026-11-02-allin, 2026-11-04-session, 2026-11-05-headsup, -session2, -session3,
-  -evening/capture.js and 2026-11-06-session/capture6.js. Re-checked on frozen captures: v1.8.28's mwBetFold and
+  (see Raw recorder). The scripts that kept inputs and wrote them later (in /mnt/project-files/patio-solver/scripts/:
+  2026-11-02-allin, 2026-11-04-session, 2026-11-05-headsup, -session2, -session3, -evening/capture.js,
+  2026-11-06-session/capture6.js, 2026-11-03-linked-reads/session.js; leakhunt-2026-11-06/scripts/capall.js) copy each
+  input since 6 Nov; numbers made with them before then are in-sample for unlinked players (linked reads are fresh
+  copies). The merged fixes' evidence came from shows or from captures written as they went (audit-2026-11-04,
+  leakhunt-2026-11-05, river-bluffs capture-resp.js, shove20 capshove.js). Re-checked on frozen captures: v1.8.28's mwBetFold and
   checkBetTilt evidence holds, v1.8.29's per-player reads tie the flat rule instead of beating it (below), and the 6 Nov
   leak hunt's numbers move by a point or two at most (leakhunt-2026-11-06/RESULTS.md, "Clean re-check").
 - Seat order (verified on Marwin's live 3-5 handed tables): seats run in ascending number, except `s3_v2`, which
