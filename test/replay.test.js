@@ -1400,6 +1400,29 @@ test('checkBetTilt per player (v1.8.29): the table tilt without shows, the shows
   assert.strictEqual(E.checkBetLearned(weak, Object.assign({}, cfg, { learn: false })).tilt, cfg.tilt);
 });
 
+test('riverRaiseTilt per player (v1.8.32): the table tilt without shows, the player\'s river raises move it', () => {
+  const cfg = E.RIVER_RAISE_TILT;
+  assert.strictEqual(E.riverRaiseLearned([], cfg).tilt, cfg.tilt);
+  const show = (peak, extra) => Object.assign({ actions: { river: 'raise' }, fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
+  const weak = Array.from({ length: 6 }, () => show(0)), strong = Array.from({ length: 6 }, () => show(0.75));
+  const w = E.riverRaiseLearned(weak, cfg), s = E.riverRaiseLearned(strong, cfg);
+  assert.ok(w.tilt < cfg.tilt - 0.02 && w.tilt >= 0 && w.n === 6, 'weak raises: ' + w.tilt);
+  assert.ok(s.tilt > cfg.tilt + 0.02, 'strong raises: ' + s.tilt);
+  assert.strictEqual(E.riverRaiseLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'checkraise' } })), cfg).n, 6, 'check-raises count');
+  assert.strictEqual(E.riverRaiseLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'bet' } })), cfg).n, 0, 'bets do not');
+  assert.strictEqual(E.riverRaiseLearned(weak, Object.assign({}, cfg, { learn: false })).tilt, cfg.tilt);
+  // In a spot: hero facing a river raise from a player whose shown raises were weak reads them weaker than the table's 0.3.
+  const spot = (shows, extra) => E.analyzeSync(Object.assign({
+    hero: [E.parseCard('Ks'), E.parseCard('Qd')], board: ['Kh', '8c', '4d', '2s', '7h'].map(E.parseCard), pot: 80, toCall: 40, stack: 300, bigBlind: 2,
+    inPosition: false, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'bet', river: 'bet' }, heroSizes: {}, heroPosition: 'early',
+    heroPfAggressor: true, opponents: [{ name: 'V', tally: { shows }, actions: { pre: 'call', flop: 'call', turn: 'call', river: 'raise' }, sizes: { river: 0.5 },
+      position: 'late', committed: 60, stack: 240, bet: 60 }], iterations: 3000, mix: false, seed: 2, heroPotTilt: false,
+  }, extra));
+  const eqTable = spot([]).equity.share, eqWeak = spot(weak).equity.share, eqFlat = spot(weak, { riverRaiseTilt: { learn: false } }).equity.share;
+  assert.ok(eqWeak > eqTable + 0.01, `weak raiser ${eqWeak} vs table ${eqTable}`);
+  assert.strictEqual(eqFlat, eqTable);
+});
+
 test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river checks from stored hands, once', () => {
   const t = new T({ players: { A: { name: 'Al', tally: {} }, B: { name: 'Bo', tally: {} } } });
   const hand = (t0, betAmt, bAct) => ({

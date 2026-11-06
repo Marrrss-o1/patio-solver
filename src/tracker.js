@@ -1281,6 +1281,7 @@
           cbTilt: o.stats.tiltCheckBet ? { tilt: r2(o.stats.tiltCheckBet.tilt), n: o.stats.tiltCheckBet.n } : undefined,
           // v1.8.31: the player's own hero-pot tilt (heroPotOwn) and how many of their shows it rests on.
           hpOwn: o.stats.heroPotOwn ? { tilt: r2(o.stats.heroPotOwn.tilt), n: o.stats.heroPotOwn.n } : undefined,
+          rrTilt: o.stats.tiltRaise && o.stats.tiltRaise.n ? { tilt: r2(o.stats.tiltRaise.tilt), n: o.stats.tiltRaise.n } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
