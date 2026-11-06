@@ -258,7 +258,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of the recentred shift a per-player offset from each player's earlier answers loses out of sample (-1.2 / -3.3 /
   -8.7 nats at sd 0.3 / 0.5 / 1, Mark too; only his river +0.5 over 50 answers), and the 0.05 corrects the
   measurement, not a habit. Multiway bets keep the shift (MW_BET_FOLD was fitted on top of it). On hero's 465 bets 30
-  picks change, all small flop bets (14-60% equity) becoming checks (19 of them were called, 3 raised).
+  picks change, all small flop bets (14-60% equity) becoming checks (19 of them were called, 3 raised); of all 917
+  heads-up decisions after the flop 48 change kind (42 flop bets -> checks), none on the turn or river (the turn and
+  river solvers don't take the shift). Simulator (the bots ignore hero's line, so no-loss check), v12r regulars, live
+  budget, 1,000 deals each, on vs `{"storyCentre":false}`: heads-up -8.9 ± 23.8 and +19.3 ± 20.8, 3-handed
+  -19.1 ± 19.2, 4-handed -26.2 ± 21.9 (pooled about -9 ± 11; 3-4 handed -22 ± 14, strong and good hands). Merged on the
+  logs (merge bar). Files: /mnt/project-files/patio-solver/sims/2026-11-06-story/.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
   or every caller all-in) also shift the current fold decision in those variants; other bets don't.
