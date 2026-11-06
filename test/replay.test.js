@@ -2195,6 +2195,36 @@ test('a player who leaves mid-hand is out of the hand (no fold is sent for them)
   assert.ok(!r2.t.hand.players[3].folded);
 });
 
+test('a stack the host sets mid-hand moves that player\'s chips, and advice keeps running', () => {
+  // 6 Nov afternoon: the host paused during a hand and set two stacks (game log "pss"); the tracker lost the chips and
+  // gave no advice for the hand.
+  const pss = (pid, nick, amt, ostk) => ({ ev: 'chat_message', data: { msgType: 'game_log', userId: pid, username: nick, log: { e: 'pss', pid, nick, amt, ostk } }, snap: snap3(970, 970, 970) });
+  const msgs = three.slice(0, -1);
+  msgs.push({ ev: 'admin:game:game_paused', data: {}, snap: snap3(970, 970, 970) });
+  msgs.push(pss('H', 'Hero', 1200, 970));
+  msgs.push(pss('A', 'Ann', 1500, 970));
+  msgs.push({ ev: 'admin:game:game_unpaused', data: { turnTimeLeft: 20000 }, snap: snap3(1200, 1500, 970) });
+  msgs.push({ ev: 'game:player_turn_started', data: { playerID: 1 }, snap: snap3(1200, 1500, 970) });
+  const { t, turns } = replay(msgs);
+  const x = turns[1];
+  assert.ok(!x.error, x.error);
+  assert.strictEqual(x.input.stack, 1200, 'effective stack: hero 1200 against Ann 1500');
+  assert.strictEqual(x.input.opponents.find((o) => o.name === 'Ann').stack, 1500);
+  assert.strictEqual(x.input.pot, 90);
+  // Without the game log lines the chips don't add up, as before.
+  assert.match(replay(msgs.filter((m) => m.ev !== 'chat_message')).turns[1].error, /Lost track of the chips/);
+  // The hand log has the change; the starting stacks are the ones the hand was played with.
+  t.handle('game:game_ended', {}, snap3(1200, 1500, 970));
+  const ps = t.db.history[0].players;
+  assert.deepStrictEqual(ps.map((p) => [p.name, p.stack, p.adminStack]), [['Hero', 1230, 230], ['Ann', 1530, 530], ['Bob', 1000, undefined]]);
+  // Other game log lines, a change for someone not in the hand and one after the hand change nothing.
+  const r2 = replay(three.slice(0, -1).concat([pss('Z', 'Zed', 5, 500), { ev: 'chat_message', data: { msgType: 'game_log', log: { e: 'w', pid: 'A', amt: 40 } } }]));
+  assert.ok(Object.values(r2.t.hand.players).every((p) => p.start === 1000 && !p.adminStack));
+  r2.t.handle('game:game_ended', {}, snap3(970, 970, 970));
+  r2.t.handle(pss('A', 'Ann', 100, 970).ev, pss('A', 'Ann', 100, 970).data, null);
+  assert.strictEqual(r2.t.hand.players[3].start, 1000);
+});
+
 test('safety net: when the chips stop matching the table, advice stops for the hand', () => {
   // Bob's flop check is lost (as after a reconnect) and so is a bet: the table shows Ann 40 lower.
   const msgs = three.slice(0, -2);
