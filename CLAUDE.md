@@ -120,9 +120,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   2026-11-06-session/capture6.js, 2026-11-03-linked-reads/session.js; leakhunt-2026-11-06/scripts/capall.js) copy each
   input since 6 Nov; numbers made with them before then are in-sample for unlinked players (linked reads are fresh
   copies). The merged fixes' evidence came from shows or from captures written as they went (audit-2026-11-04,
-  leakhunt-2026-11-05, river-bluffs capture-resp.js, shove20 capshove.js). Re-checked on frozen captures: v1.8.28's mwBetFold and
-  checkBetTilt evidence holds, v1.8.29's per-player reads tie the flat rule instead of beating it (below), and the 6 Nov
-  leak hunt's numbers move by a point or two at most (leakhunt-2026-11-06/RESULTS.md, "Clean re-check").
+  leakhunt-2026-11-05, river-bluffs capture-resp.js, shove20 capshove.js). Re-checked on frozen captures: v1.8.28's
+  mwBetFold and checkBetTilt evidence holds, v1.8.29's per-player reads tie the flat rule instead of beating it
+  (below), and the 6 Nov leak hunt's numbers move by a point or two at most (leakhunt-2026-11-06/RESULTS.md, "Clean
+  re-check").
 - Seat order (verified on Marwin's live 3-5 handed tables): seats run in ascending number, except `s3_v2`, which
   sits between s9 and s10 (seatKey 9.5). `seatOrder()` pins SB, BB and UTG from `game:dealer_updated`
   (`h.sbPos/bbPos/utgPos`); 111 of 111 logged hands match the server's action order.
