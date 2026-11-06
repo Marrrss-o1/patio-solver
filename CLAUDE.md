@@ -266,7 +266,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   after the merge: 3-handed -25.1 ± 26.0 (seed 9305), 4-handed +14.0 ± 21.2 (9306; big blind +27.2 ± 13.7, strong
   hands -11.8 ± 7.3). All six pooled about -7 ± 9 (heads-up +7 ± 16, 3-4 handed -13 ± 11): no real loss, so it stays
   on at every table size (it only touches heads-up spots there). Files: /mnt/project-files/patio-solver/sims/
-  2026-11-06-story/.
+  2026-11-06-story/. Phone budget (the 6 Nov postflop changes together: B main vs A `{"storyCentre":false,
+  "heroPotTilt":{"own":0},"riverRaiseTilt":{"learn":false}}`, v12r, 1,000 deals each): heads-up -14.1 ± 24.2, 4-handed
+  -3.5 ± 26.2 (pooled about -9 ± 18): no real loss there either. Files: sims/2026-11-06-phone/.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
   or every caller all-in) also shift the current fold decision in those variants; other bets don't.
@@ -389,6 +391,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   on one half of the logs scores better on the other (log-loss 0.684 -> 0.668, 0.656 -> 0.645; vocurve.js). pendingTilt
   off with pfFlopEdge 0.10, v12r regulars, 4-handed, live: +22.1 ± 27.0 against main (neutral; it plays more hands). So
   the tilt still looks like a stand-in for raise EV the flop leaves miss, not a read to calibrate away.
+  Re-checked 6 Nov night, with the 0.10 multiway edge (v1.8.35; clean full log, hero's preflop raises at 3+ handed
+  tables, predicted all-fold at hero's size): pendingTilt off fits 10.8 nats better over 240 raises, nearly all of it
+  3-handed opens (n 72: predicted 0.490, off 0.344, actual 0.347; 4-handed opens 0.330 / 0.220 / 0.259, n 27), and the
+  v12r bots have the habit (main over-reads their folds to hero's 3-handed opens too: 0.278 vs 0.200, n 195), so the
+  simulator can judge it. Live, v12r, 1,000 deals each, off vs on: 3-handed +34.6 ± 30.6 (seed 9321; small blind +50.7
+  ± 19.8) and -49.4 ± 30.4 (9323; small blind -37.3 ± 20.5, medium hands -36.0 ± 18.2), 4-handed -11.3 ± 28.6 (9322);
+  pooled about -9 ± 17. No win, so the tilt stays at 3+ handed tables. Files:
+  /mnt/project-files/patio-solver/sims/2026-11-06-untilt3/.
 - Two-player tables preflop (v1.8.35, `input.pfHeadsUp: false` is the v1.8.34 rule): when the hand is dealt to two
   players (`input.seats`), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
   answers from the size curve (pfLimpCurve on); an explicit `input.pendingTilt` / `input.pfLimpCurve` wins. Bigger tables
