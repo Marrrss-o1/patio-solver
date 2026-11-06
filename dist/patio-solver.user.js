@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.30
+// @version      1.8.31
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -7865,6 +7865,23 @@ ENGINE();
           }
           break;
         }
+        case 'chat_message': {
+          // The host set a stack ("pss" game log: Admin updated stack, `amt` the new stack behind, `ostk` the old one).
+          // Mid-hand (6 Nov afternoon: the game paused during a hand, MarAllin 403 -> 272) the table's stacks then
+          // no longer match the chips counted, and advice stopped for the hand. Move that player's starting stack by
+          // the change, so the chips still add up (and the hand's result leaves it out).
+          const lg = data && data.msgType === 'game_log' && data.log;
+          if (h && !h.finished && lg && lg.e === 'pss' && lg.pid && isFinite(+lg.amt) && isFinite(+lg.ostk)) {
+            const p = Object.values(h.players).find((x) => x.auth && x.auth === lg.pid);
+            if (p) {
+              const dlt = +lg.amt - +lg.ostk;
+              p.start += dlt;
+              p.adminStack = Math.round(((p.adminStack || 0) + dlt) * 100) / 100;
+              if (h.desync && h.desync.who === p.name && Math.abs(p.start - p.total - +lg.amt) <= 0.01) delete h.desync;
+            }
+          }
+          break;
+        }
         case 'game:player_turn_ended':
           if (h && data.playerID === this.heroId()) this.emit('heroDone', null);
           break;
@@ -8097,6 +8114,7 @@ ENGINE();
         players: Object.values(h.players).map((p) => ({
           name: p.name, hero: p.id === heroId, position: this.posGroup(p.id), folded: p.folded, stack: p.start,
           put: p.total, actions: p.seq, shown: p.shown, fit: p.fit, accuracy: p.accuracy, left: p.left || undefined,
+          adminStack: p.adminStack || undefined,
           pred: p.id === heroId ? undefined : predSummary(this.readTally(p.auth)),
           accounts: p.id !== heroId && this.groupOf(p.auth).length > 1 ? this.groupOf(p.auth).length : undefined,
         })),

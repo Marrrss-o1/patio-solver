@@ -131,6 +131,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the result) is the pot minus the part of a bigger bet hero can't match (`uncalledChips`); potOdds and every solver
   use it. Opponents with stack 0 can't fold; `realize` isn't applied when nobody can bet any more; calls and raises
   charge only what each opponent still owes on the street; `playOut` takes a `room` cap for the opponent's chips.
+- Host stack changes (v1.8.31): when the host sets a stack mid-hand (game log chat line `pss`, `amt` the new stack
+  behind, `ostk` the old one), the tracker moves that player's starting stack by the change (`p.start`; hand log
+  `players[].adminStack`), so the chips still match the table and the hand's result leaves the change out. Before, the
+  safety net stopped advice for the hand ("Lost track of the chips"): 6 Nov afternoon #1, where the host paused after a
+  hand played at the old 5/10 blinds and set two stacks. All logs have 15 `pss` lines; that was the only one mid-hand
+  for a player dealt in.
 - Side pots: modelled at showdown when the tracker passes `heroCommitted` and each opponent's `committed`/`stack`
   (`sidePotWin` in engine.js; `hasSidePots`). The multiway solvers and the multiway lookahead use `multiwayStack`:
   they still run when hero can match the bets it faces and every player with fewer total chips (committed + behind)
