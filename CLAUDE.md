@@ -112,6 +112,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   every read, fix and exploit is built per player, with the group's number only as the starting point a player moves away
   from as their own hands come in (shrunk by how much data there is: deepShoveTrust, heroPotLearned, mwBetOdds,
   checkBetLearned). A flat group rule is only for what can't be counted per player.
+- Log captures (6 Nov): `solverInput()` copies each opponent's tally one level deep (Object.assign onto blankTally), so
+  nested parts (st, vs, betSize, shows, jamShows, mwFolds) stay live. A script that keeps the inputs while replaying a
+  log and writes them at the end gives every decision the counts of later hands. Copy with JSON at capture time
+  (see Raw recorder). The scripts that kept inputs and wrote them later (in /mnt/project-files/patio-solver/scripts/:
+  2026-11-02-allin, 2026-11-04-session, 2026-11-05-headsup, -session2, -session3, -evening/capture.js,
+  2026-11-06-session/capture6.js, 2026-11-03-linked-reads/session.js; leakhunt-2026-11-06/scripts/capall.js) copy each
+  input since 6 Nov; numbers made with them before then are in-sample for unlinked players (linked reads are fresh
+  copies). The merged fixes' evidence came from shows or from captures written as they went (audit-2026-11-04,
+  leakhunt-2026-11-05, river-bluffs capture-resp.js, shove20 capshove.js). Re-checked on frozen captures: v1.8.28's
+  mwBetFold and checkBetTilt evidence holds, v1.8.29's per-player reads tie the flat rule instead of beating it
+  (below), and the 6 Nov leak hunt's numbers move by a point or two at most (leakhunt-2026-11-06/RESULTS.md, "Clean
+  re-check").
 - Seat order (verified on Marwin's live 3-5 handed tables): seats run in ascending number, except `s3_v2`, which
   sits between s9 and s10 (seatKey 9.5). `seatOrder()` pins SB, BB and UTG from `game:dealer_updated`
   (`h.sbPos/bbPos/utgPos`); 111 of 111 logged hands match the server's action order.
@@ -927,7 +939,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   the read's range (n 28; every day above 0.5), after a friend's check 0.51 (n 33), leads 0.48-0.55; best tilt 0.2
   (+2.9 nats). When hero checks and the friend checks back, hero's share is 0.58 against 0.40 predicted (n 25): after
   his check friends bet good hands and check back weak ones. Turn bets after hero's check are on target (0.44, n 19).
-  It changes 4 of 40 logged decisions facing such a bet, all losing calls becoming folds (+41bb; in-sample). Simulator,
+  It changes 4 of 40 logged decisions facing such a bet: 3 losing calls become folds (+25bb) and a raise becomes a call
+  (in-sample; frozen captures, see Log captures). Simulator,
   v12r regulars, live budget, 1,000 deals each, on vs off: plain regulars heads-up +4.7 ± 20.2, 4-handed +5.4 ± 15.8,
   5-handed -5.1 ± 17.5 (pooled +1.7 ± 10.1; about one hand in 200 changes); against `xp:riverxb` (after hero's river
   check, hands at a made-hand percentile 0.6+ bet 85%, 0.4-0.6 check, under 0.4 bet 5%, like the friends' shown bets
@@ -943,9 +956,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   Rebuilt reads: 24 such shows from 12 players (Jagger 5: 0.25, MarkMaodjaoj 4: 0.15, Jelonte 3: 0.30, mewnow 2: 0.26,
   tawan 2: 0.11, gunner 2: 0.29); all 24 together fit best at 0.3 (0.15-0.3 within 0.4 nats), so 0.2 stays the centre.
   Out of sample (each show at the tilt from the player's earlier shows): no tilt 15.64 nats, flat 0.2 18.72, k 15 18.39,
-  k 30 18.46, k 60 18.61: the shows can't tell players apart yet. Log replay: 2 decisions change, both river calls that
-  lost becoming folds (31 Oct 45 vs Tad on 9-6-5-4-3, 5 Nov J8 vs mewnow on 9-9-7-8-K; +31.5bb). Simulator: with
-  mwBetFold's per-player read, see "Hero's multiway bets" below.
+  k 30 18.46, k 60 18.61: the shows can't tell players apart yet. Log replay on frozen captures: no decision changes
+  against the flat rule (the first replay's 2 river calls becoming folds came from later hands' shows leaking into the
+  captures; see Log captures). Simulator: with mwBetFold's per-player read, see "Hero's multiway bets" below.
 - Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
   on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
   (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
@@ -992,7 +1005,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   with odds x2 on the current street, ramped in from 30% to 45% of the pot (`statsHU.betOdds`, read in foldAtSize; Monte
   Carlo and the multiway turn and river solvers). All 113 of hero's postflop bets into 2+ friends in the logs to 5 Nov,
   re-solved at the live budget (251 answers): at 40%+ of the pot the first answers folded 70% where the solver said 52%
-  (n 99; flop 64% vs 50%, turn 80% vs 52%, river 75% vs 60%), under 40% on target (43% vs 42%, n 136). Friends answer
+  (n 99; flop 64% vs 50%, turn 80% vs 53%, river 75% vs 60%), under 40% on target (43% vs 42%, n 136). Friends answer
   each other's multiway bets of that size as read (64% vs 64%, n 323), hero's not (73% vs 63%). Fold log-odds also rise
   0.71 ± 0.14 per ln(bet in bb) multiway against everyone (both halves of the logs agree), which isn't built in.
   Simulator, v12r regulars, live budget, 1,000 deals each, on vs off: 4-handed +48.2 ± 28.6 and -18.2 ± 28.7, 5-handed
@@ -1000,13 +1013,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   hero's big multiway bets only a third as much more than read as the friends do (everyone folds at 40%+ of the pot:
   bots 31% vs 25% predicted, n 214; friends 41% vs 23%, n 51), so the simulator can't show most of it. On since v1.8.28
   on the logs (merge bar above): everyone folding to hero's 40%+ multiway bets with nothing to call, predicted 0.28 ->
-  0.46, actual 0.47 (n 34; log-likelihood -27.6 -> -24.1); under 45% of the pot 0.12 -> 0.15, actual 0.13 (n 60).
-  Re-solving the 355 logged multiway decisions after the flop, 90 change: 37 checks become bets (mostly cheap stabs
-  with 10-30% equity), 39 bets change size (value bets mostly smaller), 11 bets become checks (some strong hands check
-  to keep callers: AA on 2c Ts 9h 3-way, T7 with the straight on 6-8-9). Tests: the multiway product test runs with
-  it off; top set 3-way on Qh 8d 3c now checks (the 1.5x-pot bet is everyone-folded 56% instead of 35%, about 77% of
-  checking's EV); the four real stabs alone are about even (-1.0 to +0.16 chips; were -1.8), the flop king-high
-  half-pot stab +0.6 over checking with the lookahead. Files: as above (scripts/mwsolve.js, mwfit.js, absz*.js).
+  0.47, actual 0.47 (n 34; log-likelihood -27.4 -> -24.1); under 40% of the pot 0.12 -> 0.15, actual 0.13 (n 62).
+  Re-solving the 355 logged multiway decisions after the flop (frozen captures), 81 change: 38 checks become bets
+  (mostly cheap stabs with 10-30% equity), 32 bets change size (value bets mostly smaller), 9 bets become checks (some
+  strong hands check to keep callers: AA on 2c Ts 9h 3-way, T7 with the straight on 6-8-9), 2 flop raises become calls.
+  Tests: the multiway product test runs with it off; top set 3-way on Qh 8d 3c now checks (the 1.5x-pot bet is
+  everyone-folded 56% instead of 35%, about 77% of checking's EV); the four real stabs alone are about even (-1.0 to
+  +0.16 chips; were -1.8), the flop king-high half-pot stab +0.6 over checking with the lookahead. Files: as above
+  (scripts/mwsolve.js, mwfit.js, absz*.js).
   Per player since v1.8.29 (`mwBetOdds`, MW_BET_FOLD {fitOdds 2.8, tau 0.5, max 40}; `{ tau: 0 }` is the v1.8.28 rule):
   the tracker keeps each player's first answers to hero's multiway bets of 30%+ of the pot after the flop (`tally.mwFolds`,
   newest 40, { y fold, f bet/pot, n street, ck checked first, ag bet earlier, rr re-raised preflop, k opponents }; kept
@@ -1017,14 +1031,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   MarkMaodjaoj 34 answers x2.45, gunner 18 x2.48, tawan 14 x1.79, mewnow 13 x2.05, imnotplaying 12 x1.54, Marker 10
   x1.65, Dew666 8 x2.25, Jagger 8 x2.30, Jelonte 7 x1.51. Marwin asked whether x2 came from Mark and mew alone: no, 17
   of 21 friends folded more than read (81 of 99 answers at 40%+), 69% vs 52% without the two; with 3 opponents x3.0, 2
-  x1.8; a per-player multiplier fits no better than the shared one beyond chance (p 0.90). Out of sample (each answer
-  from the player's earlier ones, Monte Carlo rates): per account tau 0.5 -114.80 nats against the shared x2 -115.00, per
-  person (linked accounts) -115.80 (184 answers): no gain or loss yet; it is per player by the rule above. Log replay (all
-  2,032 decisions, reads and answers from earlier hands): 24 decisions change, all multiway after the flop and near ties
-  (bet sizes in 6-24 chip pots, a few bets become checks and back); everyone folding to hero's multiway bets, predicted
-  at hero's size: 40%+ of the pot flat 0.464 (log-likelihood -24.15), per player 0.444 (-23.60), actual 0.471 (n 34);
-  all sizes -49.87 -> -49.29 (n 96). Simulator, v12r regulars, live budget, 1,000 deals each, per player (both reads)
-  vs flat (`{"mwBetFold":{"tau":0},"checkBetTilt":{"learn":false}}`): 4-handed +28.3 ± 26.8, 5-handed +0.2 ± 21.2,
+  x1.8; a per-player multiplier fits no better than the shared one beyond chance (p 0.93). Out of sample (each answer
+  from the player's earlier ones, Monte Carlo rates): per account tau 0.5 -114.56 nats against the shared x2 -114.67, per
+  person (linked accounts) -115.51 (184 answers): no gain or loss yet; it is per player by the rule above. Log replay (all
+  2,032 decisions, reads and answers from earlier hands, frozen captures): 16 decisions change, all multiway after the
+  flop and near ties (bet sizes, 3 bets become checks, 1 check a bet); everyone folding to hero's multiway bets,
+  predicted at hero's size: 40%+ of the pot flat 0.466 (log-likelihood -24.06), per player 0.452 (-24.11), actual 0.471
+  (n 34); all sizes -50.27 both (n 96). So per player ties the flat rule on the logs; it is on by the per-player rule
+  (the first replay's 24 changes and better fit came from later answers leaking into the captures, see Log captures).
+  Simulator, v12r regulars, live budget, 1,000 deals each, per player (both reads) vs flat
+  (`{"mwBetFold":{"tau":0},"checkBetTilt":{"learn":false}}`): 4-handed +28.3 ± 26.8, 5-handed +0.2 ± 21.2,
   `xp:riverxb` heads-up +1.0 ± 5.2 (53 of 2,000 hands differ), `xp:riverxb` + friends 3-handed -20.8 ± 21.9 (pooled
   +0.8 ± 4.8; the three multiway runs -0.6 ± 13.2): no real loss. Files: /mnt/project-files/patio-solver/sims/
   2026-11-06-perplayer/ (replay/ has the log replay and the split scripts).
