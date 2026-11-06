@@ -72,3 +72,9 @@ Card `value` is `"2".."10","J","Q","K","A"` and `suite` is `clubs|diamonds|heart
 `room:get`, `room:lobby_stats_updated` (includes `playerStates` with per-hand stats), `player:game:player_play_state_changed`,
 `admin:game:game_started`, `admin:game:game_stopped`, `admin:game:new_hand_started` (includes full settings),
 `admin:room:settings_updated`, `game:next_hand_cancelled`.
+
+Host stack changes: `chat_message` game log `pss` (one player's stack set: `pid`, `amt` new, `ostk` old) and
+`admin:game:player_stacks_reset` (`{ newStackAmount, onlyResetBankrupted }`, every stack; announced in chat as `lss`
+with `rsn` `on_this` or `on_next`). A hand the host stops (`admin:game:game_stopped` before `game:game_ended`) gets
+no payout and hands every bet back. The tracker keeps both out of a hand's result (tracker.js, `pss` and
+`player_stacks_reset`).
