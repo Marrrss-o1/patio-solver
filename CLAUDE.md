@@ -262,8 +262,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up decisions after the flop 48 change kind (42 flop bets -> checks), none on the turn or river (the turn and
   river solvers don't take the shift). Simulator (the bots ignore hero's line, so no-loss check), v12r regulars, live
   budget, 1,000 deals each, on vs `{"storyCentre":false}`: heads-up -8.9 ± 23.8 and +19.3 ± 20.8, 3-handed
-  -19.1 ± 19.2, 4-handed -26.2 ± 21.9 (pooled about -9 ± 11; 3-4 handed -22 ± 14, strong and good hands). Merged on the
-  logs (merge bar). Files: /mnt/project-files/patio-solver/sims/2026-11-06-story/.
+  -19.1 ± 19.2, 4-handed -26.2 ± 21.9 (strong and good hands); merged on the logs (merge bar) at that point. Two more
+  after the merge: 3-handed -25.1 ± 26.0 (seed 9305), 4-handed +14.0 ± 21.2 (9306; big blind +27.2 ± 13.7, strong
+  hands -11.8 ± 7.3). All six pooled about -7 ± 9 (heads-up +7 ± 16, 3-4 handed -13 ± 11): no real loss, so it stays
+  on at every table size (it only touches heads-up spots there). Files: /mnt/project-files/patio-solver/sims/
+  2026-11-06-story/.
   It plays each runout against 4 opponent versions (`VARIANTS`: as read, foldier, stickier, more aggressive) and
   blends in the worst one by `robustWeight` (larger when reads are thin). Scenarios with `sc.stress` (hero all-in,
   or every caller all-in) also shift the current fold decision in those variants; other bets don't.
@@ -352,7 +355,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   shown big raises.
 - Limpers facing a raise: tally `limpFaceN`/`limpFold`, `stats.limpFold` (prior 0.52, k 6; friends 29-86%);
   continueRule's preflop base for callers is 1 - limpFold (was 0.5). Simulator vs the limp-aware bots: -1.3 ± 20.7.
-  By raise size (`PF_LIMP_CURVE`, `limpCurveFold`; on in v1.8.24-25, off since v1.8.26: `input.pfLimpCurve: true` turns
+  By raise size (`PF_LIMP_CURVE`, `limpCurveFold`; on in v1.8.24-25, off since v1.8.26 except on two-player tables (v1.8.35, below): `input.pfLimpCurve: true` turns
   it on, an object replaces fields): the first raise a limper faces is answered from a curve in ln(raise-to), with the player's limpFold
   moving it (s 0.89 in log-odds) and re-raises at 4.5% of continues; above 30bb bigFade and from 8bb the callBig floor
   still apply. The old rule read 46-49% folds at every size; friends fold 11% to raises of 3.5bb or less (n 90), 34% at
@@ -371,7 +374,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 - Tilt: home prior agg 0, pas -0.15 (betting lines fit +0.15 but showdowns over-sample value there).
   The tilt also lands on players yet to act preflop, whose hands are dealt, not chosen, so the big blind's range leans
   toward weak hands (top x0.55, worst x1.8) and the Monte Carlo has them continue less than the read (5 Nov: duke read
-  continuing 37% against a 6bb open, Monte Carlo 24%). `input.pendingTilt: false` (off) drops it for them. Predicted
+  continuing 37% against a 6bb open, Monte Carlo 24%). `input.pendingTilt: false` (off, except on two-player tables since v1.8.35, below) drops it for them. Predicted
   folds at hero's preflop raises, all logs to 5 Nov (n 206): 41% -> 35%, actual 32% (log-likelihood -109.1 -> -102.8);
   heads-up opens 70% -> 58%, actual 54% (n 68); raises over a lone limper unchanged (55%, actual 37%: limpers acted).
   56 of 643 logged preflop decisions change, mostly tighter (23 raises become folds, 18 raises get smaller). Simulator,
@@ -386,6 +389,27 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   on one half of the logs scores better on the other (log-loss 0.684 -> 0.668, 0.656 -> 0.645; vocurve.js). pendingTilt
   off with pfFlopEdge 0.10, v12r regulars, 4-handed, live: +22.1 ± 27.0 against main (neutral; it plays more hands). So
   the tilt still looks like a stand-in for raise EV the flop leaves miss, not a read to calibrate away.
+- Two-player tables preflop (v1.8.35, `input.pfHeadsUp: false` is the v1.8.34 rule): when the hand is dealt to two
+  players (`input.seats`), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
+  answers from the size curve (pfLimpCurve on); an explicit `input.pendingTilt` / `input.pfLimpCurve` wins. Bigger tables
+  are unchanged. Clean full log (31 Oct - 6 Nov, frozen captures, re-solved on main, mix off; lh2 pfscen.js, pfsplit.js),
+  hero's preflop raises with one opponent left, predicted all-fold at hero's size vs actual: two-player tables (n 229,
+  Mark 215) 0.639 vs 0.380 (log-likelihood -176.1); pendingTilt off 0.530 (-157.8), limp curve 0.557 (-157.5), both 0.449
+  (-139.1). Opens 0.715 -> 0.550, actual 0.477 (n 151); raises over his limp 0.499 -> 0.251, actual 0.200 (n 75); the
+  other players' 14 spots -13.1 -> -9.8. On 3+ handed tables with one opponent left (n 53) both read 0.402 against 0.472
+  done (main 0.542; -37.6 -> -35.2; raises over a limp 0.304 vs 0.500, n 26), and both lost 4-handed in the simulator
+  (above), so they stay off there. It changes 75 of 292 logged two-player preflop decisions (52 raise sizes, 36 of them
+  smaller; 11 big-blind checks over a limp become raises, 7 raises become checks; 4 opens become limps; 1 shove a raise)
+  and none on bigger tables. TD audit (postflop re-solved on v1.8.34): hero's two-player preflop raises came back
+  +0.66 ± 0.41 bb above their EV, +0.87 ± 0.41 with this (the reads lower raise EVs by about 0.2bb); a heads-up flop edge
+  of 0.10 / 0.14 would only bring that to +0.73 / +0.58, so the edge was left alone. Simulator, v12r regulars, live
+  budget, heads-up, 1,000 deals each, B - A against main: pendingTilt off -14.6 ± 20.6 (seed 9311; strong and premium
+  hands lose), limp curve -1.4 ± 16.2 (9312), both +25.5 ± 23.2 (9313; medium hands +37.5 ± 15.2), +10.4 ± 30.5 (9314)
+  and -45.8 ± 28.7 (9315; good and weak hands); both pooled about +1 ± 16. The simulator can't judge it: main reads the
+  bots' folds to hero's heads-up raises on target (a 300-deal heads-up run with a preflop dump, 363 raises: predicted
+  0.333, folded 0.344; opens 0.431 vs 0.419), where Mark folds far less than read, so the bots don't have the habit. On by
+  the merge bar (clear log evidence, no real loss in the simulator). Files:
+  /mnt/project-files/patio-solver/sims/2026-11-06-hupf/, analysis/2026-11-06-mark-calls.md.
 - Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
   (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
   showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on

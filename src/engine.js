@@ -2214,6 +2214,15 @@
   // scores +1.5 / +1.1 nats over the old rule on the other. Multiway bets keep the old shift: MW_BET_FOLD was fitted on
   // top of it.
   const STORY_CENTRE = 0.05;
+  // Heads-up tables preflop (v1.8.35, input.pfHeadsUp: false is the old rule): when the hand was dealt to two players
+  // (input.seats), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
+  // answers from the size curve (PF_LIMP_CURVE), unless input.pendingTilt / input.pfLimpCurve say otherwise. Clean full
+  // log (31 Oct - 6 Nov, frozen captures, re-solved on main), hero's preflop raises with one opponent left: on two-player
+  // tables (n 229, Mark 215) the predicted all-fold at hero's size was 0.639 against 0.380 done (log-likelihood -176.1),
+  // both switches 0.449 (-139.1; opens 0.715 -> 0.550, actual 0.477, n 151; raises over a limp 0.499 -> 0.251, actual
+  // 0.200, n 75; the other players' 14 spots -13.1 -> -9.8); on 3+ handed tables with one opponent left (n 53) 0.542 ->
+  // 0.402, actual 0.472 (-37.6 -> -35.2; raises over a limp there 0.499 -> 0.304, actual 0.500, n 26). Both switches lost
+  // in 4-handed simulator runs (CLAUDE.md), so they stay off on bigger tables.
   // Extra strength tilt on opponents' ranges in hero's pots after the flop, ramped in from `from` to `to` bb of pot
   // (createAnalysis, input.heroPotTilt). With `learn`, `tilt` is the prior of a tilt learned from the table's own
   // shows (heroPotLearned, input.heroPotShows), held there by `k` pseudo-counts, never below `min`: a tilt under 0
@@ -5810,6 +5819,10 @@
     const initR = INIT ? initiativeRoles(input.history) : null;
     // Multiway bet folds (MW_BET_FOLD, v1.8.28; per player since v1.8.29): input.mwBetFold false turns it off, a number
     // sets the table's odds, an object replaces fields ({ tau: 0 }: the table's odds for everyone, as in v1.8.28).
+    // Heads-up table preflop (PF heads-up gate above): both switches default on when two players were dealt in.
+    const huTable = street === 0 && input.pfHeadsUp !== false && Array.isArray(input.seats) && input.seats.length === 2;
+    const pendingTilt = input.pendingTilt != null ? input.pendingTilt : huTable ? false : undefined;
+    const pfLimpCurveIn = input.pfLimpCurve != null ? input.pfLimpCurve : huTable ? true : undefined;
     const MWBF = input.mwBetFold === false ? null : Object.assign({}, MW_BET_FOLD, typeof input.mwBetFold === 'number' ? { odds: input.mwBetFold } : input.mwBetFold && typeof input.mwBetFold === 'object' ? input.mwBetFold : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5882,7 +5895,7 @@
       // simulator was neutral, see CLAUDE.md). With the home prior's passive tilt of -0.15 the big blind's range leans
       // toward weak hands (top hands x0.55, worst x1.8): the Monte Carlo had duke (5 Nov) continue 24% against a 6bb open
       // where his read said 37%, and the preflop solver meets a weaker range.
-      const untilted = street === 0 && pending && input.pendingTilt === false;
+      const untilted = street === 0 && pending && pendingTilt === false;
       if (INIT) {
         const rl = initR.roles[o.name] || {};
         stats.initiative = INIT; stats.roles = rl;
@@ -6008,7 +6021,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: input.pfLimpCurve === true ? PF_LIMP_CURVE : input.pfLimpCurve && typeof input.pfLimpCurve === 'object' ? input.pfLimpCurve : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }

@@ -558,6 +558,29 @@ test('preflop: a big blind yet to act holds an untilted dealt hand (pendingTilt:
   assert.strictEqual(foldAt(spot({ pendingTilt: true })), tilted);
 });
 
+test('preflop: on a two-player table both switches are on (pendingTilt false, pfLimpCurve), elsewhere off', () => {
+  const tally = Object.assign(T.blankTally(), { vsOpen: { small: { fold: 0, call: 0, raise: 0 }, medium: { fold: 0, call: 0, raise: 0 }, large: { fold: 25, call: 15, raise: 0 } } });
+  const open = (extra) => E.analyzeSync(Object.assign({ hero: C('Ah 6h'), board: [], pot: 3, toCall: 1, stack: 120, bigBlind: 2, mix: false, seed: 1,
+    heroPosition: 'blinds', inPosition: true, opponents: [{ name: 'V', tally, actions: { pre: 'pending' }, position: 'blinds' }], iterations: 6000 }, extra));
+  const foldAt = (r) => r.scenarios.find((s) => s.kind !== 'fold' && s.amount === 7).foldPct;
+  const two = ['Hero', 'V'], three = ['X', 'Hero', 'V'];
+  const base = foldAt(open());
+  assert.strictEqual(foldAt(open({ seats: two })), foldAt(open({ seats: two, pendingTilt: false, pfLimpCurve: true })));
+  assert.ok(foldAt(open({ seats: two })) < base - 0.05, `${foldAt(open({ seats: two }))} vs ${base}`);
+  // Off with pfHeadsUp false, an explicit pendingTilt, or a bigger table.
+  assert.strictEqual(foldAt(open({ seats: two, pfHeadsUp: false })), base);
+  assert.strictEqual(foldAt(open({ seats: two, pendingTilt: true })), base);
+  assert.strictEqual(foldAt(open({ seats: three })), base);
+  // Hero raises over the small blind's limp: the limper answers from the size curve on two seats only.
+  const limp = (extra) => E.analyzeSync(Object.assign({ hero: C('Kd 9s'), board: [], pot: 4, toCall: 0, stack: 120, bigBlind: 2, heroBet: 2, mix: false,
+    seed: 1, heroPosition: 'blinds', inPosition: false, opponents: [{ name: 'V', tally: T.blankTally(), actions: { pre: 'call' }, position: 'button', bet: 2 }],
+    iterations: 6000 }, extra));
+  const folds = (r) => r.scenarios.filter((s) => s.kind === 'bet' || s.kind === 'raise').map((s) => s.foldPct);
+  assert.deepStrictEqual(folds(limp({ seats: two })), folds(limp({ pfLimpCurve: true })));
+  assert.deepStrictEqual(folds(limp({ seats: three })), folds(limp()));
+  assert.ok(folds(limp({ seats: two }))[0] < folds(limp())[0] - 0.2, JSON.stringify([folds(limp({ seats: two })), folds(limp())]));
+});
+
 test('reads: a bet that then calls a raise reads stronger than a plain bet', () => {
   assert.strictEqual(T.streetAction(['bet', 'call'], 4), 'betcall');
   assert.strictEqual(T.streetAction(['bet'], 4), 'bet');
