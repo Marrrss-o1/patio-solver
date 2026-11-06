@@ -123,6 +123,10 @@ function slim(r) {
   if (tracker.tagHeroPot(tracker.db.history || [])) save(DB_KEY, tracker.db);
   // Shown all-in re-raises from hands stored before v1.8.27 (the per-player deep-shove read): filled in once.
   if (!tracker.db.jamTagged) { tracker.tagJamShows(tracker.db.history || []); tracker.db.jamTagged = 1; save(DB_KEY, tracker.db); }
+  // Hands stored before v1.8.29 (the per-player reads of river bets after hero's check and of folds to hero's multiway
+  // bets): filled in once.
+  if (!tracker.db.cbTagged) { tracker.tagCheckBet(tracker.db.history || []); tracker.db.cbTagged = 1; save(DB_KEY, tracker.db); }
+  if (!tracker.db.mwTagged) { tracker.tagMwFolds(tracker.db.history || []); tracker.db.mwTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

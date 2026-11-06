@@ -21,6 +21,7 @@ function slim(r) {
         foldToBet: o.stats.foldToBet, confidence: o.stats.confidence,
         exploitWeight: o.stats.exploitWeight, accuracy: o.stats.accuracy, strengthBias: o.stats.strengthBias,
         callBig: o.stats.callBig, tiltAgg: o.stats.tiltAgg, tiltPas: o.stats.tiltPas, tiltHero: o.stats.tiltHero,
+        mwBet: o.stats.mwBet, tiltCheckBet: o.stats.tiltCheckBet ? { tilt: o.stats.tiltCheckBet.tilt, n: o.stats.tiltCheckBet.n } : undefined,
       },
       topClasses: o.grid.topClasses.slice(0, 8).map((c) => c.name),
       heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance,

@@ -1498,7 +1498,42 @@
   // 42%, n 136); after someone stayed 50% vs 62% (n 16). Friends' answers to each other's multiway bets of that size are
   // on target against the multiway read (64% vs 64%, n 323), hero's are not (73% vs 63%, n 67). Ramped in from 30% to
   // 45% of the pot; it applies to the current street's answers only (Monte Carlo, the multiway turn and river solvers).
-  const MW_BET_FOLD = { odds: 2.0, from: 0.3, to: 0.45 };
+  // Per player since v1.8.29 (mwBetOdds): x2 is the table's number, each player's own first answers to hero's multiway
+  // bets (tally.mwFolds) move it, a log-odds offset with a normal prior of sd `tau` (0: the table's x2 for everyone).
+  // Split by player (all logs to 5 Nov, 99 first answers at 40%+): 17 of 21 friends folded more than read (81 of the
+  // answers), and with Mark and mew left out it is the same (69% vs 52%); a per-player multiplier fits no better than the
+  // shared one beyond chance (each friend has 1-12 answers). Out of sample (each answer from the player's earlier ones):
+  // shared x2 -115.00 nats, tau 0.5 -114.80, tau 1 -115.22, tau 1.5 -116.76 (184 answers at 30%+). `max`: newest answers used.
+  // `fitOdds`: the same table offset measured on predictAction (the tracker's predictor, which each player's answers are
+  // scored against here): its heads-up fold at the logged answers is 0.485 at 40%+ against 0.710 done, and one ramped
+  // multiplier for everyone fits x2.82 (134 answers at 30%+, log-odds 1.04 +- 0.28). The Monte Carlo's continue rates
+  // were x2 off, so a player's offset u is measured from 2.8 and applied to 2: odds = 2 x exp(u).
+  const MW_BET_FOLD = { odds: 2.0, fitOdds: 2.8, from: 0.3, to: 0.45, tau: 0.5, max: 40 };
+  // A player's own odds for MW_BET_FOLD: the read's heads-up fold at each of their stored answers (predictAction, as
+  // the first answers use it), times the ramped multiplier exp(log(cfg.fitOdds) + u); u maximizes their answers'
+  // likelihood plus the normal prior (Newton steps), and the result is cfg.odds x exp(u). Returns { odds, n, u }.
+  function mwBetOdds(stats, cfg, list) {
+    const b0 = Math.log(cfg.fitOdds || cfg.odds);
+    if (!(cfg.tau > 0) || !Array.isArray(list) || !list.length) return { odds: cfg.odds, n: 0 };
+    const base = Object.assign({}, stats, { betOdds: null, commitOdds: null, foldShift: 0 });
+    const obs = [];
+    for (const a of list.slice(-(cfg.max || 40))) {
+      if (!a || !(a.f > cfg.from) || !(a.n >= 3 && a.n <= 5)) continue;
+      const r = clamp((a.f - cfg.from) / (cfg.to - cfg.from), 0, 1);
+      const pa = predictAction(base, { kind: 'face', n: a.n, frac: a.f, mw: false, checked: a.ck ? true : false, aggLine: !!a.ag, reraised: !!a.rr });
+      const p = clamp(pa.fold / Math.max(1e-9, pa.fold + pa.call + pa.raise), 0.02, 0.98);
+      obs.push({ l: Math.log(p / (1 - p)), r, y: a.y ? 1 : 0 });
+    }
+    if (!obs.length) return { odds: cfg.odds, n: 0 };
+    const prec = 1 / (cfg.tau * cfg.tau);
+    let u = 0;
+    for (let it = 0; it < 8; it++) {
+      let g = -u * prec, h = -prec;
+      for (const o of obs) { const q = 1 / (1 + Math.exp(-(o.l + o.r * (b0 + u)))); g += o.r * (o.y - q); h -= o.r * o.r * q * (1 - q); }
+      u = clamp(u - g / h, -2, 2);
+    }
+    return { odds: cfg.odds * Math.exp(u), n: obs.length, u };
+  }
   // Roles from the hand's action history (input.history: { st, who, act } in order): roles[name][street] = the role at
   // their first action on that street; now(name, street) = their role if they acted next on `street`.
   function initiativeRoles(history) {
@@ -1617,6 +1652,19 @@
   }
 
   const TILTS = [-0.75, -0.5, -0.3, -0.15, 0, 0.15, 0.3, 0.5, 0.75];
+  // A sum of TILTS log-likelihoods read at tilt tau (linear between the nodes), and a grid argmax (85 points).
+  function tiltLL(sum, tau) {
+    tau = clamp(tau, TILTS[0], TILTS[TILTS.length - 1]);
+    let i = 0;
+    while (i < TILTS.length - 2 && tau > TILTS[i + 1]) i++;
+    const w = (tau - TILTS[i]) / (TILTS[i + 1] - TILTS[i]);
+    return sum[i] * (1 - w) + sum[i + 1] * w;
+  }
+  function tiltArgmax(f, lo, hi) {
+    let best = lo, bestV = -Infinity;
+    for (let j = 0; j <= 84; j++) { const x = lo + (j / 84) * (hi - lo); const v = f(x); if (v > bestV) { bestV = v; best = x; } }
+    return best;
+  }
   const DRAW_CALL = 2;
   // Answers to hero's flop and turn bets rank draws the same way (off: input.respDraw true turns it on, a number sets
   // the weight): in the Monte Carlo's continue decision, the lookahead's callers on the current street and the turn and
@@ -1757,9 +1805,11 @@
     let over = stats.tiltOver && overbetLine(actions, sizes, stats.tiltOver) ? stats.tiltOver.tilt : 0;
     // River raises of any size read stronger (RIVER_RAISE_TILT); the larger of the two applies.
     if (stats.tiltRaise && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltRaise.street]]] === 'raise') over = Math.max(over, stats.tiltRaise.tilt);
-    // A bet made after hero checked that street reads stronger (CHECK_BET_TILT, unless input.checkBetTilt is false).
-    if (stats.tiltCheckBet && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltCheckBet.street]]] === 'bet') over = Math.max(over, stats.tiltCheckBet.tilt);
-    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over);
+    // A bet made after hero checked that street reads stronger (CHECK_BET_TILT, unless input.checkBetTilt is false), by
+    // the player's own tilt; a player whose shows ask for less than none reads weaker (that part adds to the rest).
+    const cbTilt = stats.tiltCheckBet && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltCheckBet.street]]] === 'bet' ? stats.tiltCheckBet.tilt : 0;
+    if (cbTilt > 0) over = Math.max(over, cbTilt);
+    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over) + Math.min(0, cbTilt);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -2173,7 +2223,27 @@
   // RIVER_RAISE_TILT (the larger applies; neither stacks on the hero-pot tilt). Leak hunt, 6 Nov: shown river bets after
   // hero's check sat at 0.63 of the read's range (n 28, best tilt 0.2), after a friend's check 0.51 (n 33); hero's
   // heads-up river check-calls won 0 of 11 at a predicted equity of 0.36.
-  const CHECK_BET_TILT = { tilt: 0.2, street: 5 };
+  // Per player since v1.8.29 (checkBetLearned): 0.2 is the table's number, each player's own shown river bets after
+  // hero's check (shows with `hck`, scoreShow's TILTS log-likelihoods) move it, shrunk to it by k (about 6 shows' worth:
+  // the 28 shows' curvature is about 2.6 nats a show per unit tilt squared); from `min` (bluffier than read) to `max`.
+  // learn: false gives everyone the table's tilt.
+  const CHECK_BET_TILT = { tilt: 0.2, street: 5, learn: true, k: 15, min: -0.3, max: 0.75 };
+  // A player's shown river bets made after hero checked the river: their tilt log-likelihoods summed, and the tilt that
+  // fits them on top of cfg.tilt's prior (cfg.k). Shows scored by another FIT_VERSION are left out. Returns { tilt, n }.
+  function checkBetLearned(shows, cfg) {
+    if (cfg.learn === false) return { tilt: cfg.tilt, n: 0 };
+    let sum = null, n = 0;
+    for (const s of shows || []) {
+      const f = s && s.fit;
+      if (!s || !s.hck || s.folded || !f || f.v !== FIT_VERSION || !Array.isArray(f.tl) || f.tl.length !== TILTS.length || !f.tl.every(Number.isFinite)) continue;
+      if (STREET_ACTION_MAP[(s.actions && s.actions.river) || ''] !== 'bet') continue;
+      sum = sum ? sum.map((x, i) => x + f.tl[i]) : f.tl.slice();
+      n++;
+    }
+    if (!n) return { tilt: cfg.tilt, n: 0 };
+    const x = tiltArgmax((t) => tiltLL(sum, t) - cfg.k * (t - cfg.tilt) * (t - cfg.tilt), cfg.min, cfg.max);
+    return { tilt: Math.round(x * 1000) / 1000, n };
+  }
 
   // Huge preflop raises that keep chips behind read tight (v1.8.15, input.bigRaiseRange: false turns it off, a number
   // sets the width): an open or isolation raise to 30bb or more with at least a quarter of the raise-to still behind is
@@ -5639,7 +5709,9 @@
     const respNow = respScore(current, RD);
     const obt = input.overbetTilt === false ? null : Object.assign({}, OVERBET_TILT, typeof input.overbetTilt === 'number' ? { tilt: input.overbetTilt } : {});
     const rrt = input.riverRaiseTilt === false ? null : Object.assign({}, RIVER_RAISE_TILT, typeof input.riverRaiseTilt === 'number' ? { tilt: input.riverRaiseTilt } : {});
-    const cbt = input.checkBetTilt === false ? null : typeof input.checkBetTilt === 'number' ? Object.assign({}, CHECK_BET_TILT, { tilt: input.checkBetTilt }) : Object.assign({}, CHECK_BET_TILT);
+    // input.checkBetTilt: false off, a number sets the table's tilt, an object replaces fields ({ learn: false }: the same
+    // tilt for everyone, as in v1.8.28).
+    const cbt = input.checkBetTilt === false ? null : Object.assign({}, CHECK_BET_TILT, typeof input.checkBetTilt === 'number' ? { tilt: input.checkBetTilt } : input.checkBetTilt && typeof input.checkBetTilt === 'object' ? input.checkBetTilt : {});
     const brr = input.bigRaiseRange === false ? null : Object.assign({}, BIG_RAISE_RANGE, typeof input.bigRaiseRange === 'number' ? { width: input.bigRaiseRange } : {});
     const shr = input.shoveRange === false ? null : Object.assign({}, SHOVE_RANGE, typeof input.shoveRange === 'number' ? { vpip: input.shoveRange } : {});
     const dsh = input.deepShove === false ? null : input.deepShove && typeof input.deepShove === 'object' ? Object.assign({}, DEEP_SHOVE, input.deepShove) : Object.assign({}, DEEP_SHOVE);
@@ -5649,8 +5721,9 @@
     const INIT = street > 0 && input.initiative && Array.isArray(input.history)
       ? (typeof input.initiative === 'object' ? input.initiative : INITIATIVE) : null;
     const initR = INIT ? initiativeRoles(input.history) : null;
-    // Multiway bet folds (MW_BET_FOLD, v1.8.28): input.mwBetFold false turns it off, a number sets the odds.
-    const MWBF = input.mwBetFold === false ? null : typeof input.mwBetFold === 'number' ? Object.assign({}, MW_BET_FOLD, { odds: input.mwBetFold }) : MW_BET_FOLD;
+    // Multiway bet folds (MW_BET_FOLD, v1.8.28; per player since v1.8.29): input.mwBetFold false turns it off, a number
+    // sets the table's odds, an object replaces fields ({ tau: 0 }: the table's odds for everyone, as in v1.8.28).
+    const MWBF = input.mwBetFold === false ? null : Object.assign({}, MW_BET_FOLD, typeof input.mwBetFold === 'number' ? { odds: input.mwBetFold } : input.mwBetFold && typeof input.mwBetFold === 'object' ? input.mwBetFold : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -5696,7 +5769,9 @@
       if (rrt && rrt.tilt) { stats.tiltRaise = rrt; if (statsHU) statsHU.tiltRaise = rrt; }
       // Bets after hero's check on the river read stronger (CHECK_BET_TILT), unless input.checkBetTilt is false.
       if (cbt && street === cbt.street && STREET_ACTION_MAP[(input.heroActions || {})[STREET_KEYS[street]]] === 'check' && STREET_ACTION_MAP[(o.actions || {})[STREET_KEYS[street]]] === 'bet') {
-        stats.tiltCheckBet = cbt; if (statsHU) statsHU.tiltCheckBet = cbt;
+        const own = checkBetLearned(o.tally && o.tally.shows, cbt);
+        const c = Object.assign({}, cbt, { tilt: own.tilt, n: own.n });
+        stats.tiltCheckBet = c; if (statsHU) statsHU.tiltCheckBet = c;
       }
       // Huge preflop raises that keep chips behind read tight (BIG_RAISE_RANGE).
       if (brr) { stats.bigRaise = brr; if (statsHU) statsHU.bigRaise = brr; }
@@ -5724,7 +5799,11 @@
       // Not acted on this street yet: what they bet after hero's check (the lookahead's current street, the river,
       // turn and flop solvers' fixed strategies) follows their role then. Past streets are in the range already.
       // Hero's multiway bets get more folds from the first answers (MW_BET_FOLD), on this street only.
-      if (MWBF && statsHU && street >= 3) statsHU.betOdds = Object.assign({ street }, MWBF);
+      if (MWBF && statsHU && street >= 3) {
+        const own = mwBetOdds(stats, MWBF, o.tally && o.tally.mwFolds);
+        statsHU.betOdds = Object.assign({ street }, MWBF, { odds: own.odds });
+        stats.mwBet = { odds: own.odds, n: own.n };
+      }
       if (INIT && pending) {
         const role = initR.now(o.name, street, input.heroName);
         const mult = role && INIT[street] ? INIT[street][role] : null;
@@ -7137,7 +7216,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),

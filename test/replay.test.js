@@ -1356,6 +1356,73 @@ test('multiway: until someone stays, everyone folds as often as each heads-up re
   for (const amt of [14, 27]) assert.ok(fold(rabOn, amt) > fold(rab, amt) + 0.08, `mwBetFold, bet ${amt}: both fold ${fold(rabOn, amt)} vs ${fold(rab, amt)}`);
 });
 
+test('mwBetFold per player (v1.8.29): no answers read as the table, folds raise the odds, calls lower them', () => {
+  // A player's own first answers to hero's multiway bets (tally.mwFolds) move the table's x2 (MW_BET_FOLD); with
+  // none, or with tau 0, everyone gets x2. Answers under 30% of the pot, preflop ones and answers to someone else
+  // don't count.
+  const st = E.computeStats({}, 'typical');
+  const cfg = E.MW_BET_FOLD;
+  const ans = (y, m, f) => Array.from({ length: m }, () => ({ y, f: f || 0.66, n: 3, ck: 0, ag: 0, rr: 0, k: 2 }));
+  assert.strictEqual(E.mwBetOdds(st, cfg, []).odds, cfg.odds);
+  assert.strictEqual(E.mwBetOdds(st, cfg, undefined).odds, cfg.odds);
+  assert.strictEqual(E.mwBetOdds(st, Object.assign({}, cfg, { tau: 0 }), ans(1, 10)).odds, cfg.odds);
+  assert.strictEqual(E.mwBetOdds(st, cfg, ans(1, 10, 0.25)).n, 0, 'under 30% of the pot');
+  const folds = E.mwBetOdds(st, cfg, ans(1, 10)), calls = E.mwBetOdds(st, cfg, ans(0, 10));
+  assert.ok(folds.odds > cfg.odds * 1.3 && folds.n === 10, 'ten folds: x' + folds.odds);
+  assert.ok(calls.odds < cfg.odds / 1.3, 'ten calls: x' + calls.odds);
+  // More answers move it further, and the prior keeps it within reach of the table.
+  assert.ok(E.mwBetOdds(st, cfg, ans(1, 30)).odds > folds.odds);
+  assert.ok(E.mwBetOdds(st, cfg, ans(1, 3)).odds < folds.odds);
+  // Through the engine: one player who always folds to hero's multiway bets, one who always calls; the same tallies otherwise.
+  const T2 = { bet: 10, check: 20, call: 14, raise: 2, fold: 6 };
+  const A = (mw) => ({ name: 'A', tally: Object.assign({}, T2, { mwFolds: mw }), actions: { pre: 'call', flop: '' }, committed: 6, stack: 300 });
+  const B = { name: 'B', tally: T2, actions: { pre: 'raise', flop: '' }, committed: 6, stack: 300 };
+  const spot = (mw, extra) => E.analyzeSync(Object.assign({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 18, toCall: 0, stack: 300, bigBlind: 2,
+    inPosition: false, mix: false, seed: 7, iterations: 6000, lookahead: false, opponents: [A(mw), B] }, extra));
+  const fold = (r) => r.ranked.find((s) => s.kind === 'bet' && s.amount === 14).foldPct;
+  const r0 = spot([]), rf = spot(ans(1, 12)), rc = spot(ans(0, 12)), rflat = spot(ans(1, 12), { mwBetFold: { tau: 0 } });
+  assert.ok(fold(rf) > fold(r0) + 0.02 && fold(rc) < fold(r0) - 0.02, `all-fold at 14: folder ${fold(rf)}, none ${fold(r0)}, caller ${fold(rc)}`);
+  assert.strictEqual(fold(rflat), fold(r0), 'tau 0 is the flat v1.8.28 rule');
+});
+
+test('checkBetTilt per player (v1.8.29): the table tilt without shows, the shows move it', () => {
+  const cfg = E.CHECK_BET_TILT;
+  assert.strictEqual(E.checkBetLearned([], cfg).tilt, cfg.tilt);
+  assert.strictEqual(E.checkBetLearned(undefined, cfg).tilt, cfg.tilt);
+  // A show whose likelihood peaks at no tilt, and one that peaks at the top; only river bets after hero's check count.
+  const show = (peak, extra) => Object.assign({ hck: true, actions: { river: 'bet' }, fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
+  const weak = Array.from({ length: 6 }, () => show(0)), strong = Array.from({ length: 6 }, () => show(0.75));
+  const w = E.checkBetLearned(weak, cfg), s = E.checkBetLearned(strong, cfg);
+  assert.ok(w.tilt < cfg.tilt - 0.02 && w.n === 6, 'weak shows: ' + w.tilt);
+  assert.ok(s.tilt > cfg.tilt + 0.02, 'strong shows: ' + s.tilt);
+  assert.strictEqual(E.checkBetLearned(weak.map((x) => Object.assign({}, x, { hck: false })), cfg).n, 0, 'hero did not check');
+  assert.strictEqual(E.checkBetLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'call' } })), cfg).n, 0, 'not a bet');
+  assert.strictEqual(E.checkBetLearned(weak, Object.assign({}, cfg, { learn: false })).tilt, cfg.tilt);
+});
+
+test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river checks from stored hands, once', () => {
+  const t = new T({ players: { A: { name: 'Al', tally: {} }, B: { name: 'Bo', tally: {} } } });
+  const hand = (t0, betAmt, bAct) => ({
+    t: t0, bigBlind: 2, board: ['Kc', '7d', '2s', '9h', '3c'],
+    players: [{ name: 'Hero', hero: true, stack: 300, shown: [] }, { name: 'Al', stack: 300, shown: [] }, { name: 'Bo', stack: 300, shown: ['Kd', 'Qd'] }],
+    log: [
+      { st: 'pre', who: 'Hero', act: 'sb', amt: 1 }, { st: 'pre', who: 'Al', act: 'bb', amt: 2 }, { st: 'pre', who: 'Bo', act: 'call', amt: 2 },
+      { st: 'pre', who: 'Hero', act: 'call', amt: 1 }, { st: 'pre', who: 'Al', act: 'check', amt: 0 },
+      { st: 'flop', who: 'Hero', act: 'bet', amt: betAmt, pot: 6, hero: true }, { st: 'flop', who: 'Al', act: 'fold', amt: 0 },
+      { st: 'flop', who: 'Bo', act: bAct, amt: betAmt },
+      { st: 'river', who: 'Hero', act: 'check', amt: 0, hero: true }, { st: 'river', who: 'Bo', act: 'bet', amt: 10 },
+    ],
+  });
+  // Bo's show is in his read with no hck; the second hand's flop bet is under 30% of the pot.
+  t.db.players.B.tally.shows = [{ cards: ['Kd', 'Qd'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } }];
+  assert.strictEqual(t.tagMwFolds([hand(2, 1, 'call'), hand(1, 4, 'call')]), 2);
+  assert.deepStrictEqual(t.db.players.A.tally.mwFolds, [{ y: 1, f: 0.667, n: 3, ck: 0, ag: 0, rr: 0, k: 2 }]);
+  assert.deepStrictEqual(t.db.players.B.tally.mwFolds, [{ y: 0, f: 0.667, n: 3, ck: 0, ag: 0, rr: 0, k: 2 }]);
+  assert.strictEqual(t.tagCheckBet([hand(1, 4, 'call')]), 1);
+  assert.strictEqual(t.db.players.B.tally.shows[0].hck, true);
+  assert.strictEqual(t.tagCheckBet([hand(1, 4, 'call')]), 0, 'already there');
+});
+
 test("multiway: hero's story moves every player's folds, as heads-up", () => {
   // The credibility shift (hero's line looks strong) used to reach only o.stats; multiway bets are
   // answered with the heads-up read until someone stays (#39), so all-fold rates ignored it.
