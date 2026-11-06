@@ -139,7 +139,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `players[].adminStack`), so the chips still match the table and the hand's result leaves the change out. Before, the
   safety net stopped advice for the hand ("Lost track of the chips"): 6 Nov afternoon #1, where the host paused after a
   hand played at the old 5/10 blinds and set two stacks. All logs have 15 `pss` lines; that was the only one mid-hand
-  for a player dealt in.
+  for a player dealt in (6 Nov later: a second, #50, Mark 399 -> 199 before his first action; v1.8.29/30 lost the chips
+  there, v1.8.31 replays it clean). A `pss` after a hand whose result still waits for the next hand's stacks moves the
+  start the same way.
+  Stack resets (v1.8.33): `admin:game:player_stacks_reset` (`newStackAmount`; chat `lss`, "All player stacks were reset
+  to $200") after a hand without a payout used to land in that hand's result, which the hand log reads from the next
+  hand's starting stacks: 6 Nov later #28 (hero -152bb) and #68 (+79bb, Mark -86bb), both hands the host stopped with
+  only the blinds in. A hand stopped before the payout (`admin:game:game_stopped` before `game:game_ended`, `h.stopped`)
+  hands every bet back (the 3 such hands in the logs without a reset: every stack the same the next hand), so with a
+  reset its result is 0 for everyone; any other hand without a result keeps none (`h.noSettle`). The entry gets
+  `stackReset` (the new stack). Hand-log results only; reads and advice don't change.
 - Side pots: modelled at showdown when the tracker passes `heroCommitted` and each opponent's `committed`/`stack`
   (`sidePotWin` in engine.js; `hasSidePots`). The multiway solvers and the multiway lookahead use `multiwayStack`:
   they still run when hero can match the bets it faces and every player with fewer total chips (committed + behind)
@@ -268,6 +277,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   have fixed (KTo against his 4.5bb open, a 3-bet at his real 41%) stays a fold. A global decay of 0.95-0.99
   predicts all logs no better (0.766-0.771 against 0.767), Mark included. Files:
   /mnt/project-files/patio-solver/scripts/2026-11-06-session2/ (shift-tracker.js, shift-sweep.txt, pfr41.txt).
+  Out of sample (the 79 hands after, 6 Nov 13:56-14:50, same parameters): 0.7844 -> 0.7861 (+0.6 nats over 337
+  actions), Mark worse (0.732 -> 0.748, +3.7 nats over 232), Jagger better (-3.1 over 105). Mark went back to his usual
+  game ten minutes later (first in heads-up: limp 17 of 19, raise 2; PFR 8%), so a read that had chased the 41% was
+  wrong for the rest of the day; his plain read predicted him better than an average player's (0.732 against 0.766).
+  Files: scripts/2026-11-06-session3/ (shift-oos.txt, markpf.txt).
 - Preflop ranges are soft (`topClassWeights` uses a sigmoid edge, plus a small floor for every hand). Hard top-X%
   cut-offs gave zero weight to hands people really play (KQo raises at 8% PFR), which made reads predict shown
   hands worse than a random guess in the simulator and led to bad turn/river calls.

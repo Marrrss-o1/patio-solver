@@ -2251,12 +2251,50 @@ test('a stack the host sets mid-hand moves that player\'s chips, and advice keep
   t.handle('game:game_ended', {}, snap3(1200, 1500, 970));
   const ps = t.db.history[0].players;
   assert.deepStrictEqual(ps.map((p) => [p.name, p.stack, p.adminStack]), [['Hero', 1230, 230], ['Ann', 1530, 530], ['Bob', 1000, undefined]]);
-  // Other game log lines, a change for someone not in the hand and one after the hand change nothing.
+  // Other game log lines and a change for someone not in the hand change nothing.
   const r2 = replay(three.slice(0, -1).concat([pss('Z', 'Zed', 5, 500), { ev: 'chat_message', data: { msgType: 'game_log', log: { e: 'w', pid: 'A', amt: 40 } } }]));
   assert.ok(Object.values(r2.t.hand.players).every((p) => p.start === 1000 && !p.adminStack));
-  r2.t.handle('game:game_ended', {}, snap3(970, 970, 970));
-  r2.t.handle(pss('A', 'Ann', 100, 970).ev, pss('A', 'Ann', 100, 970).data, null);
+  // After a hand that was paid out, a change is the next hand's business.
+  const paid = { endPopupData: { gameResults: { winnersInfo: { A: { playerData: { authUserId: 'A' }, wonAmount: 90 } } } } };
+  r2.t.handle('game:game_ended', paid, snap3(970, 970, 970));
+  r2.t.handle(pss('A', 'Ann', 100, 1060).ev, pss('A', 'Ann', 100, 1060).data, null);
   assert.strictEqual(r2.t.hand.players[3].start, 1000);
+  assert.deepStrictEqual(r2.t.db.history[0].net, { Hero: -30, Ann: 60, Bob: -30 });
+  // After a hand whose result waits for the next hand's stacks, the change stays out of that result.
+  const r3 = replay(three.slice(0, -1));
+  r3.t.handle('game:game_ended', {}, snap3(970, 970, 970));
+  r3.t.handle(pss('A', 'Ann', 100, 1060).ev, pss('A', 'Ann', 100, 1060).data, null);
+  r3.t.handle('game:stage_began', { stageType: 'set_blinds' }, snap3(970, 100, 970));
+  const e3 = r3.t.db.history[0];
+  assert.deepStrictEqual(e3.net, { Hero: -30, Ann: 60, Bob: -30 });
+  assert.strictEqual(e3.players.find((p) => p.name === 'Ann').adminStack, -960);
+});
+
+test('a hand the host stops, then resets every stack: the hand log\'s result is 0, not the reset', () => {
+  // 6 Nov afternoon: the host stopped the game during a hand and reset all stacks to $200; the hand log took the next
+  // hand's stacks as the result (hero -152bb for a hand that cost nothing).
+  const reset = { ev: 'admin:game:player_stacks_reset', data: { newStackAmount: 2000, onlyResetBankrupted: false } };
+  const next = { ev: 'game:stage_began', data: { stageType: 'set_blinds' }, snap: snap3(2000, 2000, 2000) };
+  const stop = { ev: 'admin:game:game_stopped', data: { cut: 5714 } };
+  const run = (msgs) => { const { t } = replay(three.slice(0, -1).concat(msgs)); return t.db.history[0]; };
+  const a = run([stop, reset, next]);
+  assert.deepStrictEqual(a.net, { Hero: 0, Ann: 0, Bob: 0 });
+  assert.strictEqual(a.heroNet, 0);
+  assert.strictEqual(a.stackReset, 2000);
+  // Before: the reset counted as the result.
+  assert.deepStrictEqual(run([stop, next]).net, { Hero: 1000, Ann: 1000, Bob: 1000 });
+  // A stopped hand without a reset: the next hand's stacks (every bet handed back), as before.
+  assert.deepStrictEqual(run([stop, Object.assign({}, next, { snap: snap3(1000, 1000, 1000) })]).net, { Hero: 0, Ann: 0, Bob: 0 });
+  // A hand that ended without a usable payout and then a reset: no result rather than a wrong one.
+  const b = run([{ ev: 'game:game_ended', data: {}, snap: snap3(970, 970, 970) }, reset, next]);
+  assert.strictEqual(b.net, undefined);
+  assert.strictEqual(b.heroNet, undefined);
+  assert.strictEqual(b.stackReset, 2000);
+  // A paid-out hand keeps its result.
+  const paid = { endPopupData: { gameResults: { winnersInfo: { A: { playerData: { authUserId: 'A' }, wonAmount: 90 } } } } };
+  const c = run([{ ev: 'game:game_ended', data: paid, snap: snap3(970, 970, 970) }, reset, next]);
+  assert.deepStrictEqual(c.net, { Hero: -30, Ann: 60, Bob: -30 });
+  assert.strictEqual(c.stackReset, undefined);
 });
 
 test('safety net: when the chips stop matching the table, advice stops for the hand', () => {

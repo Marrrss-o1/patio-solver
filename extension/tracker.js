@@ -601,14 +601,19 @@
           // Mid-hand (6 Nov afternoon: the game paused during a hand, MarAllin 403 -> 272) the table's stacks then
           // no longer match the chips counted, and advice stopped for the hand. Move that player's starting stack by
           // the change, so the chips still add up (and the hand's result leaves it out).
+          // After the hand, while its result still waits for the next hand's stacks (no payout), the same move keeps
+          // the change out of that result.
           const lg = data && data.msgType === 'game_log' && data.log;
-          if (h && !h.finished && lg && lg.e === 'pss' && lg.pid && isFinite(+lg.amt) && isFinite(+lg.ostk)) {
+          const open = h && (!h.finished || (h.logEntry && !h.logEntry.net && !h.noSettle));
+          if (open && lg && lg.e === 'pss' && lg.pid && isFinite(+lg.amt) && isFinite(+lg.ostk)) {
             const p = Object.values(h.players).find((x) => x.auth && x.auth === lg.pid);
             if (p) {
               const dlt = +lg.amt - +lg.ostk;
               p.start += dlt;
               p.adminStack = Math.round(((p.adminStack || 0) + dlt) * 100) / 100;
               if (h.desync && h.desync.who === p.name && Math.abs(p.start - p.total - +lg.amt) <= 0.01) delete h.desync;
+              const lp = h.finished && (h.logEntry.players || []).find((x) => x.name === p.name);
+              if (lp) lp.adminStack = p.adminStack;
             }
           }
           break;
@@ -618,8 +623,24 @@
           break;
         case 'game:game_ended':
         case 'admin:game:game_stopped':
+          if (ev === 'admin:game:game_stopped' && h && !h.finished) h.stopped = true;
           this.finishHand();
           if (ev === 'game:game_ended' && h) this.settleFromPayout(h, data);
+          break;
+        case 'admin:game:player_stacks_reset':
+          // The host reset every stack between hands (6 Nov afternoon: the game stopped mid-hand, then "All player
+          // stacks were reset to $200"). The next hand's starting stacks then say nothing about this hand's result,
+          // which the hand log filled in from them (hero -152bb, and +79bb later, for hands that cost 1bb). A hand the
+          // host stops before the payout hands every bet back (the 3 such hands in the logs without a reset: every
+          // stack the same the next hand), so its result is 0; another hand without a result keeps none.
+          if (h && h.finished && h.logEntry && !h.logEntry.net) {
+            h.logEntry.stackReset = isFinite(+data.newStackAmount) ? +data.newStackAmount : true;
+            if (h.stopped) {
+              const net = {};
+              for (const p of Object.values(h.players)) net[p.name] = 0;
+              this.applyNet(h, net);
+            } else h.noSettle = true;
+          }
           break;
         default:
           break;
@@ -1215,7 +1236,7 @@
     // hand's result is filled in from the next hand's starting stacks.
     settleLog(s) {
       const prev = this.hand;
-      if (!prev || !prev.logEntry || prev.logEntry.net) return;
+      if (!prev || !prev.logEntry || prev.logEntry.net || prev.noSettle) return;
       const net = {};
       for (const p of Object.values(prev.players)) {
         const now = s.players.find((x) => x.id === p.id);
