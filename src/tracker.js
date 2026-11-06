@@ -30,6 +30,7 @@
   }
   const MAX_SHOWS = 80;
   const MAX_JAM_SHOWS = 20;
+  const MAX_MW_FOLDS = 40;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -39,7 +40,7 @@
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows' || k === 'jamShows') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -95,6 +96,10 @@
       // Preflop all-in re-raises whose cards were seen, at any point of the hand (v1.8.27, DEEP_SHOVE's per-player read):
       // { cards, pre, to, cover } with the raise-to and the biggest stack still in, in big blinds. Newest MAX_JAM_SHOWS.
       jamShows: [],
+      // First answers to hero's opening bets of 30%+ of the pot into 2+ opponents after the flop, before anyone stayed
+      // (v1.8.29, MW_BET_FOLD's per-player read): { y: 1 folded, f: bet / pot before it, n: street, ck: checked first on
+      // the street, ag: bet or raised earlier in the hand, rr: re-raised preflop, k: opponents }. Newest MAX_MW_FOLDS.
+      mwFolds: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -124,7 +129,7 @@
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows' || k === 'jamShows') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -141,6 +146,9 @@
     const jams = [];
     for (const t of list) for (const sh of t.jamShows || []) jams.push(sh);
     out.jamShows = jams.slice(-MAX_JAM_SHOWS);
+    const mw = [];
+    for (const t of list) for (const a of t.mwFolds || []) mw.push(a);
+    out.mwFolds = mw.slice(-MAX_MW_FOLDS);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -679,6 +687,26 @@
         if (d) this.scorePrediction(r.tally, Object.assign(d, { pos: this.posGroup(p.id) }), this.readTally(p.auth));
       }
       if (r) this.extraStats(p, r.tally, kind, facing, key);
+      // Hero's opening bet into 2+ opponents after the flop, and each answer to it until someone stays (MW_BET_FOLD's
+      // per-player read).
+      if (street > 0) {
+        const mo = h.mwOpen && h.mwOpen.st === street ? h.mwOpen : null;
+        if (isHero && kind === 'bet') {
+          const k = Object.values(h.players).filter((x) => !x.folded && x.id !== p.id).length;
+          h.mwOpen = k >= 2 ? { st: street, k, stayed: false } : null;
+        } else if (isHero && mo) mo.stayed = true;
+        else if (!isHero && mo && !mo.stayed && facing > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) {
+          const f = facing / Math.max(1, potBefore - facing);
+          if (r && f >= 0.3) {
+            const t = r.tally;
+            if (!t.mwFolds) t.mwFolds = [];
+            const ck = p.seq[key].length >= 2 && p.seq[key][0] === 'check';
+            t.mwFolds.push({ y: kind === 'fold' ? 1 : 0, f: Math.round(f * 1000) / 1000, n: street, ck: ck ? 1 : 0, ag: p.agg.length > 0 ? 1 : 0, rr: /^\dbet$/.test(PatioTracker.preAction(p)) ? 1 : 0, k: mo.k });
+            if (t.mwFolds.length > MAX_MW_FOLDS) t.mwFolds.splice(0, t.mwFolds.length - MAX_MW_FOLDS);
+          }
+          if (kind !== 'fold') mo.stayed = true;
+        }
+      }
       if (street === 0) {
         if (r && !p.faced3 && h.preRaises === 1 && kind !== 'check') {
           p.faced3 = true;
@@ -994,6 +1022,89 @@
       return done;
     }
 
+    // Shows saved before v1.8.29 don't say whether hero checked the river first (CHECK_BET_TILT's per-player read, show
+    // `hck`): filled in from the stored hands, matched like tagHeroPot (same two cards, a board that starts with the
+    // show's). Returns how many shows were tagged.
+    tagCheckBet(entries) {
+      const key = (cards) => cards.slice().sort().join(',');
+      const byCards = new Map();
+      for (const e of entries || []) {
+        if (!e || !Array.isArray(e.board) || e.board.length < 3 || !Array.isArray(e.players) || !Array.isArray(e.log)) continue;
+        const first = e.log.find((x) => x && x.st === 'river' && x.hero);
+        const hck = !!(e.board.length >= 5 && first && first.act === 'check');
+        for (const p of e.players) {
+          if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
+          const k = key(p.shown);
+          if (!byCards.has(k)) byCards.set(k, []);
+          byCards.get(k).push({ board: e.board, hck });
+        }
+      }
+      let n = 0;
+      for (const r of Object.values(this.db.players)) {
+        for (const s of (r && r.tally && r.tally.shows) || []) {
+          if (!s || s.hck != null || !Array.isArray(s.cards) || s.cards.length !== 2 || !Array.isArray(s.board)) continue;
+          const m = (byCards.get(key(s.cards)) || []).filter((c) => s.board.every((x, i) => c.board[i] === x));
+          if (m.length !== 1) continue;
+          s.hck = m[0].hck;
+          n++;
+        }
+      }
+      return n;
+    }
+
+    // First answers to hero's multiway bets from hands stored before v1.8.29 (MW_BET_FOLD's per-player read,
+    // tally.mwFolds): found in each stored hand's action log the way the live tracker counts them (hero's opening bet
+    // after the flop into 2+ opponents, each answer of 30%+ of the pot until someone stays), oldest first, added to the
+    // player's read (the account id as tagJamShows finds it). Meant to run once, before any hand of this version.
+    // Returns how many answers were added.
+    tagMwFolds(entries) {
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log) && Array.isArray(e.players)).sort((a, b) => (a.t || 0) - (b.t || 0));
+      let n = 0;
+      for (const e of list) {
+        const log = e.log.filter((x) => x && x.act && x.act !== 'sb' && x.act !== 'bb');
+        for (const st of ['flop', 'turn', 'river']) {
+          const i = log.findIndex((x) => x.st === st && x.hero && x.act === 'bet');
+          if (i < 0) continue;
+          const bet = log[i];
+          const folded = new Set(log.slice(0, i).filter((x) => x.act === 'fold').map((x) => x.who));
+          const k = e.players.filter((p) => p && !p.hero && !folded.has(p.name)).length;
+          if (k < 2 || !(bet.pot > 0)) continue;
+          const f = bet.amt / bet.pot;
+          for (const x of log.slice(i + 1)) {
+            if (x.st !== st || x.hero) break;
+            if (x.act !== 'fold' && x.act !== 'call' && x.act !== 'raise') break;
+            if (f >= 0.3) {
+              const id = idFor(x.who, e.t || 0, e.raw);
+              const r = id && this.db.players[id];
+              if (r) {
+                const t = r.tally || (r.tally = blankTally());
+                if (!t.mwFolds) t.mwFolds = [];
+                const mine = log.slice(0, i + 1).filter((y) => y.who === x.who);
+                t.mwFolds.push({
+                  y: x.act === 'fold' ? 1 : 0, f: Math.round(f * 1000) / 1000, n: { flop: 3, turn: 4, river: 5 }[st],
+                  ck: mine.some((y) => y.st === st && y.act === 'check') ? 1 : 0,
+                  ag: mine.some((y) => y.st !== 'pre' && (y.act === 'bet' || y.act === 'raise')) ? 1 : 0,
+                  rr: mine.some((y) => y.st === 'pre' && /^\dbet$/.test(y.act)) ? 1 : 0, k,
+                });
+                if (t.mwFolds.length > MAX_MW_FOLDS) t.mwFolds.splice(0, t.mwFolds.length - MAX_MW_FOLDS);
+                n++;
+              }
+            }
+            if (x.act !== 'fold') break;
+          }
+        }
+      }
+      return n;
+    }
+
     // More tendencies, counted before this action updates the hand state:
     // limps, fold to 3-bet, donk bets, check-raises, and how long they take for each kind of action.
     extraStats(p, t, kind, facing, key) {
@@ -1147,6 +1258,9 @@
           noise: o.stats.rangeNoise != null ? r2(o.stats.rangeNoise) : undefined,
           tilt: o.stats.tiltAgg != null ? [r2(o.stats.tiltAgg), r2(o.stats.tiltPas)] : undefined,
           tiltHero: o.stats.tiltHero ? r2(o.stats.tiltHero) : undefined,
+          // The player's own numbers for the per-player reads (v1.8.29): multiway bet fold odds, river check-bet tilt.
+          mwOdds: o.stats.mwBet ? { odds: r2(o.stats.mwBet.odds), n: o.stats.mwBet.n } : undefined,
+          cbTilt: o.stats.tiltCheckBet ? { tilt: r2(o.stats.tiltCheckBet.tilt), n: o.stats.tiltCheckBet.n } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -1219,6 +1333,8 @@
         actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
         // Whether hero was still in the pot, and the big blinds this player put in (heroPotShows).
         hp: { in: !!(hero && !hero.folded), put: Math.round(((p.total || 0) / (h.bigBlind || 1)) * 10) / 10 },
+        // Hero's first river action was a check (a river bet in `actions` came after it: CHECK_BET_TILT's per-player read).
+        hck: !!(hero && h.board.length >= 5 && hero.seq && hero.seq.river && hero.seq.river[0] === 'check'),
       };
       // How well the range we would have put them on matches what they showed.
       // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.

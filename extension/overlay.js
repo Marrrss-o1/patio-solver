@@ -712,6 +712,15 @@
         saveDb();
       });
     }
+    // Hands stored before v1.8.29 don't count in the per-player reads of river bets after hero's check (show `hck`) and
+    // of folds to hero's multiway bets (tally.mwFolds): filled in once from every stored hand.
+    if (!tracker.db.cbTagged || !tracker.db.mwTagged) {
+      handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
+        if (!tracker.db.cbTagged) { tracker.tagCheckBet(hands); tracker.db.cbTagged = 1; }
+        if (!tracker.db.mwTagged) { tracker.tagMwFolds(hands); tracker.db.mwTagged = 1; }
+        saveDb();
+      });
+    }
     tracker.on((type) => {
       if (type === 'save') saveDb();
       if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }
