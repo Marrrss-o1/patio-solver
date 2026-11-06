@@ -5196,6 +5196,10 @@
   // target with what came back. The leaves split the pot by realized equity against the read's player and don't see
   // that hero's postflop play exploits the reads.
   const PF_FLOP_EDGE = 0.06;
+  // input.pfFlopEdgeMw (off, simulator): the edge for multiway spots (the field solves: opens with 2+ to act, limpers,
+  // callers) in place of pfFlopEdge. Clean full-log audit (6 Nov, 2,167 decisions, reads from earlier hands): preflop
+  // raises still come back above their EV at the next decision, multiway +3.2 +- 1.0 bb (opens +3.3, over limpers
+  // +3.8; n 175) against heads-up +0.7 +- 0.5 (n 255).
 
   function preflopSolve(cfg) {
     const { heroW, oppW, heroClass, pot: P0, toCall, stack: E, bigBlind, heroIP, rootActs, option, p } = cfg;
@@ -6827,7 +6831,7 @@
         raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
-        implied: +input.pfImplied || 0, flopEdge: input.pfFlopEdge === false ? 0 : input.pfFlopEdge != null ? +input.pfFlopEdge : PF_FLOP_EDGE,
+        implied: +input.pfImplied || 0, flopEdge: field && input.pfFlopEdgeMw != null ? +input.pfFlopEdgeMw : input.pfFlopEdge === false ? 0 : input.pfFlopEdge != null ? +input.pfFlopEdge : PF_FLOP_EDGE,
       });
       if (pf) {
         // Name each action as the matching option in the list.
