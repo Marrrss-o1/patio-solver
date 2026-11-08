@@ -399,6 +399,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   ± 19.8) and -49.4 ± 30.4 (9323; small blind -37.3 ± 20.5, medium hands -36.0 ± 18.2), 4-handed -11.3 ± 28.6 (9322);
   pooled about -9 ± 17. No win, so the tilt stays at 3+ handed tables. Files:
   /mnt/project-files/patio-solver/sims/2026-11-06-untilt3/.
+  Third look (8 Nov, with v1.8.36's 0.14 multiway edge, at which the button opened 93% 3-handed in the simulator, so the
+  tilt might now double-count the edge): on the logs (frozen captures, mix off) pendingTilt off changes 53 of 847
+  preflop decisions at 3+ handed tables (40 raises become folds, mostly junk opens like J2s, K4o, 96o; 10 small-blind
+  raises become completes) and 72 raise sizes (54 smaller). Live, v12r, 1,000 deals each, off vs on (rule set before the
+  runs: merge above +1.5 SE pooled): 3-handed -44.8 ± 29.2 (seed 10851; button -39.2 ± 19.6) and -15.6 ± 29.1 (10853),
+  4-handed -7.1 ± 31.6 (10852) and -39.2 ± 28.9 (10854); pooled about -27 ± 15. Off opens less (button 91 -> 79-81%
+  3-handed, early 53-55 -> 41-42% 4-handed) and smaller (button 4.4 -> 2.9bb 3-handed, early 4.6 -> 2.8bb 4-handed); in
+  two of the runs most of the loss is later drift (hands with the same preflop that part afterwards). The tilt stays.
+  Files: sims/2026-11-08-untilt14/, scripts/2026-11-08-untilt14/.
 - Two-player tables preflop (v1.8.35, `input.pfHeadsUp: false` is the v1.8.34 rule): when the hand is dealt to two
   players (`input.seats`), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
   answers from the size curve (pfLimpCurve on); an explicit `input.pendingTilt` / `input.pfLimpCurve` wins. Bigger tables
@@ -1088,8 +1097,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   friends 3-handed -23.4 ± 13.0 (10822); all four pooled about 0 ± 4: no real loss, merged on the logs (merge bar). The
   3-handed loss is drift, not the spot: replaying its two worst blocks with every heads-up river decision dumped, only 3
   decisions differ at the same spot (two losing calls become folds, +39 chips; one raise becomes a call, -52), and the
-  big pots are hands that played out differently after the reads had diverged. Files: sims/2026-11-08-cbsd/,
-  sims/2026-11-08-cbt/.
+  big pots are hands that played out differently after the reads had diverged. Two more `xp:riverxb` seeds after the
+  merge: heads-up +10.2 ± 10.4 (10841), 3-handed +12.6 ± 11.1 (10842); the four riverxb runs pooled about +0.5 ± 5.7,
+  all six about +2.7 ± 3.5. Same-spot check without drift (`RIVERDUMP` of both riverxb setups on A's play, every
+  heads-up river decision facing a bet after hero's check re-solved under both rules, 191): 8 change, the 3 calls that
+  become folds all lost (+32.5bb), the 5 raises that become calls split 3 lost or tied, 2 won; hero's real share there
+  0.181, predicted 0.269 (A) and 0.241 (B). Files: sims/2026-11-08-cbsd/ (samespot/), sims/2026-11-08-cbt/.
 - Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
   on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
   (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
@@ -1314,6 +1327,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   3-bets) would follow only as their own counts move. Whole-hand results don't confirm the TD gap on the logs (what came
   back minus the EV for multiway raises at 0.06: about -1 ± 2.5bb, n 175, far noisier than the TD's +3.2 ± 1.0), so a
   real loss would show first as friends defending and 3-betting hero's opens more. Files: sims/2026-11-08-edgemw14/.
+  Against a light 3-bettor (red team, 8 Nov: `xp:3bet` + friends, re-raising a single raise with 60% of the top 45% of
+  hands that would fold or call; its read follows its own counts as a friend's would), 0.14 vs 0.10, live, 1,000 deals
+  each: 3-handed +67.3 ± 34.0 (seed 10861; VPIP / PFR 72 / 54% -> 81 / 66%), 4-handed -1.1 ± 34.0 (10862; 57 / 43% ->
+  67 / 54%); pooled about +33 ± 24, no loss. Hero folds 3% to a re-raise after raising in both; B's extra opens that got
+  re-raised (A had not raised) add +17.8 ± 16.9 (4-handed) and +9.4 ± 11.8 (3-handed). On the logs (to 6 Nov, frozen
+  captures) hero's 42 continues against a re-raise after raising came back -5.9 ± 6.0bb at the next decision (#948's
+  call of Mark's deep shove alone -194bb), so no fold leak shows there either. Files: sims/2026-11-08-edge3b/.
   v1.8.32 as a whole (this, the per-player hero-pot and river-raise tilts) against v1.8.31, v12r regulars, live budget,
   1,000 deals each: 4-handed +33.3 ± 29.2 (1,380 of 4,000 hands differ), 5-handed +116.1 ± 32.5 (1,232 of 5,000; button
   +41, every hand group but strong up); pooled about +70 ± 22. Files: sims/2026-11-06-v1832/.
