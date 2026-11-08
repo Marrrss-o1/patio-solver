@@ -5289,7 +5289,10 @@ function ENGINE() {
   // (6 Nov, 2,167 decisions, reads from earlier hands): with 0.06 preflop raises still came back above their EV at the
   // next decision, multiway +3.2 +- 1.0 bb (opens +3.3, over limpers +3.8; n 175) against heads-up +0.7 +- 0.5
   // (n 255). Simulator, v12r regulars, live budget, 0.10 vs 0.06: 3-, 4- and 5-handed all up, pooled about +45 +- 16.
-  const PF_FLOP_EDGE_MW = 0.10;
+  // 0.14 since v1.8.36: 0.14 vs 0.10, same settings, 3-handed +55.6 +- 28.5 and +16.1 +- 29.3, 4-handed +23.0 +- 30.4,
+  // 5-handed +19.6 +- 30.3 (pooled about +29 +- 15). Hero's VPIP / PFR in the simulator 4-handed 57 / 44% -> 67 / 55%,
+  // 3-handed 75 / 58% -> 83 / 69% (the button opens 93%); the bots don't adapt to that, the friends might.
+  const PF_FLOP_EDGE_MW = 0.14;
   // pfFlopEdge false: no edge anywhere; a number: that edge everywhere (unless pfFlopEdgeMw sets the multiway one).
   function pfFlopEdgeFor(input, field) {
     if (input.pfFlopEdge === false) return 0;
