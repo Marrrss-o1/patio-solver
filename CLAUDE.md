@@ -1399,6 +1399,13 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   are overvalued on the bots on every street (river -9.9 ± 2.9, turn -6.5 ± 3.3, flop -2.8 to -10.8 chips TD) because
   the bots fold to them far more than read (river 12 of 13, predicted .40; flop .47 vs .31); the friends fold to flop and
   turn raises 8-13% (n 55) and to hero's flop raises as read (.16 vs .15, n 19).
+  Re-checked on v1.8.39 (8 Nov night, frozen captures to 7 Nov, all 667 of hero's bets and raises after the flop, the
+  Monte Carlo's all-fold at hero's size): slope 0.77 ± 0.13 (predicted 0.334, actual 0.313); heads-up flop 1.04 ± 0.25
+  (n 262), turn 1.32 ± 0.37 (158), multiway 0.64 ± 0.23 (151). Heads-up river (n 96): the Monte Carlo 0.13 ± 0.24, the
+  river solver's own fold 0.41 ± 0.29 with its level on target (0.341 vs 0.375), log-likelihood -64.6 against -63.5 for
+  a constant, so its ranking of river spots adds nothing yet. Heads-up river bluffs (equity under 0.3) folded 7 of 24
+  against 8.9 predicted. No change (a river fold shrink was tried before; too few spots to fit one). Files:
+  /mnt/project-files/patio-solver/scripts/2026-11-08-calib/.
 - Fix ablation and TD audit on the clean full log (6 Nov; /mnt/project-files/patio-solver/sims/2026-11-06-ablation/
   RESULTS.md, scripts/, out/, td/): 1,080 hands to 6 Nov morning, reads rebuilt in order, each input copied when taken
   (2,169 hero decisions), live budget, mix off. Each merged fix switched off in turn changes few decisions (bigRaiseRange
