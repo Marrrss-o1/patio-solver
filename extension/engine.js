@@ -5183,7 +5183,7 @@
   // (kCall) or first raise (kRaise(amount)), and kappa per hero class: hero's K-way pot share at
   // showdown over hero's share against the field's strongest hand (the hand the solver plays
   // against). Both come from the same sampled boards and opponent hands, so the ratio is steady.
-  function preflopMulti(opps, scenarios, raisesSc, capE, toCall, samples, seed) {
+  function preflopMulti(opps, scenarios, raisesSc, capE, toCall, samples, seed, rooms, E) {
     const NC = 169, K = opps.length;
     const rng = mulberry32((seed ^ 0x3c6ef372) >>> 0);
     const cdfs = opps.map((o) => {
@@ -5256,7 +5256,63 @@
       for (const r of sc.opp) { const c = clamp(r.cont, 0, 1); sum += c; none *= 1 - c; }
       return none < 1 ? Math.max(1, sum / (1 - none)) : 1;
     };
-    return { K, kappa, kCall: Math.max(1, kCall), kRaise, samples: got };
+    // Short callers (rooms[i]: what opponent i can add beyond matching the current bet; 0 when all-in). At the leaf where the
+    // field calls hero's first raise of amt (it adds o = amt - toCall), each caller adds only min(o, room), hero gets back
+    // what the deepest caller can't match, and the flop is played with what hero and the deepest caller have left. Before,
+    // each counted o (an all-in player too), so raises and shoves over an all-in or short player read far above what can be
+    // won (extended fuzz, 8 Nov). null when every player who may continue can match o (the leaf as before).
+    const capAt = (amt) => {
+      const o = amt - toCall;
+      const sc = rooms && o > 1e-9 ? raisesSc.find((s) => Math.abs(capE(s.amount) - amt) < 1e-9) : null;
+      if (!sc) return null;
+      const c = [], v = [], room = [];
+      let binds = false;
+      sc.opp.forEach((r, i) => {
+        const ci = clamp(r.cont, 0, 1);
+        if (!(ci > 0)) return;
+        const ri = Math.max(0, rooms[i] != null && isFinite(rooms[i]) ? rooms[i] : Infinity);
+        if (ri < o - 1e-9) binds = true;
+        c.push(ci); v.push(Math.min(o, ri)); room.push(ri);
+      });
+      if (!binds) return null;
+      let none = 1, sumC = 0, chips = 0;
+      for (let j = 0; j < c.length; j++) { none *= 1 - c[j]; sumC += c[j]; chips += c[j] * v[j]; }
+      if (!(none < 1 - 1e-12)) return null;
+      const P = 1 - none, ord = c.map((x, j) => j).sort((a, b) => v[b] - v[a]);
+      let surv = 1, deep = 0, rem = 0;
+      for (const j of ord) {
+        const q = c[j] * surv;
+        deep += q * v[j];
+        rem += q * (v[j] < o - 1e-9 ? 0 : Math.max(0, Math.min(E - amt, room[j] - o)));
+        surv *= 1 - c[j];
+      }
+      // Chips counted as the expected callers (kRaise) times the share of o they can add.
+      return { m: Math.max(1, sumC / P) * (chips / (sumC * o)), excess: Math.max(0, o - deep / P), rem: rem / P };
+    };
+    // At the leaves where the field just calls or checks (kCall), only the flop's depth changes: what hero and the deepest
+    // player in still have, so a pot against an all-in player is a showdown, not a flop with hero's edge. null when the
+    // deepest player who may be in can cover hero's stack (the leaf as before).
+    const wCall = opps.map((o, i) => (o.pending && passive ? clamp(passive.opp[i].cont, 0, 1) : 1));
+    const capCall = (h) => {
+      const left = E - h;
+      if (!rooms || !(left > 1e-9)) return null;
+      const ids = [];
+      let binds = false;
+      wCall.forEach((w, i) => {
+        if (!(w > 0)) return;
+        if (!(rooms[i] >= left - 1e-9)) binds = true;
+        ids.push(i);
+      });
+      if (!binds) return null;
+      const room = (i) => Math.max(0, rooms[i] != null && isFinite(rooms[i]) ? rooms[i] : Infinity);
+      ids.sort((a, b) => room(b) - room(a));
+      let surv = 1, rem = 0;
+      for (const i of ids) { const q = wCall[i] * surv; rem += q * Math.min(left, room(i)); surv *= 1 - wCall[i]; }
+      const P = 1 - surv;
+      if (!(P > 1e-12) || Math.abs(rem / P - left) < 1e-9) return null;
+      return { m: null, excess: 0, rem: rem / P };
+    };
+    return { K, kappa, kCall: Math.max(1, kCall), kRaise, capAt, capCall, samples: got };
   }
 
   // Hero's postflop edge at the preflop solver's flop leaves (input.pfFlopEdge: false turns it off, a number replaces
@@ -5364,10 +5420,20 @@
       for (let a = 0; a < NC; a++) out[a] = Math.pow(multi.kappa[a], e);
       return (kapCache[key] = out);
     }
-    function leaf(h, o, k) {
+    function leaf(h, o, k, cap) {
       terminals++;
       const m = multi && k > 1 ? k : 1;
       const allIn = h >= E - 1e-9 || o >= oMax - 1e-9;
+      if (cap) {
+        // Short or all-in players (preflopMulti's capAt / capCall): the field adds cap.m x o (capCall: m as before), hero
+        // puts in h less what nobody can match, and the flop is played with cap.rem behind (a showdown when nobody has
+        // chips left).
+        const mC = cap.m != null ? cap.m : m, hEff = h - cap.excess, potC = P0 + hEff + mC * o;
+        const n = allIn || cap.rem <= 1e-9 ? { term: 'show', hIn: hEff, oIn: o } : { term: 'flop', hIn: hEff, oIn: o, S: shares(cap.rem / potC) };
+        if (cap.m != null || m > 1) n.m = mC;
+        if (m > 1) n.kap = kapFor(k);
+        return n;
+      }
       const potF = P0 + h + m * o;
       const n = allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF) };
       if (m > 1) { n.m = m; n.kap = kapFor(k); }
@@ -5422,10 +5488,10 @@
         const callKind = c >= maxAdd - 1e-9 ? 'allin' : 'call';
         const callLeaf = isRoot && option && c < maxAdd - 1e-9
           ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1); }
-          : () => leaf(h2, o2, kLeaf);
+          : () => leaf(h2, o2, kLeaf, !multi ? null : depth === 1 && player === 1 ? multi.capAt(hIn) : depth === 0 ? multi.capCall(h2) : null);
         add({ kind: callKind, amount: c, isCall: true }, callLeaf);
       } else {
-        add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn, kLeaf));
+        add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn, kLeaf, multi && (depth === 0 || (depth === 1 && player === 1)) ? multi.capCall(hIn) : null));
       }
       for (const amt of raiseAmts) {
         const [h3, o3] = put(amt);
@@ -6917,7 +6983,9 @@
       const vRaised = pres.some((x) => /bet|raise/.test(x));
       const raises = /bet|raise/.test(heroPre) || reraised ? 2 : (!field || fieldOther) && vRaised ? 3 : 4;
       const pendingOpps = opps.filter((o) => o.pending);
-      const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed) : null;
+      // What each opponent can add beyond matching the current bet (Infinity when the stack is unknown).
+      const rooms = input.opponents.map((o, i) => oppLeft[i] - Math.max(0, (+input.heroBet || 0) + toCall - (+o.bet || 0)));
+      const multi = fieldOther ? preflopMulti(opps, scenarios, raisesSc, capE, toCall, input.preflopMultiSamples || (input.power ? 1500 : 400), seed, rooms, E) : null;
       const pf = preflopSolve({
         heroW: heroCw, oppW: oppCw, heroClass: hc, pot: potWin, toCall, stack: E, bigBlind, heroIP: inPosition,
         rootActs: raisesSc.map((s) => ({ amount: capE(s.amount) })),
@@ -7135,12 +7203,13 @@
         }
       }
       // A multiway solve plays to what the shortest stack can match (multiwayStack), so its all-in can be less than hero's
-      // stack: at the table that is a call, a bet of that size, or a raise of it (at least a min-raise, 2x the call).
+      // stack: at the table that is a call, a bet of that size (at least the big blind), or a raise of it (at least a
+      // min-raise, 2x the call).
       const atTable = (a) => {
         if (a.kind !== 'allin' || !(a.amount < stack - 1e-9)) return a;
         if (a.amount <= toCall + 1e-9) return Object.assign({}, a, { kind: 'call', amount: Math.min(toCall, stack) });
-        if (toCall <= 0) return Object.assign({}, a, { kind: 'bet' });
-        const amount = Math.min(stack, Math.max(a.amount, 2 * toCall));
+        const amount = Math.min(stack, Math.max(a.amount, toCall > 0 ? 2 * toCall : bigBlind));
+        if (toCall <= 0) return Object.assign({}, a, { kind: amount >= stack - 1e-9 ? 'allin' : 'bet', amount });
         return Object.assign({}, a, { kind: amount >= stack - 1e-9 ? 'allin' : 'raise', amount });
       };
       const acts = solvedActs.map(atTable).map((a) => ({
