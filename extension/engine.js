@@ -2264,11 +2264,19 @@
   // RIVER_RAISE_TILT (the larger applies; neither stacks on the hero-pot tilt). Leak hunt, 6 Nov: shown river bets after
   // hero's check sat at 0.63 of the read's range (n 28, best tilt 0.2), after a friend's check 0.51 (n 33); hero's
   // heads-up river check-calls won 0 of 11 at a predicted equity of 0.36.
-  // Per player since v1.8.29 (checkBetLearned): 0.2 is the table's number, each player's own shown river bets after
+  // Per player since v1.8.29 (checkBetLearned): 0.2 was the table's number (0.3 since v1.8.36), each player's own shown river bets after
   // hero's check (shows with `hck`, scoreShow's TILTS log-likelihoods) move it, shrunk to it by k (about 6 shows' worth:
   // the 28 shows' curvature is about 2.6 nats a show per unit tilt squared); from `min` (bluffier than read) to `max`.
   // learn: false gives everyone the table's tilt.
-  const CHECK_BET_TILT = { tilt: 0.2, street: 5, learn: true, k: 15, min: -0.3, max: 0.75 };
+  // Showdowns only since v1.8.36 (`sd`; `{ sd: false, tilt: 0.2 }` is the v1.8.35 rule): a bet nobody called is shown
+  // only when the bettor chooses to, and friends show their bluffs after hero folds. All logs to 7 Nov (31 shown river
+  // bets after hero's check, each scored at show time): the 21 that reached a showdown fit best at 0.30 (heads-up 9 and
+  // multiway 12 both 0.30), the 10 shown after everyone folded at -0.15, all 31 together 0.15. Learning from every show
+  // pulled each player's tilt toward their bragged bluffs, so the table's number is refitted on showdowns too (0.3).
+  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true };
+  // Whether a show reached a showdown (someone else still in when the cards were turned up, `show.sd`); shows saved
+  // before v1.8.36 have no `sd` and count when hero was still in (`hp.in`, never set on a show after everyone folded).
+  const shownAtShowdown = (s) => (s.sd != null ? !!s.sd : !!(s.hp && s.hp.in));
   // A player's shown river bets made after hero checked the river: their tilt log-likelihoods summed, and the tilt that
   // fits them on top of cfg.tilt's prior (cfg.k). Shows scored by another FIT_VERSION are left out. Returns { tilt, n }.
   // A player's own river-raise tilt (RIVER_RAISE_TILT): their shown river raises (any raise line), shrunk to cfg.tilt.
@@ -2293,6 +2301,7 @@
       const f = s && s.fit;
       if (!s || !s.hck || s.folded || !f || f.v !== FIT_VERSION || !Array.isArray(f.tl) || f.tl.length !== TILTS.length || !f.tl.every(Number.isFinite)) continue;
       if (STREET_ACTION_MAP[(s.actions && s.actions.river) || ''] !== 'bet') continue;
+      if (cfg.sd !== false && !shownAtShowdown(s)) continue;
       sum = sum ? sum.map((x, i) => x + f.tl[i]) : f.tl.slice();
       n++;
     }

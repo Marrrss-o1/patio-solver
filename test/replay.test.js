@@ -1465,11 +1465,13 @@ test('tracker: a show records whether it reached a showdown (sd); tagShowdown fi
   const t = new T({ players: { B: { name: 'Bo', tally: { shows: [
     { cards: ['Kd', 'Qd'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } },
     { cards: ['5d', '5c'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } },
+    { cards: ['Ah', 'Jh'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } },
   ] } } } });
-  const entry = (shown, others) => ({ t: 1, bigBlind: 2, board: ['Kc', '7d', '2s', '9h', '3c'], log: [],
-    players: [{ name: 'Hero', hero: true, folded: others, shown: [] }, { name: 'Bo', folded: false, shown }] });
-  assert.strictEqual(t.tagShowdown([entry(['Kd', 'Qd'], false), entry(['5c', '5d'], true)]), 2);
-  assert.deepStrictEqual(t.db.players.B.tally.shows.map((x) => x.sd), [true, false]);
+  const entry = (shown, others, boFolded) => ({ t: 1, bigBlind: 2, board: ['Kc', '7d', '2s', '9h', '3c'], log: [],
+    players: [{ name: 'Hero', hero: true, folded: others, shown: [] }, { name: 'Bo', folded: !!boFolded, shown }, { name: 'Cy', folded: !boFolded, shown: [] }] });
+  // The third: Bo folded (to a raise) and showed while Hero and Cy went on to the showdown.
+  assert.strictEqual(t.tagShowdown([entry(['Kd', 'Qd'], false), entry(['5c', '5d'], true), entry(['Ah', 'Jh'], false, true)]), 3);
+  assert.deepStrictEqual(t.db.players.B.tally.shows.map((x) => x.sd), [true, false, false]);
   assert.strictEqual(t.tagShowdown([entry(['Kd', 'Qd'], false)]), 0, 'already there');
 });
 

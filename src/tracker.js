@@ -1099,12 +1099,12 @@
       const byCards = new Map();
       for (const e of entries || []) {
         if (!e || !Array.isArray(e.board) || e.board.length < 3 || !Array.isArray(e.players)) continue;
-        const sd = e.players.filter((p) => p && !p.folded).length >= 2;
+        const live = e.players.filter((p) => p && !p.folded).length;
         for (const p of e.players) {
           if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
           const k = key(p.shown);
           if (!byCards.has(k)) byCards.set(k, []);
-          byCards.get(k).push({ board: e.board, sd });
+          byCards.get(k).push({ board: e.board, sd: !p.folded && live >= 2 });
         }
       }
       let n = 0;
@@ -1408,7 +1408,7 @@
         hck: !!(hero && h.board.length >= 5 && hero.seq && hero.seq.river && hero.seq.river[0] === 'check'),
         // A showdown (someone else still in when the cards were turned up), not a show after everyone folded: the
         // per-player read of river bets after hero's check learns from showdowns only (CHECK_BET_TILT `sd`).
-        sd: Object.values(h.players).some((x) => x.id !== p.id && !x.folded),
+        sd: !p.folded && Object.values(h.players).some((x) => x.id !== p.id && !x.folded),
       };
       // How well the range we would have put them on matches what they showed.
       // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.

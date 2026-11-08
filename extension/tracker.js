@@ -1091,6 +1091,35 @@
       return n;
     }
 
+    // Shows saved before v1.8.36 don't say whether they reached a showdown (show `sd`, CHECK_BET_TILT's showdowns-only
+    // read): filled in from the stored hands, matched like tagCheckBet; a showdown when two or more players were still in
+    // at the end. Returns how many shows were tagged.
+    tagShowdown(entries) {
+      const key = (cards) => cards.slice().sort().join(',');
+      const byCards = new Map();
+      for (const e of entries || []) {
+        if (!e || !Array.isArray(e.board) || e.board.length < 3 || !Array.isArray(e.players)) continue;
+        const live = e.players.filter((p) => p && !p.folded).length;
+        for (const p of e.players) {
+          if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
+          const k = key(p.shown);
+          if (!byCards.has(k)) byCards.set(k, []);
+          byCards.get(k).push({ board: e.board, sd: !p.folded && live >= 2 });
+        }
+      }
+      let n = 0;
+      for (const r of Object.values(this.db.players)) {
+        for (const s of (r && r.tally && r.tally.shows) || []) {
+          if (!s || s.sd != null || !Array.isArray(s.cards) || s.cards.length !== 2 || !Array.isArray(s.board)) continue;
+          const m = (byCards.get(key(s.cards)) || []).filter((c) => s.board.every((x, i) => c.board[i] === x));
+          if (m.length !== 1) continue;
+          s.sd = m[0].sd;
+          n++;
+        }
+      }
+      return n;
+    }
+
     // First answers to hero's multiway bets from hands stored before v1.8.29 (MW_BET_FOLD's per-player read,
     // tally.mwFolds): found in each stored hand's action log the way the live tracker counts them (hero's opening bet
     // after the flop into 2+ opponents, each answer of 30%+ of the pot until someone stays), oldest first, added to the
@@ -1377,6 +1406,9 @@
         hp: { in: !!(hero && !hero.folded), put: Math.round(((p.total || 0) / (h.bigBlind || 1)) * 10) / 10 },
         // Hero's first river action was a check (a river bet in `actions` came after it: CHECK_BET_TILT's per-player read).
         hck: !!(hero && h.board.length >= 5 && hero.seq && hero.seq.river && hero.seq.river[0] === 'check'),
+        // A showdown (someone else still in when the cards were turned up), not a show after everyone folded: the
+        // per-player read of river bets after hero's check learns from showdowns only (CHECK_BET_TILT `sd`).
+        sd: !p.folded && Object.values(h.players).some((x) => x.id !== p.id && !x.folded),
       };
       // How well the range we would have put them on matches what they showed.
       // Folded hands are kept (bets before the fold were bluffs) but not scored against a range.
