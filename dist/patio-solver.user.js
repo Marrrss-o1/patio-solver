@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.36
+// @version      1.8.37
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -7150,7 +7150,16 @@ function ENGINE() {
           solvedActs = solvedActs.map((a) => Object.assign({}, a, { freq: isRaise(a) ? 0 : keep > 1e-9 ? a.freq / keep : a === top ? 1 : 0 }));
         }
       }
-      const acts = solvedActs.map((a) => ({
+      // A multiway solve plays to what the shortest stack can match (multiwayStack), so its all-in can be less than hero's
+      // stack: at the table that is a call, a bet of that size, or a raise of it (at least a min-raise, 2x the call).
+      const atTable = (a) => {
+        if (a.kind !== 'allin' || !(a.amount < stack - 1e-9)) return a;
+        if (a.amount <= toCall + 1e-9) return Object.assign({}, a, { kind: 'call', amount: Math.min(toCall, stack) });
+        if (toCall <= 0) return Object.assign({}, a, { kind: 'bet' });
+        const amount = Math.min(stack, Math.max(a.amount, 2 * toCall));
+        return Object.assign({}, a, { kind: amount >= stack - 1e-9 ? 'allin' : 'raise', amount });
+      };
+      const acts = solvedActs.map(atTable).map((a) => ({
         kind: a.kind, amount: a.amount, ev: a.ev, se: 0, freq: a.freq, foldP: a.foldP,
         label: a.label || (a.kind === 'allin' ? (a.amount <= toCall + 1e-9 ? 'Call all-in' : 'All-in') : name[a.kind]),
         sizeLabel: a.sizeLabel != null ? a.sizeLabel : a.frac && a.kind !== 'allin'

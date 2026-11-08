@@ -1960,6 +1960,28 @@ test('fuzz: advice is legal and EVs stay within what can be lost or won (random 
   assert.deepStrictEqual(bad, []);
 });
 
+// A multiway solve plays to what the shortest stack can match (multiwayStack). Its all-in there used to reach the panel as
+// "All-in" for less than hero's stack (extended fuzz, 8 Nov: 4 of 6,300 random spots; none of the 2,168 logged decisions).
+test('multiway river solve capped at a short stack: its all-in is a bet or a min-raise or more, not "All-in"', () => {
+  const opp = (name, extra) => Object.assign({ name, tally: {}, actions: { pre: 'call', flop: 'call', turn: 'check' } }, extra);
+  const base = { hero: C('Ah Kd'), board: C('Ks 8d 2c 7h 3s'), bigBlind: 2, inPosition: false, heroBet: 0, mix: false, seed: 3, iterations: 2000,
+    riverIterations: 60, heroActions: { pre: 'raise', flop: 'bet', turn: 'check' } };
+  // B has 30 behind, the pot: the solve's pot-size bet puts B all-in.
+  const bet = Object.assign({}, base, { pot: 30, toCall: 0, stack: 40, heroCommitted: 10,
+    opponents: [opp('A', { stack: 200, committed: 10 }), opp('B', { stack: 30, committed: 10 })] });
+  // A overbets 15 into 10; B can match 25 in all, under a min-raise (30).
+  const raise = Object.assign({}, base, { pot: 25, toCall: 15, stack: 100, heroCommitted: 5,
+    opponents: [opp('A', { stack: 180, committed: 20, bet: 15, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'bet' }, sizes: { river: 1.5 } }),
+      opp('B', { stack: 25, committed: 5 })] });
+  for (const [name, input, kind, amount] of [['bet', bet, 'bet', 30], ['raise', raise, 'raise', 30]]) {
+    const res = E.analyzeSync(input);
+    assert.strictEqual(res.solver && res.solver.kind, 'river', name);
+    assert.strictEqual(res.solver.field, 2, name);
+    assert.ok(res.ranked.some((s) => s.kind === kind && Math.abs(s.amount - amount) < 1e-9), `${name}: ${res.ranked.map((s) => s.kind + ' ' + s.amount)}`);
+    assert.deepStrictEqual(F.adviceProblems(input, res), [], name);
+  }
+});
+
 // A player who raises most bets they face (and bets a lot): re-raises of hero's bets come up often.
 const RAISER_ST = { bet: 8, check: 4, call: 4, raise: 14, fold: 3 };
 const RAISER = { bet: 24, check: 12, call: 12, raise: 42, fold: 9, pfCall: 20, pfRaise: 10, pfFold: 10,

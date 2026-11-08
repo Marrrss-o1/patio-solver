@@ -155,6 +155,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   has at least 1 (river), 2 (turn) or 3 (flop) pots behind, with the stack capped at what the shortest can match;
   otherwise the Monte Carlo with sidePotWin decides. (Gating on hasSidePots alone blocked every multiway turn and
   river in Marwin's 5-6 handed log: a player who had just bet counts as shorter by chips behind.)
+  A capped solve's all-in is less than hero's stack: since v1.8.37 the advice names it a call, a bet of that size or a
+  raise (at least 2x the call; `solvedResult`'s `atTable`). Before, the panel said "All-in" for it (an 8 Nov extended
+  fuzz: 4 of 6,300 random spots; none of the 190 logged multiway turn and river decisions, so no logged pick changes).
 - Lookahead (`makePlan`, `playOut`, `playOutMulti` in engine.js) runs on the flop and turn. Heads-up, either side
   can raise once per street (hero raises with about 80%+ equity against the betting range). Multiway is a betting
   round in seat order (hero first OOP, last IP) with one raise per street; after hero checks with players still to
