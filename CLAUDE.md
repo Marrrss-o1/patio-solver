@@ -1368,6 +1368,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   each, rule set before the runs: heads-up +29.2 ± 20.0 (seed 9351) and -24.9 ± 27.2 (9352), 3-handed -28.8 ± 28.1
   (9353; big blind -38.1 ± 13.6), 4-handed -5.1 ± 18.8 (9354); pooled about -1 ± 11. No win, so 0.06 stays. Files:
   sims/2026-11-06-edgehu/.
+  Tried and dropped (8 Nov night): raise-or-fold, a separate edge at the flop leaves after hero's raise was called
+  (`input.pfFlopEdgeAggr` at the field solves, `pfFlopEdgeAggrHU` heads-up; simulator options, off, bit-identical when
+  unset), 0.18 there with 0.10 at every other multiway leaf, against 0.14 everywhere. On the logs it changes 48 of 736
+  multiway preflop decisions in kind (23 calls become raises, mostly small-blind completes like 42o and 73o raised to
+  3.5bb 3-handed; 16 calls or raises become folds). v12r regulars, live budget, 1,000 deals each (rule set before the
+  runs: merge above +1.5 SE pooled): 3-handed -30.3 ± 29.5 (seed 10901), 4-handed +10.8 ± 34.6 (10902), 5-handed
+  +0.5 ± 28.3 (10903); pooled about -8 ± 18. Hero calls about 15% less preflop with the same raises (VPIP 72 -> 68%
+  4-handed). Files: sims/2026-11-08-aggr/.
 - Short raises (v1.8.13, `input.raisePrice`: false for the old rule): an opponent facing hero's raise that costs them
   under a quarter of the pot over the call (an all-in a chip over the call) folds no more of their range than to a bet of
   that price, in the river, turn and flop solvers' fixed strategies. The 4 Nov log had QQ facing 40 into 208 with 41
