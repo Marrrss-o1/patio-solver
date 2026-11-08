@@ -224,6 +224,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     -> raise 211, the shove now 79.0).
   - Opens with everyone to act (`fieldOpen`) still count one caller's full raise; there all-in is only on the menu up
     to 25bb or 3 pots.
+  - Simulator (no-loss check, rule set before the runs: merge above -1 SE pooled), v12r regulars, live budget, 1,000
+    deals each, one or two short bot seats (`--seat-stacks`), fix vs main: 3-handed 25bb -2.0 ± 15.4 (seed 10884),
+    4-handed 30/60bb +14.0 ± 14.2 (10882), 4-handed 20bb +2.8 ± 18.6 (10881), 5-handed 20bb -8.5 ± 20.0 (10883); pooled
+    about +3 ± 8. The hands whose first difference is the spot the fix touches (main re-shoves or 3-bets big over a
+    short player, the fix calls or raises less) +9.1 ± 7.8, +1.6 ± 8.9, +4.6 ± 7.6 and +4.5 ± 7.4 of it; the rest is
+    drift. Files: /mnt/project-files/patio-solver/sims/2026-11-08-pfcap/.
 - Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
   one Discounted CFR. Turn: hero 33/66/100% pot, opponent their size, one raise; each line that reaches the river gets
   a river subgame per card (built lazily; OOP first, hero 33/66/100% (was 50/100%: +17 ± 12 bb/100 pooled over two
