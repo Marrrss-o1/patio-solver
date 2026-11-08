@@ -714,10 +714,12 @@
     }
     // Hands stored before v1.8.29 don't count in the per-player reads of river bets after hero's check (show `hck`) and
     // of folds to hero's multiway bets (tally.mwFolds): filled in once from every stored hand.
-    if (!tracker.db.cbTagged || !tracker.db.mwTagged) {
+    // Shows saved before v1.8.36 don't say whether they reached a showdown (show `sd`): filled in once as well.
+    if (!tracker.db.cbTagged || !tracker.db.mwTagged || !tracker.db.sdTagged) {
       handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
         if (!tracker.db.cbTagged) { tracker.tagCheckBet(hands); tracker.db.cbTagged = 1; }
         if (!tracker.db.mwTagged) { tracker.tagMwFolds(hands); tracker.db.mwTagged = 1; }
+        if (!tracker.db.sdTagged) { tracker.tagShowdown(hands); tracker.db.sdTagged = 1; }
         saveDb();
       });
     }

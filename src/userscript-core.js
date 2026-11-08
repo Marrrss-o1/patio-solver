@@ -127,6 +127,8 @@ function slim(r) {
   // bets): filled in once.
   if (!tracker.db.cbTagged) { tracker.tagCheckBet(tracker.db.history || []); tracker.db.cbTagged = 1; save(DB_KEY, tracker.db); }
   if (!tracker.db.mwTagged) { tracker.tagMwFolds(tracker.db.history || []); tracker.db.mwTagged = 1; save(DB_KEY, tracker.db); }
+  // Shows saved before v1.8.36 (whether they reached a showdown, for the read of river bets after hero's check): once.
+  if (!tracker.db.sdTagged) { tracker.tagShowdown(tracker.db.history || []); tracker.db.sdTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
