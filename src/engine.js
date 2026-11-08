@@ -5341,6 +5341,14 @@
     return field && input.pfFlopEdgeMw !== false ? PF_FLOP_EDGE_MW : PF_FLOP_EDGE;
   }
 
+  // Simulator option (off): the flop after hero's raise was called (hero made the last raise) takes its own edge,
+  // input.pfFlopEdgeAggr at the field solves, input.pfFlopEdgeAggrHU heads-up; null where unset (the usual edge).
+  function pfFlopEdgeAggrFor(input, field) {
+    if (input.pfFlopEdge === false) return null;
+    const x = field ? input.pfFlopEdgeAggr : input.pfFlopEdgeAggrHU;
+    return typeof x === 'number' && isFinite(x) ? x : null;
+  }
+
   function preflopSolve(cfg) {
     const { heroW, oppW, heroClass, pot: P0, toCall, stack: E, bigBlind, heroIP, rootActs, option, p } = cfg;
     const NC = 169;
@@ -5354,9 +5362,10 @@
 
     // Realized pot shares at a flop with stack-to-pot ratio spr (cached by depth).
     const shareCache = {};
-    function shares(spr) {
+    function shares(spr, aggr) {
       const t = clamp(spr / 4, 0.15, 1), deep = spr > 10 ? 1.4 : 1;
-      const key = Math.round(t * 20) + (deep > 1 ? 'd' : '');
+      const eBase = aggr && cfg.flopEdgeAggr != null ? cfg.flopEdgeAggr : cfg.flopEdge || 0;
+      const key = Math.round(t * 20) + (deep > 1 ? 'd' : '') + (eBase !== (cfg.flopEdge || 0) ? 'a' : '');
       if (shareCache[key]) return shareCache[key];
       const R = (c, pos) => 1 + t * (0.92 + 0.16 * (CLASS_STRENGTH[c] - 0.5) + deep * CLASS_PLAY[c] + 0.06 * pos - 1);
       const Rh = new Float64Array(NC), Rv = new Float64Array(NC);
@@ -5365,7 +5374,7 @@
       // Hero plays the flop better than the read's player (flopEdge x t of the pot; PF_FLOP_EDGE). Simulator option
       // (off): with stacks behind, the better hand also wins chips the flop leaf doesn't see (implied odds: share
       // s -> s + implied x t x (s - 0.5), so it can pass 1 or go below 0).
-      const amp = (cfg.implied || 0) * t, edge = (cfg.flopEdge || 0) * t;
+      const amp = (cfg.implied || 0) * t, edge = eBase * t;
       for (let a = 0; a < NC; a++) {
         for (let b = 0; b < NC; b++) {
           const e = EQ[a * NC + b], x = e * Rh[a], y = (1 - e) * Rv[b];
@@ -5420,7 +5429,8 @@
       for (let a = 0; a < NC; a++) out[a] = Math.pow(multi.kappa[a], e);
       return (kapCache[key] = out);
     }
-    function leaf(h, o, k, cap) {
+    // aggr: the flop after hero's raise was called (hero made the last raise), which takes cfg.flopEdgeAggr when set.
+    function leaf(h, o, k, cap, aggr) {
       terminals++;
       const m = multi && k > 1 ? k : 1;
       const allIn = h >= E - 1e-9 || o >= oMax - 1e-9;
@@ -5429,13 +5439,13 @@
         // puts in h less what nobody can match, and the flop is played with cap.rem behind (a showdown when nobody has
         // chips left).
         const mC = cap.m != null ? cap.m : m, hEff = h - cap.excess, potC = P0 + hEff + mC * o;
-        const n = allIn || cap.rem <= 1e-9 ? { term: 'show', hIn: hEff, oIn: o } : { term: 'flop', hIn: hEff, oIn: o, S: shares(cap.rem / potC) };
+        const n = allIn || cap.rem <= 1e-9 ? { term: 'show', hIn: hEff, oIn: o } : { term: 'flop', hIn: hEff, oIn: o, S: shares(cap.rem / potC, aggr) };
         if (cap.m != null || m > 1) n.m = mC;
         if (m > 1) n.kap = kapFor(k);
         return n;
       }
       const potF = P0 + h + m * o;
-      const n = allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF) };
+      const n = allIn ? { term: 'show', hIn: h, oIn: o } : { term: 'flop', hIn: h, oIn: o, S: shares((E - h) / potF, aggr) };
       if (m > 1) { n.m = m; n.kap = kapFor(k); }
       return n;
     }
@@ -5488,7 +5498,7 @@
         const callKind = c >= maxAdd - 1e-9 ? 'allin' : 'call';
         const callLeaf = isRoot && option && c < maxAdd - 1e-9
           ? () => { const [l2, h2r] = childRange('call'); return node(1, h2, o2, raises, l2, h2r, vRaised, depth + 1); }
-          : () => leaf(h2, o2, kLeaf, !multi ? null : depth === 1 && player === 1 ? multi.capAt(hIn) : depth === 0 ? multi.capCall(h2) : null);
+          : () => leaf(h2, o2, kLeaf, !multi ? null : depth === 1 && player === 1 ? multi.capAt(hIn) : depth === 0 ? multi.capCall(h2) : null, player === 1);
         add({ kind: callKind, amount: c, isCall: true }, callLeaf);
       } else {
         add({ kind: 'check', amount: 0 }, () => leaf(hIn, oIn, kLeaf, multi && (depth === 0 || (depth === 1 && player === 1)) ? multi.capCall(hIn) : null));
@@ -6995,7 +7005,7 @@
         raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
-        implied: +input.pfImplied || 0, flopEdge: pfFlopEdgeFor(input, field),
+        implied: +input.pfImplied || 0, flopEdge: pfFlopEdgeFor(input, field), flopEdgeAggr: pfFlopEdgeAggrFor(input, field),
       });
       if (pf) {
         // Name each action as the matching option in the list.
