@@ -1982,6 +1982,34 @@ test('multiway river solve capped at a short stack: its all-in is a bet or a min
   }
 });
 
+// The multiway preflop solve (preflopMulti's capAt / capCall): a player who is all-in or short adds only what they have,
+// hero gets back what nobody can match, and a pot against all-in players is a showdown. Before, each caller counted the
+// full raise: shoving AQo over a 31bb all-in with both blinds behind read +62 chips with the shover all-in and +39 with
+// him 300 deep, and two random spots of the 8 Nov extended fuzz had EVs above everything at the table.
+test('multiway preflop: an all-in or short player adds only their chips at the leaves (shove EVs stay within the table)', () => {
+  const spot = (jStack) => ({ hero: C('Qc Ad'), board: [], pot: 65, toCall: 62, stack: 367, bigBlind: 2, inPosition: false, heroBet: 0, heroCommitted: 0,
+    mix: false, seed: 3, heroActions: { pre: 'pending' },
+    opponents: [
+      { name: 'SB', tally: {}, actions: { pre: 'pending' }, stack: 283, bet: 1, committed: 1 },
+      { name: 'BB', tally: {}, actions: { pre: 'pending' }, stack: 365, bet: 2, committed: 2 },
+      { name: 'J', tally: {}, actions: { pre: 'raise' }, stack: jStack, bet: 62, committed: 62, sizes: { pre: 30, preTo: 31, preBehind: jStack / 2, preCover: 668 } }] });
+  const shove = (jStack) => {
+    const res = E.analyzeSync(spot(jStack));
+    assert.strictEqual(res.solver && res.solver.kind, 'preflop');
+    assert.strictEqual(res.solver.field, 3);
+    return res.ranked.find((s) => s.kind === 'allin').ev;
+  };
+  const allIn = shove(0), deep = shove(300);
+  assert.ok(allIn < deep, `shove over the all-in player ${allIn.toFixed(1)}, over him with 300 behind ${deep.toFixed(1)}`);
+  // Random spots from the fuzz: short and all-in players around hero's raises.
+  for (const [seed, k] of [[5002, 25], [5222, 38]]) {
+    const r = F.rng32(seed);
+    let s = null;
+    for (let n = 0; n < k;) { s = F.randomSpot(r); if (s) n++; }
+    assert.deepStrictEqual(F.adviceProblems(s, E.analyzeSync(s)), [], `seed ${seed} spot ${k}`);
+  }
+});
+
 // A player who raises most bets they face (and bets a lot): re-raises of hero's bets come up often.
 const RAISER_ST = { bet: 8, check: 4, call: 4, raise: 14, fold: 3 };
 const RAISER = { bet: 24, check: 12, call: 12, raise: 42, fold: 9, pfCall: 20, pfRaise: 10, pfFold: 10,
