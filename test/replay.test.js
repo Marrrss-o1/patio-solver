@@ -1102,16 +1102,18 @@ test('river solver: raises the nuts-ish hand, folds the bluff-catcher that canno
 
 test('river solver: riverRaiseFold (off): a bettor facing a pot-size raise folds at least half its range, less to a small all-in', () => {
   const ev = (r, kind) => r.ranked.find((s) => s.kind === kind).ev;
-  const on = E.analyzeSync(riverSpot('As Kc', { riverRaiseFold: true })), off = E.analyzeSync(riverSpot('As Kc'));
+  // The check-bet tilt (hero checked this river) is off here: this is about the bettor's answer to hero's raise.
+  const riverSpot0 = (hero, extra) => riverSpot(hero, Object.assign({ checkBetTilt: false }, extra));
+  const on = E.analyzeSync(riverSpot0('As Kc', { riverRaiseFold: true })), off = E.analyzeSync(riverSpot0('As Kc'));
   // Value raises get paid less; calling is unchanged.
   assert.ok(ev(on, 'raise') < ev(off, 'raise') - 0.1 * 320, `${ev(on, 'raise')} vs ${ev(off, 'raise')}`);
   assert.ok(Math.abs(ev(on, 'call') - ev(off, 'call')) < 1e-6);
   // A second pair that raised before (K-Q on K-8-2-3-A) now calls by a clear margin.
-  const kq = E.analyzeSync(riverSpot('Kh Qh', { riverRaiseFold: true }));
+  const kq = E.analyzeSync(riverSpot0('Kh Qh', { riverRaiseFold: true }));
   assert.strictEqual(kq.best.kind, 'call');
   assert.ok(ev(kq, 'call') > ev(kq, 'raise') + 0.1 * 320);
   // An all-in for under the pot is scaled down: 300 into 320 moves little.
-  const short = (o) => E.analyzeSync(riverSpot('As Kc', Object.assign({ stack: 300 }, o)));
+  const short = (o) => E.analyzeSync(riverSpot0('As Kc', Object.assign({ stack: 300 }, o)));
   assert.ok(ev(short({}), 'allin') - ev(short({ riverRaiseFold: true }), 'allin') < 0.03 * 320);
 });
 
@@ -1303,8 +1305,9 @@ test('preflop solver: hero\'s flop edge (pfFlopEdge) makes marginal opens worth 
   // A number replaces the default; 0 and false are the old leaves.
   assert.strictEqual(ev(open('Ks 9h', { pfFlopEdge: 0 })), ev(k9off));
   assert.ok(ev(open('Ks 9h', { pfFlopEdge: 0.15 })) > ev(k9));
-  // Multiway spots take PF_FLOP_EDGE_MW (0.10, v1.8.32); pfFlopEdgeMw false gives them the heads-up edge (0.06).
-  assert.strictEqual(ev(open('Ks 9h', { pfFlopEdgeMw: 0.10 })), ev(k9));
+  // Multiway spots take PF_FLOP_EDGE_MW (0.10 in v1.8.32, 0.14 since v1.8.36); pfFlopEdgeMw false gives them the
+  // heads-up edge (0.06).
+  assert.strictEqual(ev(open('Ks 9h', { pfFlopEdgeMw: 0.14 })), ev(k9));
   const k9hu = open('Ks 9h', { pfFlopEdgeMw: false });
   assert.strictEqual(ev(k9hu), ev(open('Ks 9h', { pfFlopEdge: 0.06 })));
   assert.ok(ev(k9) > ev(k9hu), ev(k9) + ' vs ' + ev(k9hu));
@@ -1325,9 +1328,10 @@ test('preflop solver: limped and raised multiway pots use multiway equity', () =
   assert.strictEqual(big.solver.kind, 'preflop');
   assert.ok(['raise', 'allin'].includes(big.best.kind));
   assert.strictEqual(weak.best.kind, 'fold');
-  // With the multiway flop edge (0.10, v1.8.32) the big blind's 9-4 offsuit call is a near tie (about +0.25bb).
+  // With the multiway flop edge (0.14 since v1.8.36) the big blind's 9-4 offsuit call is a near tie (about +0.5bb;
+  // +0.25bb at 0.10).
   const weakCall = vsRaise('9c 4d').ranked.find((x) => x.kind === 'call');
-  assert.ok(weakCall && Math.abs(weakCall.ev) < 0.6, weakCall && weakCall.ev);
+  assert.ok(weakCall && Math.abs(weakCall.ev) < 0.8, weakCall && weakCall.ev);
   // Hero's multiway share is below the share against the strongest single hand.
   const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
   const m = E._pf.preflopMulti(opps, [], [], (x) => x, 0, 400, 7);
@@ -1424,7 +1428,7 @@ test('checkBetTilt per player (v1.8.29): the table tilt without shows, the shows
   assert.strictEqual(E.checkBetLearned([], cfg).tilt, cfg.tilt);
   assert.strictEqual(E.checkBetLearned(undefined, cfg).tilt, cfg.tilt);
   // A show whose likelihood peaks at no tilt, and one that peaks at the top; only river bets after hero's check count.
-  const show = (peak, extra) => Object.assign({ hck: true, actions: { river: 'bet' }, fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
+  const show = (peak, extra) => Object.assign({ hck: true, sd: true, actions: { river: 'bet' }, fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
   const weak = Array.from({ length: 6 }, () => show(0)), strong = Array.from({ length: 6 }, () => show(0.75));
   const w = E.checkBetLearned(weak, cfg), s = E.checkBetLearned(strong, cfg);
   assert.ok(w.tilt < cfg.tilt - 0.02 && w.n === 6, 'weak shows: ' + w.tilt);
@@ -1432,6 +1436,45 @@ test('checkBetTilt per player (v1.8.29): the table tilt without shows, the shows
   assert.strictEqual(E.checkBetLearned(weak.map((x) => Object.assign({}, x, { hck: false })), cfg).n, 0, 'hero did not check');
   assert.strictEqual(E.checkBetLearned(weak.map((x) => Object.assign({}, x, { actions: { river: 'call' } })), cfg).n, 0, 'not a bet');
   assert.strictEqual(E.checkBetLearned(weak, Object.assign({}, cfg, { learn: false })).tilt, cfg.tilt);
+});
+
+test('checkBetTilt (v1.8.36): learned from showdowns only, 0.3 for the table', () => {
+  const cfg = E.CHECK_BET_TILT;
+  assert.strictEqual(cfg.tilt, 0.3);
+  assert.strictEqual(cfg.sd, true);
+  const show = (peak, extra) => Object.assign({ hck: true, actions: { river: 'bet' }, fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
+  // Bluffs shown after everyone folded (sd false) don't move the read; showdowns do.
+  const bragged = Array.from({ length: 6 }, () => show(-0.5, { sd: false }));
+  assert.deepStrictEqual(E.checkBetLearned(bragged, cfg), { tilt: cfg.tilt, n: 0 });
+  assert.strictEqual(E.checkBetLearned(bragged.map((x) => Object.assign({}, x, { sd: true })), cfg).n, 6);
+  // Shows saved before v1.8.36 (no sd) count when hero was still in when they were turned up.
+  assert.strictEqual(E.checkBetLearned(bragged.map((x) => Object.assign({}, x, { sd: undefined, hp: { in: true, put: 10 } })), cfg).n, 6);
+  assert.strictEqual(E.checkBetLearned(bragged.map((x) => Object.assign({}, x, { sd: undefined, hp: { in: false, put: 10 } })), cfg).n, 0);
+  // { sd: false } learns from every show, as in v1.8.35.
+  const old = E.checkBetLearned(bragged, Object.assign({}, cfg, { sd: false, tilt: 0.2 }));
+  assert.ok(old.n === 6 && old.tilt < 0.2 - 0.02, 'every show: ' + JSON.stringify(old));
+});
+
+test('tracker: a show records whether it reached a showdown (sd); tagShowdown fills older shows in, once', () => {
+  const live = replay(sd).t.db.players.V.tally.shows[0];
+  assert.strictEqual(live.sd, true, 'called the river bet, cards turned up at the showdown');
+  // The same hand with hero folding to the river bet: V shows anyway.
+  const folded = sd.filter((m, i) => i !== 33).map((m, i) => (i === 32 ? Object.assign({}, m, { data: Object.assign({}, m.data, { actionType: 'fold', makeBetValue: 0 }) }) : m));
+  const vol = replay(folded).t.db.players.V.tally.shows[0];
+  assert.deepStrictEqual(vol.cards, ['7c', '6c']);
+  assert.strictEqual(vol.sd, false, 'shown after hero folded');
+  assert.strictEqual(vol.hp.in, false);
+  const t = new T({ players: { B: { name: 'Bo', tally: { shows: [
+    { cards: ['Kd', 'Qd'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } },
+    { cards: ['5d', '5c'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } },
+    { cards: ['Ah', 'Jh'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } },
+  ] } } } });
+  const entry = (shown, others, boFolded) => ({ t: 1, bigBlind: 2, board: ['Kc', '7d', '2s', '9h', '3c'], log: [],
+    players: [{ name: 'Hero', hero: true, folded: others, shown: [] }, { name: 'Bo', folded: !!boFolded, shown }, { name: 'Cy', folded: !boFolded, shown: [] }] });
+  // The third: Bo folded (to a raise) and showed while Hero and Cy went on to the showdown.
+  assert.strictEqual(t.tagShowdown([entry(['Kd', 'Qd'], false), entry(['5c', '5d'], true), entry(['Ah', 'Jh'], false, true)]), 3);
+  assert.deepStrictEqual(t.db.players.B.tally.shows.map((x) => x.sd), [true, false, false]);
+  assert.strictEqual(t.tagShowdown([entry(['Kd', 'Qd'], false)]), 0, 'already there');
 });
 
 test('riverRaiseTilt per player (v1.8.32): the table tilt without shows, the player\'s river raises move it', () => {
@@ -2582,7 +2625,7 @@ test('overbetTilt: river bets and raises of 3x pot or more read stronger, not ot
   const spot = (size, extra, street = 5) => E.analyzeSync(Object.assign({
     hero: C('Qc 7h'), board: C(street === 5 ? 'Jh 5s 7s 3d 5h' : 'Jh 5s 7s 3d'), pot: 132, toCall: 126, stack: 420, bigBlind: 2, inPosition: false,
     tableStyle: 'typical', heroActions: { pre: 'check', flop: 'check', turn: 'check', river: street === 5 ? 'check' : '' }, heroSizes: {},
-    heroPosition: 'blinds', heroPfAggressor: false, heroPotTilt: false,
+    heroPosition: 'blinds', heroPfAggressor: false, heroPotTilt: false, checkBetTilt: false,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check', turn: street === 5 ? 'check' : 'bet', river: street === 5 ? 'bet' : '' },
       sizes: street === 5 ? { river: size } : { turn: size }, position: 'early', committed: 64, stack: 293, bet: 126 }],
     iterations: 4000, riverIterations: 200, mix: false, seed: 1,
