@@ -7203,12 +7203,13 @@
         }
       }
       // A multiway solve plays to what the shortest stack can match (multiwayStack), so its all-in can be less than hero's
-      // stack: at the table that is a call, a bet of that size, or a raise of it (at least a min-raise, 2x the call).
+      // stack: at the table that is a call, a bet of that size (at least the big blind), or a raise of it (at least a
+      // min-raise, 2x the call).
       const atTable = (a) => {
         if (a.kind !== 'allin' || !(a.amount < stack - 1e-9)) return a;
         if (a.amount <= toCall + 1e-9) return Object.assign({}, a, { kind: 'call', amount: Math.min(toCall, stack) });
-        if (toCall <= 0) return Object.assign({}, a, { kind: 'bet' });
-        const amount = Math.min(stack, Math.max(a.amount, 2 * toCall));
+        const amount = Math.min(stack, Math.max(a.amount, toCall > 0 ? 2 * toCall : bigBlind));
+        if (toCall <= 0) return Object.assign({}, a, { kind: amount >= stack - 1e-9 ? 'allin' : 'bet', amount });
         return Object.assign({}, a, { kind: amount >= stack - 1e-9 ? 'allin' : 'raise', amount });
       };
       const acts = solvedActs.map(atTable).map((a) => ({

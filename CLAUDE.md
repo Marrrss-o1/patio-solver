@@ -212,6 +212,18 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   with k of K players in (kCall after hero's call, kRaise(amount) after hero's first raise, 1 deeper) hero's share is
   scaled by kappa^((k-1)/(K-1)) and the field's chips count k times. `preflopMultiway: false` sends those spots back
   to the Monte Carlo.
+  Short and all-in players (v1.8.38, preflopMulti's `capAt` / `capCall`, `rooms` = what each can add beyond the current
+  bet). Where the field calls hero's first raise, each caller adds only what they have, and hero gets back what nobody
+  can match. At every field leaf the flop is played with what hero and the deepest player in still have, which is a
+  showdown when that is nothing.
+  - Before, every caller counted the full raise, an all-in player too. AQo shoving over a 31bb all-in with both blinds
+    deep behind read +62 chips, more than with the shover 300 deep (+23), and the 8 Nov extended fuzz had two spots
+    with EVs above everything at the table.
+  - Spots where every player who may be in covers hero are bit-identical (bench: all same).
+  - Logs: of the 736 multiway preflop decisions, 698 keep identical EVs and 1 pick changes (#412 QsAs: shove 184.5
+    -> raise 211, the shove now 79.0).
+  - Opens with everyone to act (`fieldOpen`) still count one caller's full raise; there all-in is only on the menu up
+    to 25bb or 3 pots.
 - Turn solver (`turnSolve`, computer only: `input.turnSolver === true`, heads-up, effective stack): turn and river in
   one Discounted CFR. Turn: hero 33/66/100% pot, opponent their size, one raise; each line that reaches the river gets
   a river subgame per card (built lazily; OOP first, hero 33/66/100% (was 50/100%: +17 ± 12 bb/100 pooled over two
