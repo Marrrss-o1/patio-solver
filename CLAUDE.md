@@ -1320,7 +1320,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   decisions (fold -> raise 25, call -> raise 11, fold -> call 10, check -> bet 8; folds 51% -> 43%), 0.10 150. Tried:
   implied odds at the leaves (`pfImplied`, simulator only; s -> s + implied x t x (s - 0.5)): 0.5 lost -55.3 ± 18.0
   (4-handed) and the preflop gap did not close. At 4-handed the edge moves hero's VPIP / PFR 44 / 33% -> 54 / 42%.
-  Multiway spots take 0.10 since v1.8.32, 0.14 since v1.8.36 (`PF_FLOP_EDGE_MW`, `pfFlopEdgeFor`;
+  Multiway spots take 0.10 since v1.8.32 (0.14 in v1.8.36-38, below; `PF_FLOP_EDGE_MW`, `pfFlopEdgeFor`;
   `input.pfFlopEdgeMw: false` gives them 0.06 again, a number replaces it; `pfFlopEdge: false` is no edge anywhere and
   a pfFlopEdge number with no pfFlopEdgeMw sets both): the preflop solver's field spots (opens with 2+ to act, limpers, callers). Clean full-log
   TD audit (6 Nov, 2,167 decisions, reads from earlier hands; sims/2026-11-06-ablation/ RESULTS.md section 2): with 0.06
@@ -1335,7 +1335,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   where the audit's gap is in raises and medium hands, so weak hands' calls get about 0.4bb more than the logs support;
   a per-hand edge is an idea. Not per player: it is hero's edge against a field, and by opponent nobody's TD gap is
   outside 2 SE but Marker's postflop (n 15). Files: sims/2026-11-06-edgemw/, ablation/scripts/ (premw-edge replays).
-  0.14 since v1.8.36 (8 Nov, `pfFlopEdgeMw: 0.10` is the v1.8.35 rule). Simulator, v12r regulars, live budget, 1,000
+  0.14 in v1.8.36-38, back to 0.10 since v1.8.39 (`pfFlopEdgeMw: 0.14` is the v1.8.36-38 rule). Simulator, v12r regulars, live budget, 1,000
   deals each, 0.14 vs 0.10 (pooling rule set before the runs: merge above +1.5 SE): 3-handed +55.6 ± 28.5 (seed 10811;
   small blind +43.7 ± 17.3) and +16.1 ± 29.3 (10814, run on the v1.8.36 branch), 4-handed +23.0 ± 30.4 (10812; big
   blind +38.6 ± 13.7), 5-handed +19.6 ± 30.3 (10813); pooled about +29 ± 15, all four up. Hero's VPIP / PFR in the
@@ -1355,6 +1355,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   re-raised (A had not raised) add +17.8 ± 16.9 (4-handed) and +9.4 ± 11.8 (3-handed). On the logs (to 6 Nov, frozen
   captures) hero's 42 continues against a re-raise after raising came back -5.9 ± 6.0bb at the next decision (#948's
   call of Mark's deep shove alone -194bb), so no fold leak shows there either. Files: sims/2026-11-08-edge3b/.
+  Back to 0.10 (v1.8.39, 8 Nov night). Rule set before the last runs: pool every 0.14-vs-0.10 run and go back to 0.10
+  unless the pool stays above +1 SE. Two night checks of the night's merges together (main b996174, v1.8.36-38, against
+  v1.8.35; the edge is most of what changed preflop): 3-handed -34.1 ± 32.3 (seed 10891; medium hands -27.0 ± 17.5,
+  premium -9.0 ± 4.4), 4-handed -14.7 ± 36.8 (10892; fold -> call -9.6 ± 5.1, junk defends from the small blind). Two
+  fresh direct runs, 0.14 vs 0.10 on main: 3-handed -8.2 ± 30.9 (10911), 4-handed -2.2 ± 33.3 (10912). The four new runs
+  pool about -15 ± 17, all eight about +10 ± 11 (0.9 SE; the six direct runs alone +19 ± 12). The first four were the
+  ones the merge picked, so they lean high. Hero's VPIP / PFR at 0.14 in the re-tests: 3-handed 84 / 70% (button 91%,
+  weak hands 71 / 48%), 4-handed 70 / 57% (weak 47 / 26%). Files: sims/2026-11-08-night/, sims/2026-11-08-edge14b/.
   v1.8.32 as a whole (this, the per-player hero-pot and river-raise tilts) against v1.8.31, v12r regulars, live budget,
   1,000 deals each: 4-handed +33.3 ± 29.2 (1,380 of 4,000 hands differ), 5-handed +116.1 ± 32.5 (1,232 of 5,000; button
   +41, every hand group but strong up); pooled about +70 ± 22. Files: sims/2026-11-06-v1832/.
@@ -1370,7 +1378,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   sims/2026-11-06-edgehu/.
   Tried and dropped (8 Nov night): raise-or-fold, a separate edge at the flop leaves after hero's raise was called
   (`input.pfFlopEdgeAggr` at the field solves, `pfFlopEdgeAggrHU` heads-up; simulator options, off, bit-identical when
-  unset), 0.18 there with 0.10 at every other multiway leaf, against 0.14 everywhere. On the logs it changes 48 of 736
+  unset), 0.18 there with 0.10 at every other multiway leaf, against 0.14 everywhere (then main). On the logs it changes 48 of 736
   multiway preflop decisions in kind (23 calls become raises, mostly small-blind completes like 42o and 73o raised to
   3.5bb 3-handed; 16 calls or raises become folds). v12r regulars, live budget, 1,000 deals each (rule set before the
   runs: merge above +1.5 SE pooled): 3-handed -30.3 ± 29.5 (seed 10901), 4-handed +10.8 ± 34.6 (10902), 5-handed

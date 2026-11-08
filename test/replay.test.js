@@ -1305,9 +1305,10 @@ test('preflop solver: hero\'s flop edge (pfFlopEdge) makes marginal opens worth 
   // A number replaces the default; 0 and false are the old leaves.
   assert.strictEqual(ev(open('Ks 9h', { pfFlopEdge: 0 })), ev(k9off));
   assert.ok(ev(open('Ks 9h', { pfFlopEdge: 0.15 })) > ev(k9));
-  // Multiway spots take PF_FLOP_EDGE_MW (0.10 in v1.8.32, 0.14 since v1.8.36); pfFlopEdgeMw false gives them the
-  // heads-up edge (0.06).
-  assert.strictEqual(ev(open('Ks 9h', { pfFlopEdgeMw: 0.14 })), ev(k9));
+  // Multiway spots take PF_FLOP_EDGE_MW (0.10; 0.14 in v1.8.36-38); pfFlopEdgeMw false gives them the heads-up
+  // edge (0.06).
+  assert.strictEqual(ev(open('Ks 9h', { pfFlopEdgeMw: 0.10 })), ev(k9));
+  assert.ok(ev(open('Ks 9h', { pfFlopEdgeMw: 0.14 })) > ev(k9));
   const k9hu = open('Ks 9h', { pfFlopEdgeMw: false });
   assert.strictEqual(ev(k9hu), ev(open('Ks 9h', { pfFlopEdge: 0.06 })));
   assert.ok(ev(k9) > ev(k9hu), ev(k9) + ' vs ' + ev(k9hu));
@@ -1328,10 +1329,10 @@ test('preflop solver: limped and raised multiway pots use multiway equity', () =
   assert.strictEqual(big.solver.kind, 'preflop');
   assert.ok(['raise', 'allin'].includes(big.best.kind));
   assert.strictEqual(weak.best.kind, 'fold');
-  // With the multiway flop edge (0.14 since v1.8.36) the big blind's 9-4 offsuit call is a near tie (about +0.5bb;
-  // +0.25bb at 0.10).
+  // With the multiway flop edge (0.10) the big blind's 9-4 offsuit call is a near tie (about +0.25bb; +0.5bb at
+  // 0.14).
   const weakCall = vsRaise('9c 4d').ranked.find((x) => x.kind === 'call');
-  assert.ok(weakCall && Math.abs(weakCall.ev) < 0.8, weakCall && weakCall.ev);
+  assert.ok(weakCall && Math.abs(weakCall.ev) < 0.6, weakCall && weakCall.ev);
   // Hero's multiway share is below the share against the strongest single hand.
   const opps = [0, 1, 2].map(() => ({ W: new Float64Array(1326).fill(1), pending: false }));
   const m = E._pf.preflopMulti(opps, [], [], (x) => x, 0, 400, 7);
