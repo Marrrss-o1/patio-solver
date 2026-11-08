@@ -1088,8 +1088,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   friends 3-handed -23.4 ± 13.0 (10822); all four pooled about 0 ± 4: no real loss, merged on the logs (merge bar). The
   3-handed loss is drift, not the spot: replaying its two worst blocks with every heads-up river decision dumped, only 3
   decisions differ at the same spot (two losing calls become folds, +39 chips; one raise becomes a call, -52), and the
-  big pots are hands that played out differently after the reads had diverged. Files: sims/2026-11-08-cbsd/,
-  sims/2026-11-08-cbt/.
+  big pots are hands that played out differently after the reads had diverged. Two more `xp:riverxb` seeds after the
+  merge: heads-up +10.2 ± 10.4 (10841), 3-handed +12.6 ± 11.1 (10842); the four riverxb runs pooled about +0.5 ± 5.7,
+  all six about +2.7 ± 3.5. Same-spot check without drift (`RIVERDUMP` of both riverxb setups on A's play, every
+  heads-up river decision facing a bet after hero's check re-solved under both rules, 191): 8 change, the 3 calls that
+  become folds all lost (+32.5bb), the 5 raises that become calls split 3 lost or tied, 2 won; hero's real share there
+  0.181, predicted 0.269 (A) and 0.241 (B). Files: sims/2026-11-08-cbsd/ (samespot/), sims/2026-11-08-cbt/.
 - Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
   on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
   (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing
