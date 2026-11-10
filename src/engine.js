@@ -2275,7 +2275,7 @@
   // bets after hero's check, each scored at show time): the 21 that reached a showdown fit best at 0.30 (heads-up 9 and
   // multiway 12 both 0.30), the 10 shown after everyone folded at -0.15, all 31 together 0.15. Learning from every show
   // pulled each player's tilt toward their bragged bluffs, so the table's number is refitted on showdowns too (0.3).
-  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true };
+  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true, tree: true };
   // Whether a show reached a showdown (someone else still in when the cards were turned up, `show.sd`); shows saved
   // before v1.8.36 have no `sd` and count when hero was still in (`hp.in`, never set on a show after everyone folded).
   const shownAtShowdown = (s) => (s.sd != null ? !!s.sd : !!(s.hp && s.hp.in));
@@ -3326,6 +3326,15 @@
     for (let i = 0; i < n; i++) { let m = V[i]; for (let a = 1; a < nA; a++) if (V[a * M + i] > m) m = V[a * M + i]; out[i] = m; }
   }
 
+  // Bets into hero's river check read stronger (CHECK_BET_TILT.tree): after hero checks first, the river solver's opponent
+  // bets the read's betting range tilted by tau, as buildRange tilts it when hero then faces the bet (exp(8 tau (q - 0.5))
+  // over the betting range, whose bottom 1 - vr are bluffs). Keeping the value bets, that is the bluffs x this factor
+  // (0.29 at tau 0.3 and a 0.6 value share), so the bets after hero's check are stronger and the check-backs weaker.
+  function checkBetBluffs(tau, vr) {
+    if (!(Math.abs(tau) >= 1e-6)) return 1;
+    const b = clamp(1 - vr, 0.02, 0.98), a = 8 * tau, b2 = (Math.exp(a * b) - 1) / (Math.exp(a) - 1);
+    return (b2 / (1 - b2)) / (b / (1 - b));
+  }
   function riverSolve(cfg) {
     const { board, heroCombo, heroW, oppW, oppStats, p, pot: P0, toCall, stack, heroFirst, bigBlind } = cfg;
     const strengths = cfg.strengths;
@@ -3435,7 +3444,7 @@
     // The read's strategy for the opponent at one of their decisions, per hand.
     // vsRaise: hero raised their bet. A player who bet keeps their value hands and gives
     // up most bluffs, whatever their general fold-to-bet rate is.
-    function fixedStrategy(acts, facingFrac, vsRaise) {
+    function fixedStrategy(acts, facingFrac, vsRaise, afterCheck) {
       const bf = clamp(st5.betFreq, 0.05, 0.9), vrB = valueShare(oppStats, oppBetFrac);
       const nA = acts.length, s = new Float64Array(nA * N);
       // Everything that does not depend on the hand, worked out once per decision.
@@ -3448,10 +3457,12 @@
       const hasRaise = acts.some((a) => a.kind === 'raise');
       const kinds = acts.map((a) => a.kind);
       const pr = new Float64Array(nA);
+      const bluffM = afterCheck ? checkBetBluffs(cfg.checkBet || 0, vr) : 1;
       for (let i = 0; i < N; i++) {
         const q = qO[idx[i]];
         if (facingFrac == null) {
-          const pBet = sigmoid((q - (1 - bf * vr)) / 0.035) + (1 - sigmoid((q - (1 - bf * vr)) / 0.035)) * sigmoid((bf * (1 - vr) - q) / 0.035);
+          const pV = sigmoid((q - (1 - bf * vr)) / 0.035);
+          const pB = pV + (1 - pV) * sigmoid((bf * (1 - vr) - q) / 0.035) * bluffM, pBet = bluffM > 1 ? Math.min(1, pB) : pB;
           for (let j = 0; j < nA; j++) pr[j] = kinds[j] === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1);
         } else {
           let pCont;
@@ -3529,7 +3540,8 @@
       n.v = new Float64Array(N);
       n.reach = n.kids.map(() => new Float64Array(N));
       if (player === 1) {
-        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
+        // The opponent never opens the river in this tree, so their unopened node is always after hero's check.
+        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, facing <= 0);
         n.pFixed = n.fixed.map((x) => p * x);
       }
       n.sIter = 0;
@@ -6855,6 +6867,8 @@
         aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF, madeCall: RMC,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
+        // Hero checks first: the player's own check-bet tilt shapes their bets after the check (CHECK_BET_TILT.tree).
+        checkBet: cbt && cbt.tree && toCall <= 0 && o.pending ? checkBetLearned(oi.tally && oi.tally.shows, cbt).tilt : 0,
         iterations: input.riverIterations,
       });
       // The Monte Carlo then only feeds the equity readout, so it can be shorter.
@@ -7476,7 +7490,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),

@@ -1456,6 +1456,25 @@ test('checkBetTilt (v1.8.36): learned from showdowns only, 0.3 for the table', (
   assert.ok(old.n === 6 && old.tilt < 0.2 - 0.02, 'every show: ' + JSON.stringify(old));
 });
 
+test('checkBetTilt.tree (v1.8.40): after hero checks the river first, the river solver\'s opponent bets fewer bluffs by their check-bet read', () => {
+  assert.ok(Math.abs(E.checkBetBluffs(0.3, 0.6) - 0.287) < 0.002, String(E.checkBetBluffs(0.3, 0.6)));
+  assert.strictEqual(E.checkBetBluffs(0, 0.6), 1);
+  assert.ok(E.checkBetBluffs(-0.3, 0.6) > 1);
+  const spot = (hero, extra) => E.analyzeSync(riverSpot(hero, Object.assign({ toCall: 0, pot: 200, riverIterations: 300, seed: 1,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: '' }, sizes: {}, committed: 100, stack: 900 }],
+    heroActions: { pre: 'raise', flop: 'bet', turn: 'check' } }, extra)));
+  const evs = (r) => r.ranked.map((s) => s.kind + s.amount + ':' + s.ev.toFixed(6)).join(' ');
+  const chk = (r) => r.ranked.find((s) => s.kind === 'check').ev;
+  // A tilt of 0 in the tree is the old tree exactly; a strong one moves the solve.
+  assert.strictEqual(evs(spot('Kh Jd', { checkBetTilt: { tree: false } })), evs(spot('Kh Jd', { checkBetTilt: { tilt: 0, learn: false } })));
+  // Fewer bluffs after hero's check: a weaker check-back range, so hero's air shows down better.
+  const air = (x) => chk(spot('7c 6d', { checkBetTilt: x }));
+  assert.ok(air({ tilt: 0.75, learn: false }) > air({ tree: false }) + 1, `air check ${air({ tree: false })} -> ${air({ tilt: 0.75, learn: false })}`);
+  // Hero facing the bet, or acting last: no change.
+  const ip = (x) => evs(E.analyzeSync(riverSpot('Kh Jd', { seed: 1, checkBetTilt: x })));
+  assert.strictEqual(ip({ tilt: 0.3, learn: false, tree: false }), ip({ tilt: 0.3, learn: false }));
+});
+
 test('tracker: a show records whether it reached a showdown (sd); tagShowdown fills older shows in, once', () => {
   const live = replay(sd).t.db.players.V.tally.shows[0];
   assert.strictEqual(live.sd, true, 'called the river bet, cards turned up at the showdown');
