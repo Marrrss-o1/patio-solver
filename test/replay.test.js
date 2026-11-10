@@ -1456,7 +1456,8 @@ test('checkBetTilt (v1.8.36): learned from showdowns only, 0.3 for the table', (
   assert.ok(old.n === 6 && old.tilt < 0.2 - 0.02, 'every show: ' + JSON.stringify(old));
 });
 
-test('checkBetTilt.tree (v1.8.40): after hero checks the river first, the river solver\'s opponent bets fewer bluffs by their check-bet read', () => {
+test('checkBetTilt.tree (v1.8.40, off): after hero checks the river first, the river solver\'s opponent bets fewer bluffs by their check-bet read', () => {
+  assert.strictEqual(E.CHECK_BET_TILT.tree, false);
   assert.ok(Math.abs(E.checkBetBluffs(0.3, 0.6) - 0.287) < 0.002, String(E.checkBetBluffs(0.3, 0.6)));
   assert.strictEqual(E.checkBetBluffs(0, 0.6), 1);
   assert.ok(E.checkBetBluffs(-0.3, 0.6) > 1);
@@ -1466,13 +1467,14 @@ test('checkBetTilt.tree (v1.8.40): after hero checks the river first, the river 
   const evs = (r) => r.ranked.map((s) => s.kind + s.amount + ':' + s.ev.toFixed(6)).join(' ');
   const chk = (r) => r.ranked.find((s) => s.kind === 'check').ev;
   // A tilt of 0 in the tree is the old tree exactly; a strong one moves the solve.
-  assert.strictEqual(evs(spot('Kh Jd', { checkBetTilt: { tree: false } })), evs(spot('Kh Jd', { checkBetTilt: { tilt: 0, learn: false } })));
+  assert.strictEqual(evs(spot('Kh Jd', { checkBetTilt: { tree: false } })), evs(spot('Kh Jd', { checkBetTilt: { tilt: 0, learn: false, tree: true } })));
+  assert.strictEqual(evs(spot('Kh Jd', {})), evs(spot('Kh Jd', { checkBetTilt: { tree: false } })), 'off by default');
   // Fewer bluffs after hero's check: a weaker check-back range, so hero's air shows down better.
   const air = (x) => chk(spot('7c 6d', { checkBetTilt: x }));
-  assert.ok(air({ tilt: 0.75, learn: false }) > air({ tree: false }) + 1, `air check ${air({ tree: false })} -> ${air({ tilt: 0.75, learn: false })}`);
+  assert.ok(air({ tilt: 0.75, learn: false, tree: true }) > air({ tree: false }) + 1, `air check ${air({ tree: false })} -> ${air({ tilt: 0.75, learn: false, tree: true })}`);
   // Hero facing the bet, or acting last: no change.
   const ip = (x) => evs(E.analyzeSync(riverSpot('Kh Jd', { seed: 1, checkBetTilt: x })));
-  assert.strictEqual(ip({ tilt: 0.3, learn: false, tree: false }), ip({ tilt: 0.3, learn: false }));
+  assert.strictEqual(ip({ tilt: 0.3, learn: false, tree: false }), ip({ tilt: 0.3, learn: false, tree: true }));
 });
 
 test('tracker: a show records whether it reached a showdown (sd); tagShowdown fills older shows in, once', () => {

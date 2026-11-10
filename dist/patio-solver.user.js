@@ -2291,7 +2291,7 @@ function ENGINE() {
   // bets after hero's check, each scored at show time): the 21 that reached a showdown fit best at 0.30 (heads-up 9 and
   // multiway 12 both 0.30), the 10 shown after everyone folded at -0.15, all 31 together 0.15. Learning from every show
   // pulled each player's tilt toward their bragged bluffs, so the table's number is refitted on showdowns too (0.3).
-  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true, tree: true };
+  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true, tree: false };
   // Whether a show reached a showdown (someone else still in when the cards were turned up, `show.sd`); shows saved
   // before v1.8.36 have no `sd` and count when hero was still in (`hp.in`, never set on a show after everyone folded).
   const shownAtShowdown = (s) => (s.sd != null ? !!s.sd : !!(s.hp && s.hp.in));
@@ -3347,7 +3347,8 @@ function ENGINE() {
     for (let i = 0; i < n; i++) { let m = V[i]; for (let a = 1; a < nA; a++) if (V[a * M + i] > m) m = V[a * M + i]; out[i] = m; }
   }
 
-  // Bets into hero's river check read stronger (CHECK_BET_TILT.tree): after hero checks first, the river solver's opponent
+  // Bets into hero's river check read stronger in the river solver's tree (CHECK_BET_TILT.tree, off: `input.checkBetTilt:
+  // { tree: true }` turns it on; it lost in the simulator on 10 Nov, see CLAUDE.md): after hero checks first, the opponent
   // bets the read's betting range tilted by tau, as buildRange tilts it when hero then faces the bet (exp(8 tau (q - 0.5))
   // over the betting range, whose bottom 1 - vr are bluffs). Keeping the value bets, that is the bluffs x this factor
   // (0.29 at tau 0.3 and a 0.6 value share), so the bets after hero's check are stronger and the check-backs weaker.
@@ -6888,7 +6889,7 @@ function ENGINE() {
         aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF, madeCall: RMC,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
-        // Hero checks first: the player's own check-bet tilt shapes their bets after the check (CHECK_BET_TILT.tree).
+        // Hero checks first: the player's own check-bet tilt shapes their bets after the check (CHECK_BET_TILT.tree, off).
         checkBet: cbt && cbt.tree && toCall <= 0 && o.pending ? checkBetLearned(oi.tally && oi.tally.shows, cbt).tilt : 0,
         iterations: input.riverIterations,
       });
