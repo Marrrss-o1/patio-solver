@@ -796,6 +796,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   0.53 ± 0.04 after a river check (n 53); 0.5 is on target. Script: rb-hero.js in
   /mnt/project-files/patio-solver/scripts/ (reads-bench-lines.js with these two tables).
 - Hero's pots read stronger (v1.8.9; `HERO_POT_TILT`, `input.heroPotTilt`; false turns it off, a number sets a fixed tilt):
+  (Since v1.8.40 the chips-in tilt below replaces it, unless `input.chipTilt: false`.)
   after the flop, an opponent in hero's pot who did not bet or raise the flop gets extra strength tilt on their range
   (`stats.tiltHero`, added to the bias in buildRange), ramped in from 10bb to 25bb of pot. The tilt is learned from
   the table's own shows (`heroPotLearned`): shows record whether hero was still in and the big blinds the player put
@@ -856,6 +857,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   about -9 ± 12, no real loss. Files: /mnt/project-files/patio-solver/sims/2026-11-06-ablation/ (RESULTS.md section 3,
   scripts/hp/seq.js), sims/2026-11-06-hpown/.
 - River overbets read stronger (v1.8.14, `OVERBET_TILT` {tilt 0.3, size 2.99, street 5}; `input.overbetTilt: false`
+  (since v1.8.40 replaced by the chips-in tilt below, unless `input.chipTilt: false`)
   turns it off, a number sets the tilt): a river bet or raise of 3x the pot or more (the tracker caps sizes at 3, so
   `sizes.river` 3 is 3x+) adds 0.3 of strength tilt to that player's range in buildRange. It does not stack with the
   hero-pot tilt (the larger applies), because the shows it was fitted on carry both. Logs (31 Oct - 4 Nov): all 9 shown
@@ -1052,6 +1054,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   bets (audit, 4 Nov), 4-handed -23.8 ± 20.7 (strong hands -17.5 ± 11.6: the bigger value bets get folded). Files:
   /mnt/project-files/patio-solver/sims/2026-11-05-rivermade/, analysis/2026-11-05-river-bluffs.md.
 - River raises read stronger (v1.8.19, `RIVER_RAISE_TILT` {tilt 0.3, street 5}; `input.riverRaiseTilt: false` turns it
+  (since v1.8.40 replaced by the chips-in tilt below, unless `input.chipTilt: false`)
   off, a number sets the tilt): a river raise of any size (raise, check-raise, re-raise lines) adds 0.3 of strength tilt
   to the raiser's range in buildRange, like `OVERBET_TILT` (the larger of the two applies; neither stacks on the
   hero-pot tilt). Shows, all logs (leak hunt's rbl.js sweep, reads from earlier hands): 21 shown river raises at 0.69
@@ -1124,6 +1127,50 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   heads-up river decision facing a bet after hero's check re-solved under both rules, 191): 8 change, the 3 calls that
   become folds all lost (+32.5bb), the 5 raises that become calls split 3 lost or tied, 2 won; hero's real share there
   0.181, predicted 0.269 (A) and 0.241 (B). Files: sims/2026-11-08-cbsd/ (samespot/), sims/2026-11-08-cbt/.
+- Ranges read stronger with the chips in (v1.8.40, `CHIP_TILT` {slope 0.14, from 15, own 300, street 3}; `input.chipTilt:
+  false` is the v1.8.39 rule, a number sets the slope, an object replaces fields): after the flop every opponent's range gets
+  slope x ln(bb in / 15) of strength tilt in buildRange once they have more than 15bb in (`o.committed`), per player
+  (`chipSlope`: their own shows with 15bb+ in move the group's slope, shrunk by 300; advice reads carry `chTilt`). It
+  replaces the hero-pot tilt (heroPotTilt, heroPotOwn), the river overbet tilt and the river raise tilt, which stay as
+  described above with chipTilt false; the check-bet tilt (bets into hero's river check) stays and adds to it. Audit 10
+  Nov (finding 2): strong hands came back short in big pots, and shown hands sit higher in the read's range the more their
+  player had put in (0.41-0.48 under 7bb, 0.64-0.66 at 50bb+), with hero in the pot and without, in both halves of the
+  logs. All 778 scored shows to 10 Nov (each at the read and shows from earlier hands; scripts/2026-11-10-session/
+  chipfit*.js, showchips.js): log-likelihood over the learned tilt alone +9.1 nats with v1.8.39's narrow tilts, +20.2
+  with this; a slope fitted on the first half (0.10) scores the second half +13.2 over the narrow tilts (which were fitted
+  on the first half and win it by 4.5). Showdowns only (660, the fair sample: voluntary shows are the player's pick): best
+  slope 0.12, +12.5 against +8.2 (second half +11.4 over the narrow tilts); chips plus the check-bet tilt 283.9 against
+  chips alone 281.5 (both halves better; the 10 river bets into hero's check shown after everyone folded go the other way,
+  as when CHECK_BET_TILT went to showdowns). Every player with many shows has about the group's slope (Mark 0.14 over 274
+  shows, Dew666 0.11, Jagger 0.14, mkorn777 0.12, mewnow 0.12), so per player moves little; a weaker shrink scored worse
+  out of sample (own 30 / 100 / 300 / 1000: -6.2 / -3.0 / -1.5 / -0.6 nats against the group's slope). Log replay (frozen
+  captures to 7 Nov plus 10 Nov, live budget, mix off): 66 of 1,432 postflop picks change (38 in kind), 13 of 135 on 10
+  Nov (6); equity under 30bb pots +0.007, 30-60bb +0.023, 60-120bb -0.020, 120bb+ -0.051. The 9 changed calls and folds
+  with the opponent's cards shown: +161.7bb, mostly #510 (Q7o against Jagger's 21x river overbet, call -> fold, +63; he had
+  trips) and #389 (trips, fold -> call, +108.5); the other 7 -9.8bb. #306's QQ river bet into trips and AA (a check since
+  v1.8.32's per-player hero-pot tilt) is a bet again (about 16bb in, so no chips tilt). Files: scripts/2026-11-10-session/
+  (out/chipcmp7.txt, chipcmp10.txt). Simulator (no-loss check: the bots
+  don't get stronger with chips in), v12r regulars, live budget, 1,000 deals each, B v1.8.40 vs A `{"chipTilt":false}`
+  (rule set before the runs: on if all six pooled are above -1 SE): heads-up +6.3 ± 24.6 (seed 11001), 3-handed
+  +10.4 ± 31.1 (11002), 4-handed -6.8 ± 27.4 (11003), 5-handed +42.4 ± 26.0 (11004), `xp:trap` + friends 4-handed
+  +5.5 ± 27.3 (11005), `xp:riverxb` heads-up +12.9 ± 24.7 (11006); pooled about +12 ± 11. Hands whose first difference
+  is a river decision with nothing to call -2.9 ± 2.8 bb/100 over the six (183 hands; B checking where A bet -2.9 ± 1.9,
+  70 hands, mostly the 4-handed runs), the direction expected against bots that don't get stronger with chips in. The
+  per-player slope learns from showdowns only (`CHIP_TILT.sd`: shows after everyone folded are the player's pick; those
+  118 fit a slope of 0.23); 10 Nov reads: Dew345 0.097 (43 big-pot showdowns), mwe 0.133 (26), Mark 0.154 (23). Files:
+  sims/2026-11-10-chiptilt/.
+- Tried and dropped (10 Nov): bets after hero's river check in the river solver's tree (v1.8.40, `CHECK_BET_TILT.tree`,
+  off: `input.checkBetTilt: { tree: true }` turns it on). Audit 10 Nov (finding 6): hero's heads-up river checks first to
+  act came back 1.6 ± 1.2bb below their EV (n 61), check-calls 13.1 ± 3.4 (n 9): the tree's opponent bets the read's
+  range after hero's check, while the read tilts that bet stronger once hero faces it (CHECK_BET_TILT). On, the
+  opponent's bluffs after hero's check are scaled by `checkBetBluffs(tau, vr)` at their own check-bet tilt (x0.29 at 0.3
+  and a 0.6 value share), the betting range tilted as buildRange tilts it. Log replay (frozen captures, 129 heads-up
+  first-to-act river spots, chips tilt on in both): 20 picks change, mostly thin bets becoming checks; on shown cards
+  about even (scripts/2026-11-10-session/out/treecmp7.txt). Simulator, v12r regulars, live budget, 1,000 deals each, on
+  vs off (rule set before the runs: on if all four pooled are above +1 SE): `xp:riverxb` heads-up +4.0 ± 15.9 (seed
+  11011; the changed spots +12.0 ± 7.3, 34 hands), `xp:riverxb` + friends 3-handed -32.3 ± 19.8 (11012; the spot
+  -4.4 ± 5.5, the rest drift), plain heads-up +6.4 ± 25.7 (11013; the spot -1.9 ± 3.6, 20 hands); with three of four in,
+  pooled about -7 ± 11, so it stays off (the 4-handed run, seed 11014, was still running). Files: sims/2026-11-10-cbtree/.
 - Draw-weighted answers to hero's flop and turn bets (`RESP_DRAW` = DRAW_CALL 2, off: `input.respDraw: true` turns it
   on, a number sets the weight): the Monte Carlo's continue decision (qCont), the lookahead's current-street callers
   (`xs.resp` in drawPlan, survivors' LINE_CALL cut on ctx.street) and the turn and flop solvers' fixed strategies facing

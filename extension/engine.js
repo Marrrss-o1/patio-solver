@@ -1820,7 +1820,9 @@
     // the player's own tilt; a player whose shows ask for less than none reads weaker (that part adds to the rest).
     const cbTilt = stats.tiltCheckBet && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltCheckBet.street]]] === 'bet' ? stats.tiltCheckBet.tilt : 0;
     if (cbTilt > 0) over = Math.max(over, cbTilt);
-    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over) + Math.min(0, cbTilt);
+    // With the chips-in tilt (CHIP_TILT, v1.8.40) the hero-pot, overbet and river-raise tilts are not set on stats
+    // (createAnalysis), so this is the learned tilt + the check-bet tilt + the chips-in tilt.
+    const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over) + Math.min(0, cbTilt) + (stats.tiltChips || 0);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
       const q = rangeQuantiles(W, strengths[last].ehs);
@@ -2273,7 +2275,7 @@
   // bets after hero's check, each scored at show time): the 21 that reached a showdown fit best at 0.30 (heads-up 9 and
   // multiway 12 both 0.30), the 10 shown after everyone folded at -0.15, all 31 together 0.15. Learning from every show
   // pulled each player's tilt toward their bragged bluffs, so the table's number is refitted on showdowns too (0.3).
-  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true };
+  const CHECK_BET_TILT = { tilt: 0.3, street: 5, learn: true, k: 15, min: -0.3, max: 0.75, sd: true, tree: false };
   // Whether a show reached a showdown (someone else still in when the cards were turned up, `show.sd`); shows saved
   // before v1.8.36 have no `sd` and count when hero was still in (`hp.in`, never set on a show after everyone folded).
   const shownAtShowdown = (s) => (s.sd != null ? !!s.sd : !!(s.hp && s.hp.in));
@@ -2308,6 +2310,48 @@
     if (!n) return { tilt: cfg.tilt, n: 0 };
     const x = tiltArgmax((t) => tiltLL(sum, t) - cfg.k * (t - cfg.tilt) * (t - cfg.tilt), cfg.min, cfg.max);
     return { tilt: Math.round(x * 1000) / 1000, n };
+  }
+
+  // Ranges read stronger as a player puts more chips in (v1.8.40, CHIP_TILT; input.chipTilt: false is the v1.8.39 rule, a
+  // number sets the slope, an object replaces fields). After the flop every opponent's range gets a strength tilt of
+  // slope x ln(chips in / `from`) once they have more than `from` big blinds in the pot (buildRange's bias), in place of
+  // the three narrow tilts it covers (hero-pot, river overbets, river raises), which stay as they were with chipTilt
+  // false. The check-bet tilt (bets into hero's river check, CHECK_BET_TILT) stays and adds to it: on the 25 such shows
+  // that reached a showdown chips alone score +0.5 nats over the learned tilt, chips plus the check-bet tilt +3.0 (the
+  // 10 shown after everyone folded, which players pick, go the other way, as when CHECK_BET_TILT went to showdowns). Audit 10 Nov (finding 2): strong hands came back short in big pots, and shown
+  // hands sit higher in the read's range the more their player had put in (0.41-0.48 under 7bb, 0.64-0.66 at 50bb+),
+  // with hero in the pot and without, in both halves of the logs. All 778 scored shows to 10 Nov (each at the read and
+  // shows from earlier hands; scripts/2026-11-10-session/chipfit*.js): log-likelihood over a random guess with the
+  // learned tilt only 296.2, with today's narrow tilts 305.2, with this (slope 0.14 from 15bb) 316.3. Out of sample, a
+  // slope fitted on the first half of the shows (0.10) scores the second half 13.2 nats better than the narrow tilts;
+  // the narrow tilts were fitted on the first half and win it by 4.5. Every player with many shows has about the group's
+  // slope (Mark 0.14 over 274 shows, Dew666 0.11, Jagger 0.14, mkorn777 0.12, mewnow 0.12), so per player (`own`
+  // pseudo-weight on the player's offset from the group's slope, from their own shows) it moves little; a weaker shrink
+  // scored worse out of sample (own 30 / 100 / 300 / 1000: -6.2 / -3.0 / -1.5 / -0.6 nats against the group's slope).
+  // Adding the narrow tilts back on top, or taking the larger of the two, scored worse (the chips term already covers the
+  // big-pot lines they were fitted on). Preflop is unchanged (street 3+).
+  const CHIP_TILT = { slope: 0.14, from: 15, own: 300, street: 3, sd: true };
+  const chipGain = (put, cfg) => (put > cfg.from ? Math.log(put / cfg.from) : 0);
+  // A player's own chips-in slope: the group's slope moved by their own shows that reached a showdown with 15bb+ in
+  // (scoreShow's TILTS log-likelihoods at their learned tilt for that kind of line, plus slope x chipGain of the big
+  // blinds they had put in), shrunk to the group's by cfg.own (300: about the weight of 100 such shows, so a player with
+  // few big-pot showdowns reads at about the group's slope and one with hundreds at their own). Out of sample a lighter
+  // shrink did worse (players don't differ much yet), so the shrink is heavy; the read is still per player.
+  function chipSlope(shows, stats, cfg) {
+    if (!(cfg.own > 0)) return { slope: cfg.slope, n: 0 };
+    const obs = [];
+    for (const s of shows || []) {
+      const f = s && s.fit;
+      if (!s || s.folded || !s.hp || !(s.hp.put > cfg.from) || !f || f.v !== FIT_VERSION || !Array.isArray(f.tl) || f.tl.length !== TILTS.length || !f.tl.every(Number.isFinite)) continue;
+      if (s.actions && Object.values(s.actions).includes('fold')) continue;
+      // Showdowns only (cfg.sd): a hand shown after everyone folded is the player's pick (strong hands in big pots, mostly).
+      if (cfg.sd !== false && !shownAtShowdown(s)) continue;
+      const base = f.agg ? stats.tiltAgg : stats.tiltPas;
+      obs.push({ tl: f.tl, b: base != null ? base : 0, g: chipGain(s.hp.put, cfg) });
+    }
+    if (!obs.length) return { slope: cfg.slope, n: 0 };
+    const u = tiltArgmax((u) => obs.reduce((a, o) => a + tiltLL(o.tl, o.b + (cfg.slope + u) * o.g), 0) - cfg.own * u * u, -0.3, 0.3);
+    return { slope: Math.round(Math.max(0, cfg.slope + u) * 1000) / 1000, n: obs.length };
   }
 
   // Huge preflop raises that keep chips behind read tight (v1.8.15, input.bigRaiseRange: false turns it off, a number
@@ -3287,6 +3331,16 @@
     for (let i = 0; i < n; i++) { let m = V[i]; for (let a = 1; a < nA; a++) if (V[a * M + i] > m) m = V[a * M + i]; out[i] = m; }
   }
 
+  // Bets into hero's river check read stronger in the river solver's tree (CHECK_BET_TILT.tree, off: `input.checkBetTilt:
+  // { tree: true }` turns it on; it lost in the simulator on 10 Nov, see CLAUDE.md): after hero checks first, the opponent
+  // bets the read's betting range tilted by tau, as buildRange tilts it when hero then faces the bet (exp(8 tau (q - 0.5))
+  // over the betting range, whose bottom 1 - vr are bluffs). Keeping the value bets, that is the bluffs x this factor
+  // (0.29 at tau 0.3 and a 0.6 value share), so the bets after hero's check are stronger and the check-backs weaker.
+  function checkBetBluffs(tau, vr) {
+    if (!(Math.abs(tau) >= 1e-6)) return 1;
+    const b = clamp(1 - vr, 0.02, 0.98), a = 8 * tau, b2 = (Math.exp(a * b) - 1) / (Math.exp(a) - 1);
+    return (b2 / (1 - b2)) / (b / (1 - b));
+  }
   function riverSolve(cfg) {
     const { board, heroCombo, heroW, oppW, oppStats, p, pot: P0, toCall, stack, heroFirst, bigBlind } = cfg;
     const strengths = cfg.strengths;
@@ -3396,7 +3450,7 @@
     // The read's strategy for the opponent at one of their decisions, per hand.
     // vsRaise: hero raised their bet. A player who bet keeps their value hands and gives
     // up most bluffs, whatever their general fold-to-bet rate is.
-    function fixedStrategy(acts, facingFrac, vsRaise) {
+    function fixedStrategy(acts, facingFrac, vsRaise, afterCheck) {
       const bf = clamp(st5.betFreq, 0.05, 0.9), vrB = valueShare(oppStats, oppBetFrac);
       const nA = acts.length, s = new Float64Array(nA * N);
       // Everything that does not depend on the hand, worked out once per decision.
@@ -3409,10 +3463,12 @@
       const hasRaise = acts.some((a) => a.kind === 'raise');
       const kinds = acts.map((a) => a.kind);
       const pr = new Float64Array(nA);
+      const bluffM = afterCheck ? checkBetBluffs(cfg.checkBet || 0, vr) : 1;
       for (let i = 0; i < N; i++) {
         const q = qO[idx[i]];
         if (facingFrac == null) {
-          const pBet = sigmoid((q - (1 - bf * vr)) / 0.035) + (1 - sigmoid((q - (1 - bf * vr)) / 0.035)) * sigmoid((bf * (1 - vr) - q) / 0.035);
+          const pV = sigmoid((q - (1 - bf * vr)) / 0.035);
+          const pB = pV + (1 - pV) * sigmoid((bf * (1 - vr) - q) / 0.035) * bluffM, pBet = bluffM > 1 ? Math.min(1, pB) : pB;
           for (let j = 0; j < nA; j++) pr[j] = kinds[j] === 'check' ? 1 - pBet : pBet / Math.max(1, nA - 1);
         } else {
           let pCont;
@@ -3490,7 +3546,8 @@
       n.v = new Float64Array(N);
       n.reach = n.kids.map(() => new Float64Array(N));
       if (player === 1) {
-        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise);
+        // The opponent never opens the river in this tree, so their unopened node is always after hero's check.
+        n.fixed = fixedStrategy(acts, facing > 0 ? facing / (potNow - facing) : null, !!vsRaise, facing <= 0);
         n.pFixed = n.fixed.map((x) => p * x);
       }
       n.sIter = 0;
@@ -5912,6 +5969,9 @@
     const huTable = street === 0 && input.pfHeadsUp !== false && Array.isArray(input.seats) && input.seats.length === 2;
     const pendingTilt = input.pendingTilt != null ? input.pendingTilt : huTable ? false : undefined;
     const pfLimpCurveIn = input.pfLimpCurve != null ? input.pfLimpCurve : huTable ? true : undefined;
+    // Chips-in tilt (CHIP_TILT, v1.8.40): input.chipTilt false is the v1.8.39 rule (the narrow tilts), a number sets the
+    // slope, an object replaces fields ({ own: 0 }: the group's slope for everyone).
+    const CHT = input.chipTilt === false || street < 3 ? null : Object.assign({}, CHIP_TILT, typeof input.chipTilt === 'number' ? { slope: input.chipTilt } : input.chipTilt && typeof input.chipTilt === 'object' ? input.chipTilt : {});
     const MWBF = input.mwBetFold === false ? null : Object.assign({}, MW_BET_FOLD, typeof input.mwBetFold === 'number' ? { odds: input.mwBetFold } : input.mwBetFold && typeof input.mwBetFold === 'object' ? input.mwBetFold : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -5950,19 +6010,28 @@
         const ac = input.afterCall === false ? null : typeof input.afterCall === 'object' ? input.afterCall : stats.afterCall;
         stats.afterCall = ac; if (statsHU) statsHU.afterCall = ac;
       }
-      const hpOwn = heroPotRamp > 0 && hpLearned ? heroPotOwn(o.tally && o.tally.shows, hpLearned, hpt) : null;
-      const heroPotTilt = heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpOwn ? hpOwn.tilt : hpt.tilt || 0) : 0;
+      // Chips-in tilt (CHIP_TILT) in place of the four narrow tilts below.
+      if (CHT && street >= CHT.street) {
+        const cs = chipSlope(o.tally && o.tally.shows, stats, CHT);
+        const put = o.committed != null && isFinite(+o.committed) ? +o.committed / Math.max(1e-9, bigBlind) : 0;
+        const c = { slope: cs.slope, n: cs.n, put: Math.round(put * 10) / 10, tilt: Math.round(cs.slope * chipGain(put, CHT) * 1000) / 1000 };
+        stats.chipTilt = c; if (statsHU) statsHU.chipTilt = c;
+        if (c.tilt) { stats.tiltChips = c.tilt; if (statsHU) statsHU.tiltChips = c.tilt; }
+      }
+      const hpOwn = !CHT && heroPotRamp > 0 && hpLearned ? heroPotOwn(o.tally && o.tally.shows, hpLearned, hpt) : null;
+      const heroPotTilt = !CHT && heroPotRamp > 0 ? heroPotRamp * (/bet|raise/.test((o.actions && o.actions.flop) || '') ? hpt.flopAgg || 0 : hpOwn ? hpOwn.tilt : hpt.tilt || 0) : 0;
       if (hpOwn) stats.heroPotOwn = hpOwn;
       if (heroPotTilt) { stats.tiltHero = heroPotTilt; if (statsHU) statsHU.tiltHero = heroPotTilt; }
       // River overbets read stronger (OVERBET_TILT). input.overbetTilt: false turns it off, a number sets the tilt.
-      if (obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
+      if (!CHT && obt && obt.tilt) { stats.tiltOver = obt; if (statsHU) statsHU.tiltOver = obt; }
       // River raises read stronger (RIVER_RAISE_TILT). input.riverRaiseTilt: false turns it off, a number sets the tilt.
-      if (rrt && rrt.tilt) {
+      if (!CHT && rrt && rrt.tilt) {
         const own = riverRaiseLearned(o.tally && o.tally.shows, rrt);
         const c = Object.assign({}, rrt, { tilt: own.tilt, n: own.n });
         stats.tiltRaise = c; if (statsHU) statsHU.tiltRaise = c;
       }
-      // Bets after hero's check on the river read stronger (CHECK_BET_TILT), unless input.checkBetTilt is false.
+      // Bets after hero's check on the river read stronger (CHECK_BET_TILT), unless input.checkBetTilt is false. With the
+      // chips-in tilt on it adds to it (the shows that reached a showdown ask for both; CHIP_TILT).
       if (cbt && street === cbt.street && STREET_ACTION_MAP[(input.heroActions || {})[STREET_KEYS[street]]] === 'check' && STREET_ACTION_MAP[(o.actions || {})[STREET_KEYS[street]]] === 'bet') {
         const own = checkBetLearned(o.tally && o.tally.shows, cbt);
         const c = Object.assign({}, cbt, { tilt: own.tilt, n: own.n });
@@ -6804,6 +6873,8 @@
         aggScale: o.aggroFold ? aggScaleOf(o.stats) : 1, raiseFold: RRF, madeCall: RMC,
         pot: potWin, toCall, stack: isFinite(stack) ? stack : 100 * bigBlind + pot,
         heroFirst: toCall <= 0 && o.pending,
+        // Hero checks first: the player's own check-bet tilt shapes their bets after the check (CHECK_BET_TILT.tree, off).
+        checkBet: cbt && cbt.tree && toCall <= 0 && o.pending ? checkBetLearned(oi.tally && oi.tally.shows, cbt).tilt : 0,
         iterations: input.riverIterations,
       });
       // The Monte Carlo then only feeds the equity readout, so it can be shorter.
@@ -7425,7 +7496,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
