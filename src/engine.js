@@ -1820,7 +1820,8 @@
     // the player's own tilt; a player whose shows ask for less than none reads weaker (that part adds to the rest).
     const cbTilt = stats.tiltCheckBet && STREET_ACTION_MAP[actions[STREET_KEYS[stats.tiltCheckBet.street]]] === 'bet' ? stats.tiltCheckBet.tilt : 0;
     if (cbTilt > 0) over = Math.max(over, cbTilt);
-    // With the chips-in tilt (CHIP_TILT, v1.8.40) the narrow tilts are not set on stats (createAnalysis), so this is just it.
+    // With the chips-in tilt (CHIP_TILT, v1.8.40) the hero-pot, overbet and river-raise tilts are not set on stats
+    // (createAnalysis), so this is the learned tilt + the check-bet tilt + the chips-in tilt.
     const bias = (learned != null ? learned : aggLine ? Math.min(0, stats.strengthBias || 0) : stats.strengthBias || 0) + Math.max(stats.tiltHero || 0, over) + Math.min(0, cbTilt) + (stats.tiltChips || 0);
     if (!noTilt && Math.abs(bias) > 0.005) {
       const last = [5, 4, 3].find((n) => strengths[n] && actions[STREET_KEYS[n]]) || 0;
@@ -2314,8 +2315,10 @@
   // Ranges read stronger as a player puts more chips in (v1.8.40, CHIP_TILT; input.chipTilt: false is the v1.8.39 rule, a
   // number sets the slope, an object replaces fields). After the flop every opponent's range gets a strength tilt of
   // slope x ln(chips in / `from`) once they have more than `from` big blinds in the pot (buildRange's bias), in place of
-  // the four narrow tilts it covers (hero-pot, river overbets, river raises, bets into hero's river check), which stay
-  // as they were with chipTilt false. Audit 10 Nov (finding 2): strong hands came back short in big pots, and shown
+  // the three narrow tilts it covers (hero-pot, river overbets, river raises), which stay as they were with chipTilt
+  // false. The check-bet tilt (bets into hero's river check, CHECK_BET_TILT) stays and adds to it: on the 25 such shows
+  // that reached a showdown chips alone score +0.5 nats over the learned tilt, chips plus the check-bet tilt +3.0 (the
+  // 10 shown after everyone folded, which players pick, go the other way, as when CHECK_BET_TILT went to showdowns). Audit 10 Nov (finding 2): strong hands came back short in big pots, and shown
   // hands sit higher in the read's range the more their player had put in (0.41-0.48 under 7bb, 0.64-0.66 at 50bb+),
   // with hero in the pot and without, in both halves of the logs. All 778 scored shows to 10 Nov (each at the read and
   // shows from earlier hands; scripts/2026-11-10-session/chipfit*.js): log-likelihood over a random guess with the
@@ -6009,8 +6012,9 @@
         const c = Object.assign({}, rrt, { tilt: own.tilt, n: own.n });
         stats.tiltRaise = c; if (statsHU) statsHU.tiltRaise = c;
       }
-      // Bets after hero's check on the river read stronger (CHECK_BET_TILT), unless input.checkBetTilt is false.
-      if (!CHT && cbt && street === cbt.street && STREET_ACTION_MAP[(input.heroActions || {})[STREET_KEYS[street]]] === 'check' && STREET_ACTION_MAP[(o.actions || {})[STREET_KEYS[street]]] === 'bet') {
+      // Bets after hero's check on the river read stronger (CHECK_BET_TILT), unless input.checkBetTilt is false. With the
+      // chips-in tilt on it adds to it (the shows that reached a showdown ask for both; CHIP_TILT).
+      if (cbt && street === cbt.street && STREET_ACTION_MAP[(input.heroActions || {})[STREET_KEYS[street]]] === 'check' && STREET_ACTION_MAP[(o.actions || {})[STREET_KEYS[street]]] === 'bet') {
         const own = checkBetLearned(o.tally && o.tally.shows, cbt);
         const c = Object.assign({}, cbt, { tilt: own.tilt, n: own.n });
         stats.tiltCheckBet = c; if (statsHU) statsHU.tiltCheckBet = c;

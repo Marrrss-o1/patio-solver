@@ -2714,24 +2714,27 @@ test('riverRaiseTilt: river raises of any size read stronger, river bets do not;
 });
 
 test('chipTilt (v1.8.40): ranges read stronger with the chips a player has put in, from 15bb after the flop (false: off)', () => {
-  // Second pair facing a river bet; only the opponent's chips in move.
-  const spot = (committed, extra, river = 'bet') => E.analyzeSync(riverSpot('Kh Jd', Object.assign({ seed: 3,
-    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river }, sizes: { river: 0.6 }, committed, stack: 1000 - committed }],
+  // Second pair facing a river bet into hero's check; only the opponent's chips in move. checkBetTilt off unless asked.
+  const spot = (committed, extra) => E.analyzeSync(riverSpot('Kh Jd', Object.assign({ seed: 3, checkBetTilt: false,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: 'bet' }, sizes: { river: 0.6 }, committed, stack: 1000 - committed }],
   }, extra)));
   const share = (r) => r.equity.share;
+  const off = (committed, extra) => share(spot(committed, Object.assign({ chipTilt: false }, extra)));
   const small = spot(140), big = spot(600), huge = spot(900);
-  // Off is the v1.8.39 rule, which puts the check-bet tilt on this bet into hero's river check; compare without it.
-  const off = (committed) => share(spot(committed, { chipTilt: false, checkBetTilt: false }));
   near(share(small), off(140)); // 14bb in: below the start
   assert.ok(share(big) < off(600) - 0.02, `60bb: on ${share(big)} off ${off(600)}`);
-  assert.ok(share(spot(140, { chipTilt: false })) < off(140) - 0.05, 'off: the check-bet tilt as before');
   assert.ok(share(huge) < share(big) - 0.01, `90bb ${share(huge)} vs 60bb ${share(big)}`);
   assert.ok(share(spot(600, { chipTilt: 0.3 })) < share(big) - 0.01, 'a number sets the slope');
   const c = big.opponents[0].stats.chipTilt;
   assert.ok(c && c.put === 60 && c.slope === E.CHIP_TILT.slope && c.n === 0 && Math.abs(c.tilt - 0.14 * Math.log(4)) < 1e-3, JSON.stringify(c));
-  // It replaces the narrow tilts: with it on, a bet into hero's river check (checkBetTilt) or a river raise gets no extra tilt.
-  near(share(spot(140, {}, 'bet')), share(spot(140, { checkBetTilt: false, riverRaiseTilt: false, overbetTilt: false, heroPotTilt: false })));
-  assert.ok(!big.opponents[0].stats.tiltCheckBet && !big.opponents[0].stats.tiltRaise);
+  // It replaces the hero-pot tilt (and the overbet and river-raise tilts): a fixed hero-pot tilt only counts with it off.
+  near(share(spot(600, { heroPotTilt: 0.5 })), share(big));
+  assert.ok(off(600, { heroPotTilt: 0.5 }) < off(600) - 0.02);
+  assert.ok(!big.opponents[0].stats.tiltHero && !big.opponents[0].stats.tiltRaise && !big.opponents[0].stats.tiltOver);
+  // The check-bet tilt (a bet into hero's river check) stays and adds to it.
+  const cb = (committed, extra) => share(spot(committed, Object.assign({ checkBetTilt: undefined }, extra)));
+  assert.ok(cb(140) < share(small) - 0.05, `14bb: check-bet tilt ${cb(140)} vs none ${share(small)}`);
+  assert.ok(cb(600) < share(big) - 0.02 && cb(600) < cb(600, { chipTilt: false }) - 0.01, `60bb: both ${cb(600)}, chips ${share(big)}, check-bet ${cb(600, { chipTilt: false })}`);
   // Preflop: nothing.
   const pf = E.analyzeSync({ hero: C('Ah Kd'), board: [], pot: 600, toCall: 300, stack: 1000, bigBlind: 10, mix: false, seed: 1, iterations: 500,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, committed: 400, stack: 600, bet: 400 }] });
