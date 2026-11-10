@@ -649,7 +649,7 @@ test('commitment: players with most of their stack in fold less; a bet leaving 2
   const input = (extra) => Object.assign({
     hero: C('Qc Kc'), board: C('8h Td 3h 6d'), pot: 327, toCall: 0, stack: 110, bigBlind: 2, inPosition: false,
     opponents: [{ name: 'V', tally, actions: { pre: 'raise', flop: 'raisecall', turn: '' }, sizes: { pre: 2, flop: 0.3 }, committed: 163, stack: 110, bet: 0 }],
-    heroActions: { pre: '3bet', flop: 'raise', turn: '' }, heroBet: 0, heroCommitted: 163, iterations: 6000, mix: false, seed: 1,
+    heroActions: { pre: '3bet', flop: 'raise', turn: '' }, heroBet: 0, heroCommitted: 163, iterations: 6000, chipTilt: false, mix: false, seed: 1,
   }, extra || {});
   const on = E.analyzeSync(input()), off = E.analyzeSync(input({ commitFold: false }));
   const bet = (r) => r.ranked.find((s) => s.kind !== 'check');
@@ -1494,7 +1494,7 @@ test('riverRaiseTilt per player (v1.8.32): the table tilt without shows, the pla
     hero: [E.parseCard('Ks'), E.parseCard('Qd')], board: ['Kh', '8c', '4d', '2s', '7h'].map(E.parseCard), pot: 80, toCall: 40, stack: 300, bigBlind: 2,
     inPosition: false, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'bet', river: 'bet' }, heroSizes: {}, heroPosition: 'early',
     heroPfAggressor: true, opponents: [{ name: 'V', tally: { shows }, actions: { pre: 'call', flop: 'call', turn: 'call', river: 'raise' }, sizes: { river: 0.5 },
-      position: 'late', committed: 60, stack: 240, bet: 60 }], iterations: 3000, mix: false, seed: 2, heroPotTilt: false,
+      position: 'late', committed: 60, stack: 240, bet: 60 }], iterations: 3000, chipTilt: false, mix: false, seed: 2, heroPotTilt: false,
   }, extra));
   const eqTable = spot([]).equity.share, eqWeak = spot(weak).equity.share, eqFlat = spot(weak, { riverRaiseTilt: { learn: false } }).equity.share;
   assert.ok(eqWeak > eqTable + 0.01, `weak raiser ${eqWeak} vs table ${eqTable}`);
@@ -2633,7 +2633,7 @@ test('heroPotTilt: flop-passive opponents read stronger in hero\'s pots from 10b
     inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: flop ? 'call' : 'bet', turn: 'check', river: '' }, heroSizes: {},
     heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: flop || 'call', turn: 'check', river: 'check' },
       sizes: {}, position: 'blinds', committed: pot / 2, stack: 300 - pot / 2, bet: 0, heroIP: true }],
-    iterations: 4000, mix: false, seed: 1,
+    iterations: 4000, chipTilt: false, mix: false, seed: 1,
   }, extra)).equity.share;
   near(spot(16, { heroPotTilt: 0.3 }), spot(16, { heroPotTilt: false })); // 8bb: below the ramp
   const on = spot(60, { heroPotTilt: 0.3 }), off = spot(60, { heroPotTilt: false }), more = spot(60, { heroPotTilt: 0.5 });
@@ -2679,7 +2679,7 @@ test('overbetTilt: river bets and raises of 3x pot or more read stronger, not ot
     heroPosition: 'blinds', heroPfAggressor: false, heroPotTilt: false, checkBetTilt: false,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'check', turn: street === 5 ? 'check' : 'bet', river: street === 5 ? 'bet' : '' },
       sizes: street === 5 ? { river: size } : { turn: size }, position: 'early', committed: 64, stack: 293, bet: 126 }],
-    iterations: 4000, riverIterations: 200, mix: false, seed: 1,
+    iterations: 4000, riverIterations: 200, chipTilt: false, mix: false, seed: 1,
   }, extra));
   const on = spot(3), off = spot(3, { overbetTilt: false });
   assert.ok(on.equity.share < off.equity.share - 0.05, `3x: on ${on.equity.share} off ${off.equity.share}`);
@@ -2699,7 +2699,7 @@ test('riverRaiseTilt: river raises of any size read stronger, river bets do not;
     heroPosition: 'late', heroPfAggressor: true, heroPotTilt: false,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river: riverAct },
       sizes: { river: size }, position: 'blinds', committed: 61, stack: 250, bet: 49 }],
-    iterations: 4000, riverIterations: 200, mix: false, seed: 1,
+    iterations: 4000, riverIterations: 200, chipTilt: false, mix: false, seed: 1,
   }, extra));
   const on = spot('checkraise', 1.2), off = spot('checkraise', 1.2, { riverRaiseTilt: false });
   assert.ok(on.equity.share < off.equity.share - 0.03, `check-raise: on ${on.equity.share} off ${off.equity.share}`);
@@ -2711,6 +2711,49 @@ test('riverRaiseTilt: river raises of any size read stronger, river bets do not;
   // A 3x+ raise gets 0.3 from either tilt, once.
   near(spot('checkraise', 3).equity.share, spot('checkraise', 3, { riverRaiseTilt: false }).equity.share);
   near(spot('checkraise', 3).equity.share, spot('checkraise', 3, { overbetTilt: false }).equity.share);
+});
+
+test('chipTilt (v1.8.40): ranges read stronger with the chips a player has put in, from 15bb after the flop (false: off)', () => {
+  // Second pair facing a river bet; only the opponent's chips in move.
+  const spot = (committed, extra, river = 'bet') => E.analyzeSync(riverSpot('Kh Jd', Object.assign({ seed: 3,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'call', flop: 'checkcall', turn: 'check', river }, sizes: { river: 0.6 }, committed, stack: 1000 - committed }],
+  }, extra)));
+  const share = (r) => r.equity.share;
+  const small = spot(140), big = spot(600), huge = spot(900);
+  // Off is the v1.8.39 rule, which puts the check-bet tilt on this bet into hero's river check; compare without it.
+  const off = (committed) => share(spot(committed, { chipTilt: false, checkBetTilt: false }));
+  near(share(small), off(140)); // 14bb in: below the start
+  assert.ok(share(big) < off(600) - 0.02, `60bb: on ${share(big)} off ${off(600)}`);
+  assert.ok(share(spot(140, { chipTilt: false })) < off(140) - 0.05, 'off: the check-bet tilt as before');
+  assert.ok(share(huge) < share(big) - 0.01, `90bb ${share(huge)} vs 60bb ${share(big)}`);
+  assert.ok(share(spot(600, { chipTilt: 0.3 })) < share(big) - 0.01, 'a number sets the slope');
+  const c = big.opponents[0].stats.chipTilt;
+  assert.ok(c && c.put === 60 && c.slope === E.CHIP_TILT.slope && c.n === 0 && Math.abs(c.tilt - 0.14 * Math.log(4)) < 1e-3, JSON.stringify(c));
+  // It replaces the narrow tilts: with it on, a bet into hero's river check (checkBetTilt) or a river raise gets no extra tilt.
+  near(share(spot(140, {}, 'bet')), share(spot(140, { checkBetTilt: false, riverRaiseTilt: false, overbetTilt: false, heroPotTilt: false })));
+  assert.ok(!big.opponents[0].stats.tiltCheckBet && !big.opponents[0].stats.tiltRaise);
+  // Preflop: nothing.
+  const pf = E.analyzeSync({ hero: C('Ah Kd'), board: [], pot: 600, toCall: 300, stack: 1000, bigBlind: 10, mix: false, seed: 1, iterations: 500,
+    opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, committed: 400, stack: 600, bet: 400 }] });
+  assert.ok(!pf.opponents[0].stats.chipTilt);
+});
+
+test('chipSlope: the group slope without shows; a player\'s own big-pot shows move it a little (own 0: the group slope)', () => {
+  const cfg = E.CHIP_TILT;
+  assert.deepStrictEqual(E.chipSlope([], {}, cfg), { slope: cfg.slope, n: 0 });
+  assert.deepStrictEqual(E.chipSlope(undefined, {}, cfg), { slope: cfg.slope, n: 0 });
+  // Shows whose likelihood peaks at a total tilt of 0 (weak for their chips) or 0.75 (strong), with 60bb in.
+  const show = (peak, put = 60, extra) => Object.assign({ hp: { in: true, put }, actions: { river: 'call' },
+    fit: { v: E.FIT_VERSION, tl: E.TILTS.map((x) => -4 * (x - peak) * (x - peak)) } }, extra);
+  const weak = Array.from({ length: 40 }, () => show(0)), strong = Array.from({ length: 40 }, () => show(0.75));
+  const w = E.chipSlope(weak, {}, cfg), s = E.chipSlope(strong, {}, cfg);
+  assert.ok(w.n === 40 && w.slope < cfg.slope - 0.01, 'weak: ' + JSON.stringify(w));
+  assert.ok(s.slope > cfg.slope + 0.01, 'strong: ' + JSON.stringify(s));
+  assert.strictEqual(E.chipSlope(weak.map((x) => show(0, 10)), {}, cfg).n, 0, 'under 15bb in: not counted');
+  assert.strictEqual(E.chipSlope(weak.map((x) => Object.assign({}, x, { actions: { river: 'fold' } })), {}, cfg).n, 0, 'folded hands');
+  assert.deepStrictEqual(E.chipSlope(weak, {}, Object.assign({}, cfg, { own: 0 })), { slope: cfg.slope, n: 0 });
+  // The player's learned line tilt is the base the slope is measured on: a strong base leaves less for the chips.
+  assert.ok(E.chipSlope(strong, { tiltPas: 0.3 }, cfg).slope < s.slope);
 });
 
 test('bigRaiseRange: an open to 30bb+ that keeps chips behind reads as the top 12%, not shoves or re-raises (false: off)', () => {
@@ -2823,7 +2866,7 @@ test('heroPotTilt per player: the table\'s tilt moved by the player\'s own shows
     inPosition: true, tableStyle: 'typical', heroActions: { pre: 'raise', flop: 'bet', turn: 'check', river: '' }, heroSizes: {},
     heroPosition: 'late', heroPfAggressor: true, opponents: [{ name: 'V', tally: { shows }, actions: { pre: 'call', flop: 'call', turn: 'check', river: 'check' },
       sizes: {}, position: 'blinds', committed: 30, stack: 270, bet: 0, heroIP: true }],
-    iterations: 2000, mix: false, seed: 1, heroPotShows: { hi: curve(60, 0.3), hiN: 60, ho: curve(60, 0), hoN: 60 },
+    iterations: 2000, chipTilt: false, mix: false, seed: 1, heroPotShows: { hi: curve(60, 0.3), hiN: 60, ho: curve(60, 0), hoN: 60 },
   }, extra)).heroPot;
   const table = run([]);
   assert.ok(table.tilt > 0.25, `table ${table.tilt}`);

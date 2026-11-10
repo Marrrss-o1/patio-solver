@@ -1332,6 +1332,8 @@
           // v1.8.32: the player's own hero-pot tilt (heroPotOwn) and how many of their shows it rests on.
           hpOwn: o.stats.heroPotOwn ? { tilt: r2(o.stats.heroPotOwn.tilt), n: o.stats.heroPotOwn.n } : undefined,
           rrTilt: o.stats.tiltRaise && o.stats.tiltRaise.n ? { tilt: r2(o.stats.tiltRaise.tilt), n: o.stats.tiltRaise.n } : undefined,
+          // v1.8.40: the chips-in tilt this player's range got (slope x ln(bb in / 15)), their slope and the shows it rests on.
+          chTilt: o.stats.chipTilt && o.stats.chipTilt.tilt ? { tilt: r2(o.stats.chipTilt.tilt), slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
