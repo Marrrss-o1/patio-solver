@@ -2773,6 +2773,8 @@ test('chipSlope: the group slope without shows; a player\'s own big-pot shows mo
   assert.ok(s.slope > cfg.slope + 0.01, 'strong: ' + JSON.stringify(s));
   assert.strictEqual(E.chipSlope(weak.map((x) => show(0, 10)), {}, cfg).n, 0, 'under 15bb in: not counted');
   assert.strictEqual(E.chipSlope(weak.map((x) => Object.assign({}, x, { actions: { river: 'fold' } })), {}, cfg).n, 0, 'folded hands');
+  assert.strictEqual(E.chipSlope(weak.map((x) => Object.assign({}, x, { sd: false })), {}, cfg).n, 0, 'shown after everyone folded');
+  assert.strictEqual(E.chipSlope(weak.map((x) => Object.assign({}, x, { sd: false })), {}, Object.assign({}, cfg, { sd: false })).n, 40);
   assert.deepStrictEqual(E.chipSlope(weak, {}, Object.assign({}, cfg, { own: 0 })), { slope: cfg.slope, n: 0 });
   // The player's learned line tilt is the base the slope is measured on: a strong base leaves less for the chips.
   assert.ok(E.chipSlope(strong, { tiltPas: 0.3 }, cfg).slope < s.slope);

@@ -2346,10 +2346,13 @@ function ENGINE() {
   // scored worse out of sample (own 30 / 100 / 300 / 1000: -6.2 / -3.0 / -1.5 / -0.6 nats against the group's slope).
   // Adding the narrow tilts back on top, or taking the larger of the two, scored worse (the chips term already covers the
   // big-pot lines they were fitted on). Preflop is unchanged (street 3+).
-  const CHIP_TILT = { slope: 0.14, from: 15, own: 300, street: 3 };
+  const CHIP_TILT = { slope: 0.14, from: 15, own: 300, street: 3, sd: true };
   const chipGain = (put, cfg) => (put > cfg.from ? Math.log(put / cfg.from) : 0);
-  // A player's own chips-in slope: the group's slope moved by their shows (scoreShow's TILTS log-likelihoods at their
-  // learned tilt for that kind of line, plus slope x chipGain of the big blinds they had put in), shrunk by cfg.own.
+  // A player's own chips-in slope: the group's slope moved by their own shows that reached a showdown with 15bb+ in
+  // (scoreShow's TILTS log-likelihoods at their learned tilt for that kind of line, plus slope x chipGain of the big
+  // blinds they had put in), shrunk to the group's by cfg.own (300: about the weight of 100 such shows, so a player with
+  // few big-pot showdowns reads at about the group's slope and one with hundreds at their own). Out of sample a lighter
+  // shrink did worse (players don't differ much yet), so the shrink is heavy; the read is still per player.
   function chipSlope(shows, stats, cfg) {
     if (!(cfg.own > 0)) return { slope: cfg.slope, n: 0 };
     const obs = [];
@@ -2357,6 +2360,8 @@ function ENGINE() {
       const f = s && s.fit;
       if (!s || s.folded || !s.hp || !(s.hp.put > cfg.from) || !f || f.v !== FIT_VERSION || !Array.isArray(f.tl) || f.tl.length !== TILTS.length || !f.tl.every(Number.isFinite)) continue;
       if (s.actions && Object.values(s.actions).includes('fold')) continue;
+      // Showdowns only (cfg.sd): a hand shown after everyone folded is the player's pick (strong hands in big pots, mostly).
+      if (cfg.sd !== false && !shownAtShowdown(s)) continue;
       const base = f.agg ? stats.tiltAgg : stats.tiltPas;
       obs.push({ tl: f.tl, b: base != null ? base : 0, g: chipGain(s.hp.put, cfg) });
     }
