@@ -316,7 +316,11 @@ function playHand(cfg) {
       let na;
       if (seat.policy) {
         // Known probabilities: merge equal outcomes, draw one, and add the AIVAT action correction.
+        // v.real marks the decision actually played (not a range replay or a luck-correction pass, nor a warm-up hand)
+        // for bots.js BOT_DUMP.
+        if (!cfg.warm) v.real = true;
         const dist = seat.policy(v);
+        delete v.real;
         const ns = seat.rangeAware ? actState(actor) : null;
         const outs = [];
         for (const d of dist) {

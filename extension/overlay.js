@@ -255,7 +255,7 @@
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
       // The reads start over; the hand log stays.
       tracker.db = { players: {}, history: tracker.db.history || [] };
-      tracker.linkAsks = null;
+      tracker.linkAsks = null; tracker.whoAsks = null;
       tracker.learnSeats(tracker.db.history);
       backup.reset();
       saveDb();
@@ -265,6 +265,14 @@
       ui.showOptions = !ui.showOptions; store.set(UI_KEY, ui); render();
     } else if (what === 'links') {
       ui.showLinks = !ui.showLinks; linkNote = ''; store.set(UI_KEY, ui); render();
+    } else if (what === 'whoNew') {
+      // "Who is this?" answered "Someone new": not asked about that account again.
+      if (!tracker) return;
+      const id = a.getAttribute('data-id');
+      const name = (tracker.namesOf(id)[0]) || 'That player';
+      tracker.markNew(id);
+      linkNote = `${name} reads as a new player. Link reads can still join them to an older read.`;
+      render();
     } else if (what === 'linkYes' || what === 'linkNo' || what === 'unlink') {
       if (!tracker) return;
       const id = a.getAttribute('data-id'), to = a.getAttribute('data-to');
@@ -449,8 +457,8 @@
     return `Reads from ${ids.length} accounts (${names.join(', ')})`;
   }
   function linkAsksHtml() {
-    const asks = tracker && tracker.linkAsks;
-    if (!asks) return '';
+    if (!tracker) return '';
+    const asks = tracker.linkAsks || {};
     const seen = tracker.db.seen || {};
     let html = '';
     for (const a of Object.values(asks)) {
@@ -460,6 +468,13 @@
           <div class="row"><button class="btn" data-a="linkYes" data-id="${esc(a.id)}" data-to="${esc(m.id)}">Same player</button>
           <button class="btn" data-a="linkNo" data-id="${esc(a.id)}" data-to="${esc(m.id)}">Different players</button></div></div>`;
       }
+    }
+    // "Who is this?": a new account with no same-name read, offered the players seen most recently who aren't at the
+    // table (tracker askWho). A tap joins the reads; nothing is joined before that.
+    for (const a of Object.values(tracker.whoAsks || {})) {
+      html += `<div class="ask"><b>${esc(a.name)}</b> is on a new account. Who is this?
+        <div class="row">${a.matches.map((m) => `<button class="btn" data-a="linkYes" data-id="${esc(a.id)}" data-to="${esc(m.id)}" title="${esc(readLabel(m))}">${esc(m.names[0] || '?')} (${handsTxt(m.hands)})</button>`).join('')}
+        <button class="btn" data-a="whoNew" data-id="${esc(a.id)}">Someone new</button></div></div>`;
     }
     return html;
   }
@@ -730,7 +745,7 @@
       if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }
       if (type === 'handEnd' && ui.showLog && local.keys) refreshLog();
       if (type === 'action') checkSize();
-      if (type === 'action' || type === 'street' || type === 'cards' || type === 'linkAsk') render();
+      if (type === 'action' || type === 'street' || type === 'cards' || type === 'linkAsk' || type === 'whoAsk') render();
     });
     tracker.on((type, p) => {
       if (type === 'turn' && p.isHero) requestAdvice(p.timeLeftMs);

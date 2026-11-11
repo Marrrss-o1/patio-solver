@@ -285,6 +285,41 @@ bots, seed and block size), so a third arm can be added later without replaying 
   morning: heads-up tables 21%, n 33; 3-4-handed 55%, n 31) neither set fits both table sizes. fold-cal.js, 1,000 deals:
   heads-up v12r 44%, v13r 36%; 4-handed v12r 35%, v13r 31% (sims/2026-11-06-v13r/). riverMadeCall on vs off on v13r:
   4-handed +23.5 ± 23.8, heads-up +58.3 ± 28.5 (pooled +37.8 ± 18.3), so it holds on both bot sets.
+* v14r (11 Nov; `BOTPROFILES=test/sim/profiles-v14r.json`): v12r with the answers to bets and to Marwin's preflop
+  raises fitted to the table check (`test/sim/table-check.js`, audit 10 Nov finding 1). Measured the way the logs are
+  (cloud runs at the live budget, 2-5 handed, sims/2026-11-11-tablecheck/), the v12r bots fold to first bets after the
+  flop by size in the wrong shape (heads-up they fold too much to medium bets and too little to big ones), call small
+  multiway bets too much, re-raise Marwin's preflop raises 2-4 times too often above 2.5bb, and fold too little to his
+  small opens (table below, from the fit's dumps). Knobs (bots.js, all off in v12r, bit-identical off):
+  `cutShift` { hero | others: { hu | mw: [3 sizes] } } moves the continue cut facing a first bet after the flop, by who
+  bet, heads-up or multiway at the bet and size; `riverAbsShift` [3 sizes] moves heroRiverAbs (hero's river bets);
+  `pfContShift` { open | limp: [5 raise-to buckets: 2.5, 3.5, 5, 8bb, more] } moves the continuing share facing hero's
+  first raise; `heroRR` (a number or [5 buckets]) scales the re-raise share facing it. One set for every bot (per bot
+  the cells are too thin). Fitted offline by `test/sim/fit-v14.js`: `BOT_DUMP=<file>` makes the bots write one line per
+  answer to a first bet after the flop and to a first raise before it, in measured hands only (game.js marks the played
+  decision; warm-up hands, range replays and luck-correction passes are left out), with what decided it, and the fit
+  moves each cell's shift until the bots' share over those decisions equals the friends' (shrunk by 10 answers toward
+  the bots', table sizes weighted to the logs' mix). Fit on default-budget dumps (300 deals at each of 2-5 handed,
+  seeds 11202-11205), all logs to 10 Nov (#24 left out), in two passes: the shifts fitted on v12r's dumps, then the
+  residual on the dumps of bots playing with them (same seeds; within 0.03 in every cell but hero's river bets, -0.07
+  and +0.05 at 45-85% and 85%+ on 50 and 124 decisions, and re-raises of raises to 5-8bb, x0.87) added on. The bots' shares below are v12r's; v14r's after both passes match the
+  friends' column by construction on default-budget play.
+
+  | cell (answers' fold share; re-raise share for rr) | friends | v12r bots | shift |
+  | --- | --- | --- | --- |
+  | Marwin's flop/turn bets, heads-up, <45% / 45-85% / 85%+ | 0.26 / 0.34 / 0.56 (208 / 131 / 86) | 0.32 / 0.46 / 0.45 | -0.076 / -0.147 / +0.101 |
+  | the same, multiway | 0.37 / 0.54 / 0.67 (157 / 69 / 30) | 0.31 / 0.50 / 0.77 | +0.082 / +0.043 / -0.115 |
+  | Marwin's river bets (heroRiverAbs) | 0.35 / 0.32 / 0.58 (66 / 25 / 36) | 0.47 / 0.49 / 0.42 | -0.081 / -0.160 / +0.160 |
+  | everyone else's bets, heads-up | 0.21 / 0.33 / 0.56 (115 / 87 / 101) | 0.27 / 0.47 / 0.36 | -0.063 / -0.129 / +0.189 |
+  | everyone else's bets, multiway | 0.41 / 0.50 / 0.69 (202 / 108 / 192) | 0.21 / 0.59 / 0.68 | +0.223 / -0.087 / +0.008 |
+  | Marwin's opens, fold, to 2.5 / 3.5 / 5 / 8bb | 0.46 / 0.47 / 0.57 / 0.51 (92 / 73 / 193 / 77) | 0.32 / 0.33 / 0.51 / 0.48 | -0.149 / -0.159 / -0.078 / -0.019 |
+  | his raises over limpers, fold, to 3.5 / 5 / 8bb | 0.28 / 0.33 / 0.58 (78 / 133 / 146) | 0.29 / 0.31 / 0.48 | -0.001 / -0.020 / -0.059 |
+  | re-raises of his first raise, to 2.5 / 3.5 / 5 / 8bb | 0.127 / 0.060 / 0.040 / 0.022 (102 / 151 / 326 / 223) | 0.121 / 0.123 / 0.071 / 0.074 | x1.003 / 0.481 / 0.515 / 0.278 |
+
+  The shape is the same for Marwin's bets and everyone else's (heads-up the bots fold too much to medium bets and too
+  little to big ones), so it is the bots' size answer, not a hero read. Hero's river bets are one row (heads-up and
+  multiway together, as heroRiverAbs answers them). Cells with under 20 real answers stay at 0 (raises over limpers to
+  2.5bb or 8bb+, opens to 8bb+), and re-raises of raises to 8bb+ at 1 (0 of 21, too few to tell).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that

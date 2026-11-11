@@ -82,6 +82,16 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # profiles-v13r.json (v12r with heroRiverFloor: answers to hero's river bets by made-hand
                          # strength) is closer to the friends' heads-up folds to hero's river bets and further from
                          # their 3-4-handed ones (test/sim/README.md); a second look, not the yardstick.
+                         # profiles-v14r.json (11 Nov): v12r with the answers to bets (by size, heads-up or multiway,
+                         # hero's or anyone's) and to Marwin's first preflop raises (by raise-to) fitted to the logs
+                         # (test/sim/fit-v14.js from BOT_DUMP decisions); a candidate yardstick until its live-budget
+                         # table check is in.
+node test/sim/table-check.js --real <logs> --sim <entries.json...> [--match-seats]
+                         # the rows a bot set must match (answers to bets and raises, preflop raises, shown strength
+                         # by chips in, TD by street, result), real and simulated side by side with z; the sim side is
+                         # fold-cal.js --entries. Hands in test/exclude-hands.json (deliberate plays, e.g. 10 Nov #24,
+                         # Marwin giving chips away) are left out of every log tool (loadHands; merge-logs.js
+                         # --keep-excluded keeps them).
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/merge-logs.js <out.json> <exports or folders...>  # one merged log: each hand once, fuller copy kept
                          # (exports since v1.8.21 hold only new hands; every log tool below takes several
@@ -702,6 +712,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of both name and id) or splits them. Import passes the links into `rebuildReads` and takes them back
   (`absorbLinks`). `tracker.linkReads = false` turns the seat notes and questions off. On the 31 Oct - 2 Nov logs
   replayed in order it asks exactly twice: Dew666 (1 Nov) and Jagger (2 Nov).
+  "Who is this?" (v1.8.41, audit 10 Nov finding 7; `askWho`, `tracker.whoAsks`, `PatioTracker.WHO` {hands 10,
+  minHands 10, max 8}; `tracker.whoOpts` replaces them): a player dealt in whose own read has under 10 hands, isn't
+  linked, has no same-name question open and wasn't marked new is offered up to 8 known players (10+ hands, newest
+  first) who aren't at the table and were never dealt into a hand with them. Tapping one links the reads (`link`);
+  "Someone new" (`markNew`, `db.newOk`) stops the question for that account. Same-name matches keep the old
+  question. It asks for nothing that changes the advice without a tap, and `linkReads = false` turns it off too.
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
 - Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
   preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does

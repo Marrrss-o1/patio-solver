@@ -3044,6 +3044,58 @@ test('linked reads: a name change keeps the read; old names count; generic names
   assert.ok(!off.linkAsks && !off.db.seen);
 });
 
+test('who is this: a new account is offered the known players not at the table, until answered', () => {
+  assert.deepStrictEqual(T.WHO, { hands: 10, minHands: 10, max: 8 });
+  const t = new T({ players: {} });
+  const whos = [];
+  t.on((type, p) => { if (type === 'whoAsk') whos.push(JSON.parse(JSON.stringify(p))); });
+  for (let i = 0; i < 12; i++) feedAll(t, asPlayer(sdHand, 'J1', 'Jagger'));
+  assert.strictEqual(whos.length, 0, 'nobody known yet while J1 was new');
+  for (let i = 0; i < 3; i++) feedAll(t, asPlayer(sdHand, 'D1', 'Dew'));
+  assert.deepStrictEqual(t.whoAsks.D1.matches.map((m) => m.id), ['J1']);
+  // A new account under a new name: Jagger is offered (Dew has 3 hands, under WHO.minHands); nothing joined yet.
+  feedAll(t, asPlayer(sdHand, 'X1', 'Pumpkin'));
+  assert.deepStrictEqual(Object.keys(t.whoAsks), ['X1']);
+  assert.deepStrictEqual(t.whoAsks.X1.matches.map((m) => m.id), ['J1']);
+  assert.ok(!t.linkAsks.X1);
+  assert.strictEqual(t.canon('X1'), 'X1');
+  // "Someone new": not asked again.
+  t.markNew('X1');
+  assert.ok(!t.whoAsks.X1);
+  feedAll(t, asPlayer(sdHand, 'X1', 'Pumpkin'));
+  assert.ok(!t.whoAsks.X1, 'not asked again');
+  assert.ok(t.db.newOk.X1);
+  // Picking a player links them, and the question goes.
+  feedAll(t, asPlayer(sdHand, 'X2', 'Pumpkin2'));
+  assert.ok(t.whoAsks.X2);
+  assert.ok(t.link('X2', 'J1').ok);
+  assert.ok(!t.whoAsks.X2);
+  feedAll(t, asPlayer(sdHand, 'X2', 'Pumpkin2'));
+  assert.ok(!t.whoAsks.X2, 'linked: not asked');
+  // A same-name account gets the "Same player?" question instead.
+  feedAll(t, asPlayer(sdHand, 'J9', 'Jagger'));
+  assert.ok(t.linkAsks.J9 && !t.whoAsks.J9);
+  // Asked only while the account is new (under WHO.hands of its own hands).
+  const asked = [];
+  for (let i = 0; i < 13; i++) { feedAll(t, asPlayer(sdHand, 'X3', 'Late')); asked.push(!!t.whoAsks.X3); }
+  assert.ok(asked[0] && !asked[12], asked.join(','));
+  // Players dealt into this hand are not offered; one who is not at the table is.
+  const u = new T({ players: {} });
+  for (let i = 0; i < 12; i++) feedAll(u, asPlayer(sdHand, 'J1', 'Jagger'));
+  for (let i = 0; i < 12; i++) feedAll(u, asPlayer(sdHand, 'K1', 'Kim'));
+  // Jagger sits in Ann's seat, a new account in Bob's: Kim is offered, Jagger is not (he is at the table).
+  feedAll(u, JSON.parse(JSON.stringify(threeHand).replace(/"authUserId":"A"/g, '"authUserId":"J1"').replace(/"name":"Ann"/g, '"name":"Jagger"')
+    .replace(/"authUserId":"B"/g, '"authUserId":"X5"').replace(/"name":"Bob"/g, '"name":"Zed"')));
+  assert.deepStrictEqual(u.whoAsks.X5.matches.map((m) => m.id), ['K1']);
+  assert.ok(!u.whoAsks.J1);
+  // linkReads false: no questions.
+  const off = new T({ players: {} });
+  off.linkReads = false;
+  for (let i = 0; i < 12; i++) feedAll(off, asPlayer(sdHand, 'J1', 'Jagger'));
+  feedAll(off, asPlayer(sdHand, 'X1', 'Pumpkin'));
+  assert.ok(!off.whoAsks);
+});
+
 test('linked reads: seats learned from stored hands', () => {
   const t = new T({ players: {} });
   feedAll(t, threeHand);

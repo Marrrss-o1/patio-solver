@@ -1,0 +1,6 @@
+{
+  "note": "Hands left out of every log study (test/merge-logs.js loadHands drops them unless opts.keepExcluded). Key: the hand's start time t (ms) and hero's cards, as keyOf in merge-logs.js. Only hands that say nothing about how anyone plays: Marwin giving chips away on purpose and the like.",
+  "hands": [
+    { "t": 1794318883077, "hero": "2s2d", "date": "2026-11-10 20:54 Bangkok", "why": "Deliberate chip dump (Marwin, 11 Nov): raise to 41bb where 6bb was advised, fold the flop where check was advised. Dew345 called." }
+  ]
+}

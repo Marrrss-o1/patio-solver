@@ -70,6 +70,33 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
     const split = await text();
     console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT' : 'NOT SPLIT\n' + split);
   }
+  // WHO=1: the opponent plays 11 more hands, then a new account under another name sits in their seat; the panel
+  // shows the "who is this?" badge and asks with the old read to tap; the harness taps it.
+  if (process.env.WHO) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (q) => page.evaluate((s) => document.getElementById('patio-solver-host').shadowRoot.querySelector(s).click(), q);
+    const snap0 = msgs.find((m) => m.snap).snap;
+    const oppP = snap0.players.find((p) => p.authUserId !== snap0.heroAuthId);
+    const send = async (list, ms) => { for (const m of list) { if (m.ev === 'hook:attached') continue; await page.evaluate(m => { GameManager.state.players = m.snap.players; __L.forEach(f => f(m.ev, m.data)); }, m); await page.waitForTimeout(ms); } };
+    for (let k = 0; k < 11; k++) await send(msgs, 3);
+    const again = JSON.parse(JSON.stringify(msgs).split(`"authUserId":"${oppP.authUserId}"`).join('"authUserId":"WHO-ID"').split(`"name":"${oppP.name}"`).join('"name":"Newbie77"'));
+    const upTo = again.findIndex((m) => m.ev === 'game:stage_began' && m.data && m.data.stageType === 'set_blinds');
+    await send(again.slice(0, upTo + 1), 30);
+    await page.waitForTimeout(300);
+    const bar = await text();
+    console.log('--- new account, another name ---');
+    console.log(/who is this\?/.test(bar) ? 'WHO BADGE' : 'NO WHO BADGE');
+    const open = await page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.bd').style.display !== 'none');
+    if (!open) await click('[data-a="toggle"]');
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(out, 'mobile_who.png') });
+    const asked = await text();
+    console.log(/Who is this\?/.test(asked) && asked.includes(oppP.name + ' (') ? 'WHO ASKED' : 'WHO NOT ASKED\n' + asked);
+    await click('[data-a="linkYes"]');
+    await page.waitForTimeout(200);
+    const joined = await text();
+    console.log(/Reads joined/.test(joined) && !/Who is this/.test(joined) ? 'WHO JOINED' : 'WHO NOT JOINED\n' + joined);
+  }
   // expand and screenshot the last advice state
   console.log(await page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText));
   console.log('ERRORS', errs);
