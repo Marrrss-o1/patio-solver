@@ -460,6 +460,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   defends the big blind more (51/30 -> 66/43 VPIP/PFR); the big blind and weak hands lose most (-33.4 ± 15.2 and
   -23.7 ± 11.4 in 11304). v14r's 4-handed bots fold to hero's 3.5-5bb opens less than the friends (0.62 against 0.79),
   which favours B, so bots that match there wouldn't turn it. Files: sims/2026-11-11-pfpkg/.
+  Fifth look (11 Nov, on v16r, whose bots also answer hero's first preflop raise by table size): the same A/B and rule,
+  3-handed +13.8 ± 34.0 (seed 11701) and +12.0 ± 28.1 (11702), 4-handed +26.6 ± 29.7 (11703) and -38.3 ± 25.9 (11704;
+  strong and good hands -16.8 / -19.5, every seat down); pooled about 0 ± 15, so no confirmation and the tilt stays at 3+
+  handed tables. No seat or hand group is outside 2 SE in any run. Files: sims/2026-11-11-pfpkg16/.
 - Two-player tables preflop (v1.8.35, `input.pfHeadsUp: false` is the v1.8.34 rule): when the hand is dealt to two
   players (`input.seats`), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
   answers from the size curve (pfLimpCurve on); an explicit `input.pendingTilt` / `input.pfLimpCurve` wins. Bigger tables
