@@ -6,7 +6,7 @@ for measuring changes (those two still work and are left as they were).
 
 ```
 node test/sim/run.js --hands 2000 --players 4 --bots friends                  # solver vs bots fitted to Marwin's friends
-BOTPROFILES=test/sim/profiles-v15r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
+BOTPROFILES=test/sim/profiles-v16r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the main check: the regulars, live budget
 node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the same, with the budget Marwin plays
@@ -373,9 +373,35 @@ bots, seed and block size), so a third arm can be added later without replaying 
   and not kept (11 Nov): the friends' postflop raise sizes. The bots raise to one of two sizes (a min-raise 36% of the
   time, else 6.58x: `raiseMin`, `raiseX`), where the friends spread 2-9x; with the friends' spread the size rows matched
   and the flop's raised-bet gap halved, but the turn TD stayed and more rows were off.
-  v15r is the main check for solver changes from 11 Nov, and v14r is the second look. A change whose effect runs
-  through a row v15r still misses (turn betting) is still decided on the logs. Files:
+  v15r was the main check for solver changes on 11 Nov until v16r. A change whose effect runs through a row v15r
+  still misses (turn betting) is still decided on the logs. Files:
   /mnt/project-files/patio-solver/sims/2026-11-11-tablecheck/v15r/ (cmp-*.txt, td-pooled.txt; fit/).
+* v16r (11 Nov; `BOTPROFILES=test/sim/profiles-v16r.json`): v15r with river bets at the friends' size. The table
+  check's bet-size rows (G: first bets after the flop by others than Marwin, by street and by whether the bettor called
+  the street before) showed the bots betting the river small: all logs to 10 Nov, river bets of 85%+ of the pot 0.41
+  at the table against 0.20 in the v15r simulator, under 45% 0.34 against 0.54 (live, pooled, n 217, z -5.9 and +5.6).
+  Against v15r bots at the same pot the friends' log bet size is +0.05 on the flop, -0.04 on the turn and +0.33 on the
+  river (n 285; after calling the turn +0.45, n 51): median river bet 68% of the pot against the bots' 33%. Every
+  friend with 12+ river bets bets bigger there than on the flop and turn (+0.23 to +0.63, pot-adjusted), so it is one
+  offset for every bot, not a per-player habit.
+  Knob (bots.js, off in v15r, bit-identical off): `sizeSt` [flop, turn, river], added to the bet-size target (log of the
+  pot share). v16r has [0, 0, 0.55] on every bot: the size grid is capped at 2x, so it takes 0.55 to move the bots' log
+  size by about 0.3 (0.45 left the 85%+ row short).
+  Table check, rows off by 2 SE or more (the G rows included), v15r -> v16r. Default budget (fold-cal.js dumps,
+  1,400 / 1,000 / 800 / 700 hands at 2 / 3 / 4 / 5 handed, seeds 11502-11505): pooled 29 -> 22, G rows 7 -> 1.
+  Live budget (cloud, seeds 11101-11104 as for v14r and v15r): heads-up 26 -> 21, 3-handed 29 -> 26, 4-handed 24 -> 22,
+  5+ handed 33 -> 30, pooled (`--match-seats`) 32 -> 26; G rows 10 -> 8, 4 -> 1, 1 -> 0, 7 -> 4, pooled 9 -> 2; every
+  other row about the same (pooled 23 -> 24, the new ones at z 2.0-2.2). River bets pooled: under 45% of the pot 0.34
+  at the table, 0.54 -> 0.35 simulated; 85%+ 0.41, 0.20 -> 0.33. Hero's simulator result pooled 2.24 -> 2.02 bb a hand
+  against 0.82 ± 0.67 at the table; by table size heads-up 1.29 -> 0.90, 3-handed 2.01 -> 2.20, 4-handed 2.27 -> 2.17,
+  5-handed 2.97 -> 2.82. Folds to hero's bets move by a point or two at most.
+  Still off on v16r: the v15r list above (the turn TD among them: pooled -3.18 ± 0.59 bb against +1.18 ± 1.15). Of the
+  size rows, bets on the turn after calling the flop (friends bet under 45% of the pot 0.44, the bots 0.62, n 48) and
+  the heads-up flop, turn and river rows, which have 4-15 real bets each (Mark's habits more than the bots'; see the
+  lineup note above).
+  v16r is the main check for solver changes from 11 Nov, and v15r is the second look. Files:
+  /mnt/project-files/patio-solver/sims/2026-11-11-tablecheck/v16r/ (live-v15r-*.txt and live-v16r-*.txt: the same
+  seeds on both sets).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that
