@@ -51,6 +51,7 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
 dist/patio-solver-extension.zip Built extension zip.
 docs/protocol.md         What the game's socket sends. Read this before touching tracker.js.
+docs/switches.md         One table of the engine's input switches: default, what each was decided on, what would change it.
 src/blueprint.js         Blueprint lookup (history, seats, heroName, startStack from solverInput).
 blueprint/               trainer.c (MCCFR self-play trainer), run.sh (chunked training that resumes), publish.sh,
                          coverage.js, README.md (training runs and numbers).
