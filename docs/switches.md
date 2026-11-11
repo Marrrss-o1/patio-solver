@@ -42,7 +42,7 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 
 | switch | default | since | decided on | would change it |
 | --- | --- | --- | --- | --- |
-| `chipTilt` | on, per player (`CHIP_TILT` slope 0.14) | v1.8.40 | shows: +20.2 nats over the narrow tilts (778); sim no-loss, about +12 ± 11 | shown hands in big pots; replaces the three below |
+| `chipTilt` | on, per player (`CHIP_TILT` slope 0.14) | v1.8.40 | shows: +20.2 nats over the narrow tilts (778); sim no-loss, about +12 ± 11; at 60bb and 300bb about +6 ± 9 | shown hands in big pots; replaces the three below |
 | `heroPotTilt` | replaced by chipTilt | v1.8.9 (per player v1.8.32) | logs: shows in hero's pots at 0.74 (n 23); sim -4 ± 5 on bots that don't trap | only with `chipTilt: false` |
 | `overbetTilt` | replaced by chipTilt | v1.8.14 | logs: 9 shown 3x+ river bets at 0.68 | only with `chipTilt: false` |
 | `riverRaiseTilt` | replaced by chipTilt | v1.8.19 (per player v1.8.32) | logs: 21 shown river raises at 0.64-0.69 | only with `chipTilt: false` |

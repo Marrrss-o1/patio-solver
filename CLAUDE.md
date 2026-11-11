@@ -1178,6 +1178,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   per-player slope learns from showdowns only (`CHIP_TILT.sd`: shows after everyone folded are the player's pick; those
   118 fit a slope of 0.23); 10 Nov reads: Dew345 0.097 (43 big-pot showdowns), mwe 0.133 (26), Mark 0.154 (23). Files:
   sims/2026-11-10-chiptilt/.
+  Other depths (11 Nov, audit 10 Nov finding 5: run.js plays 150bb every hand, while Marwin's effective stack has a
+  median of 111bb, 13% of hands under 40bb and 21% over 175bb). The same A/B, v12r regulars as above, live budget, 1,000
+  deals each, `--stack` 60 and 300 (rule set before the runs: it stays on unless the pool is below -1 SE): heads-up 60bb
+  -0.4 ± 13.2 (seed 11203), 300bb -20.2 ± 44.0 (11204); 4-handed 60bb +12.2 ± 14.3 (11201), 300bb +41.1 ± 46.0 (11202).
+  Pooled about +6 ± 9 (60bb +5 ± 10, 300bb +9 ± 32), so it stays on. Main's own result grows with depth: heads-up 150 /
+  238 / 306 bb/100 at 60 / 150 / 300bb, 4-handed 165 / 279 / 416. So the simulator shows none of the logs' deep-stack
+  loss (-705bb over 170 hands at 200-350bb effective, about 1.4 SE below zero). No stack profile was added, because depth
+  moved the level and not this A/B. For a change aimed at deep stacks or big pots, add a `--stack 300` pair. Files:
+  sims/2026-11-11-depth/.
 - Not built (11 Nov, audit 10 Nov finding 3): a "facing hero" level in the read's fold fits, per player and shrunk to a
   group level, to replace the hero-only fold constants. First answers after the flop to 10 Nov (1,991, 825 to hero's
   bets; predictAction from earlier hands, scored sequentially): the read is off by the same amount against hero as
