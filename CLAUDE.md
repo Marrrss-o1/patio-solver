@@ -442,6 +442,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   3-handed, early 53-55 -> 41-42% 4-handed) and smaller (button 4.4 -> 2.9bb 3-handed, early 4.6 -> 2.8bb 4-handed); in
   two of the runs most of the loss is later drift (hands with the same preflop that part afterwards). The tilt stays.
   Files: sims/2026-11-08-untilt14/, scripts/2026-11-08-untilt14/.
+  Fourth look (11 Nov, on v14r, whose bots answer hero's first preflop raise as the friends do pooled over table sizes):
+  the two-player rule at every table size (B `{"pendingTilt":false,"pfLimpCurve":true}` vs main), live, 1,000 deals each,
+  two-stage rule (a confirmation batch on fresh seeds only if the screening pools above +1 SE): 3-handed -9.9 ± 28.5
+  (seed 11301) and -17.5 ± 35.0 (11302), 4-handed -29.3 ± 31.6 (11303) and -14.4 ± 26.4 (11304); pooled about -17 ± 15,
+  so no confirmation. B opens less from early seats and the button (4-handed early 38 -> 27%, button 70 -> 63%) and
+  defends the big blind more (51/30 -> 66/43 VPIP/PFR); the big blind and weak hands lose most (-33.4 ± 15.2 and
+  -23.7 ± 11.4 in 11304). v14r's 4-handed bots fold to hero's 3.5-5bb opens less than the friends (0.62 against 0.79),
+  which favours B, so bots that match there wouldn't turn it. Files: sims/2026-11-11-pfpkg/.
 - Two-player tables preflop (v1.8.35, `input.pfHeadsUp: false` is the v1.8.34 rule): when the hand is dealt to two
   players (`input.seats`), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
   answers from the size curve (pfLimpCurve on); an explicit `input.pendingTilt` / `input.pfLimpCurve` wins. Bigger tables
