@@ -52,6 +52,12 @@ A.solverAgent = (opts) => {
   };
   let userHook = null;
   const hook = (v, input, res) => {
+    // The advice goes into the hand log as the panel writes it (text, EV, options), so the entries carry `advice` with
+    // `did` / `followed` for the log tools (table-check.js's TD rows).
+    if (res.best) {
+      const lbl = (sc) => (sc.label || sc.kind) + (sc.amount ? ' ' + Math.round(sc.amount * 100) / 100 : '');
+      ag.tracker.noteAdvice(lbl(res.best), res.best.ev || 0, res, lbl);
+    }
     if (v.street >= 3 && res.best && !['fold', 'check', 'call'].includes(res.best.kind)) {
       const sc = (res.scenarios || []).filter((x) => !['fold', 'check', 'call'].includes(x.kind));
       const s0 = sc.length ? sc.reduce((m, o) => (Math.abs(o.amount - res.best.amount) < Math.abs(m.amount - res.best.amount) ? o : m), sc[0]) : null;

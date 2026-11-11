@@ -406,7 +406,15 @@ test('merge-logs: files and folders, each hand once, the fuller copy kept', () =
   assert.deepStrictEqual(got[2].net, { A: 4 }, 'the copy with the result wins');
   assert.deepStrictEqual(got[3].net, { A: -1 });
   assert.strictEqual(got[4].raw.length, 3, 'then the copy with more raw events');
-  assert.deepStrictEqual(info, { files: 3, read: 8, dupes: 3 });
+  assert.deepStrictEqual(info, { files: 3, read: 8, dupes: 3, excluded: 0 });
+  // Hands in test/exclude-hands.json (a deliberate chip dump) are left out unless keepExcluded.
+  const dump = { t: 1794318883077, hero: ['2s', '2d'], board: [] };
+  fs.writeFileSync(path.join(dir, 'e-dump.json'), HL.toFile([dump]));
+  const info2 = {};
+  assert.strictEqual(M.loadHands([dir], { info: info2, quiet: true }).length, 5);
+  assert.strictEqual(info2.excluded, 1);
+  assert.strictEqual(M.loadHands([dir], { quiet: true, keepExcluded: true }).length, 6);
+  fs.rmSync(path.join(dir, 'e-dump.json'));
   // The same hand time with other hero cards is another hand (two tables).
   fs.writeFileSync(path.join(dir, 'd.json'), JSON.stringify({ history: [h(5, { hero: ['2c', '2d'] })] }));
   assert.strictEqual(M.loadHands([dir], { quiet: true }).length, 6);
