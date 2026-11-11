@@ -90,7 +90,8 @@ node test/sim/table-check.js --real <logs> --sim <entries.json...> [--match-seat
                          # the rows a bot set must match (answers to bets and raises, preflop raises, shown strength
                          # by chips in, TD by street, result), real and simulated side by side with z; the sim side is
                          # fold-cal.js --entries. Hands in test/exclude-hands.json (deliberate plays, e.g. 10 Nov #24,
-                         # Marwin giving chips away) are left out of every log tool (loadHands; merge-logs.js --keep-excluded keeps them).
+                         # Marwin giving chips away) are left out of every log tool (loadHands; merge-logs.js
+                         # --keep-excluded keeps them).
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/merge-logs.js <out.json> <exports or folders...>  # one merged log: each hand once, fuller copy kept
                          # (exports since v1.8.21 hold only new hands; every log tool below takes several
