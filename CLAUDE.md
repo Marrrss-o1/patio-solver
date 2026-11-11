@@ -744,6 +744,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   first) who aren't at the table and were never dealt into a hand with them. Tapping one links the reads (`link`);
   "Someone new" (`markNew`, `db.newOk`) stops the question for that account. Same-name matches keep the old
   question. It asks for nothing that changes the advice without a tap, and `linkReads = false` turns it off too.
+  "Link reads" also lists accounts seen in the last 3 days that aren't at the table and read on their own (v1.8.43;
+  newest 5, `RECENT_MS`/`RECENT_N` in both panels), each with the same "Same player as..." picker. Before, it listed only
+  seated players, so an account that played one session and left could only be joined once it sat down again (11 Nov:
+  Mark played 18 hands as "Mark" on a new account, K98C..., then went back to his usual one; "Who is this?" never asked,
+  since that release went in as the session started).
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
 - Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
   preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does
@@ -1095,6 +1100,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   84 -> 44 (5-handed) and their TD -4.8 ± 4.3 -> +9.8 ± 3.9 chips, turn air bets 89 -> 55. On v8 bots, which fold far more than the friends to river bluffs and big
   bets (audit, 4 Nov), 4-handed -23.8 ± 20.7 (strong hands -17.5 ± 11.6: the bigger value bets get folded). Files:
   /mnt/project-files/patio-solver/sims/2026-11-05-rivermade/, analysis/2026-11-05-river-bluffs.md.
+  On hands it was not fitted on (11 Nov switch ledger: hands after its merge to 11 Nov, frozen captures re-solved on main
+  with all three on and off, live budget, mix off): hero's 77 heads-up river bets and raises got folded 0.364 of the
+  time; the river solver's own fold at hero's size read 0.335 with it and 0.369 without (log-likelihood -50.5 against
+  -51.6; a constant -50.5); 16 of 84 river picks change. Of 1,045 postflop decisions 122 picks change (turn 67 of 326);
+  where Marwin played one side's pick, what came back minus each side's EV was -6.1 ± 2.5 (on) against -5.4 ± 2.5 (off),
+  a tie. So it stays on. Files: /mnt/project-files/patio-solver/scripts/2026-11-11-ledger/ (rm-ledger.txt, rivermade/).
 - River raises read stronger (v1.8.19, `RIVER_RAISE_TILT` {tilt 0.3, street 5}; `input.riverRaiseTilt: false` turns it
   (since v1.8.40 replaced by the chips-in tilt below, unless `input.chipTilt: false`)
   off, a number sets the tilt): a river raise of any size (raise, check-raise, re-raise lines) adds 0.3 of strength tilt

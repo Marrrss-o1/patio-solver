@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.42
+// @version      1.8.43
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -9570,6 +9570,8 @@ function slim(r) {
   // asked here and joined only on "Same player"; "Link reads" joins or splits any of them by hand.
   function day(t) { return t ? new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : ''; }
   function handsTxt(n) { return Math.round(n) + ' hand' + (Math.round(n) === 1 ? '' : 's'); }
+  // "Link reads" also lists accounts on their own read seen in the last 3 days (newest 5) that aren't at the table.
+  var RECENT_MS = 3 * 24 * 3600 * 1000, RECENT_N = 5;
   function readLabel(g) {
     var also = g.names.slice(1, 3);
     return (g.names[0] || '?') + (also.length ? ' (also ' + also.join(', ') + ')' : '') + ' · ' + handsTxt(g.hands) + (g.last ? ' · seen ' + day(g.last) : '');
@@ -9632,12 +9634,22 @@ function slim(r) {
     var html = '<div><div class="sec">Link reads</div>';
     var at = h ? Object.keys(h.players).map(function (k) { return h.players[k]; }).filter(function (p) { return p.id !== heroId && p.auth; }) : [];
     if (!at.length) html += '<div class="muted">Players at the table show here once a hand starts.</div>';
-    at.forEach(function (p) {
-      var opts = linkOptions(p.auth, groups);
-      html += '<div class="lk"><span class="nm">' + esc(p.name) + '</span>' + (opts.length
-        ? '<select data-a="linkPick" data-id="' + esc(p.auth) + '"><option value="">Same player as…</option>' + opts.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(readLabel(g)) + '</option>'; }).join('') + '</select>'
+    function pick(id, name, label) {
+      var opts = linkOptions(id, groups);
+      return '<div class="lk"><span class="nm"' + (label ? ' title="' + esc(label) + '"' : '') + '>' + esc(name) + '</span>' + (opts.length
+        ? '<select data-a="linkPick" data-id="' + esc(id) + '"><option value="">Same player as…</option>' + opts.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(readLabel(g)) + '</option>'; }).join('') + '</select>'
         : '<span class="muted">no other reads to join</span>') + '</div>';
-    });
+    }
+    at.forEach(function (p) { html += pick(p.auth, p.name); });
+    // Accounts on their own read seen in the last few days but not at the table now (v1.8.43), so a friend who played
+    // one session on a new account can be joined afterwards.
+    var atIds = {};
+    at.forEach(function (p) { tracker.groupOf(p.auth).forEach(function (k) { atIds[k] = true; }); });
+    var recent = groups.filter(function (g) { return g.ids.length === 1 && !atIds[g.ids[0]] && g.last && tracker.now() - g.last < RECENT_MS; }).slice(0, RECENT_N);
+    if (recent.length) {
+      html += '<div class="sec" style="margin-top:6px">Recent, not at the table</div>';
+      recent.forEach(function (g) { html += pick(g.id, (g.names[0] || '?') + ' (' + handsTxt(g.hands) + ', ' + day(g.last) + ')', readLabel(g)); });
+    }
     var linked = groups.filter(function (g) { return g.ids.length > 1; });
     if (linked.length) {
       html += '<div class="sec" style="margin-top:6px">Joined</div>';
