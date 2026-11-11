@@ -11,9 +11,9 @@
 //   F  hero's result: bb/100 and the advised EV at the first decision
 // Usage:
 //   node test/sim/table-check.js --real <exports or folders...> [--sim <entries.json...>] [--seats 2|3|4|5+|3+]
-//     [--min 30] [--all]
+//     [--min 30] [--all] [--match-seats]
 // With --sim, each row prints real and simulated side by side with z = (sim - real) / SE; rows with |z| >= 2 are
-// marked. --min hides rows with fewer answers (default 20) unless --all. Hands in test/exclude-hands.json are left out
+// marked. --match-seats keeps simulated hands of each table size in the real logs' proportions. --min hides rows with fewer answers (default 20) unless --all. Hands in test/exclude-hands.json are left out
 // of the real logs (loadHands).
 'use strict';
 const path = require('path');
@@ -94,7 +94,7 @@ function measure(hands, opts = {}) {
     const log = h.log.filter((x) => x.act);
     // live players by street: everyone dealt in, minus folds so far
     const folded = new Set();
-    let raisedPre = false, limpers = 0;
+    let raisedPre = false, limpers = 0, curSt = 'pre', inStreet = {};
     for (let i = 0; i < log.length; i++) {
       const x = log[i];
       if (x.act === 'sb' || x.act === 'bb') continue;
@@ -131,12 +131,18 @@ function measure(hands, opts = {}) {
           const a = y.act === 'fold' ? 'fold' : isRaise(y.act) ? 'raise' : y.act === 'call' ? 'call' : null;
           if (!a) continue;
           ans.push(a);
-          cnt(key, a);
+          // a raise is answered by players who already have chips in on the street (the bettor, callers) and by
+          // players who don't (cold); the two fold very differently
+          cnt(first ? key : key + (inStreet[y.who] ? ' (had bet or called)' : ' (cold)'), a);
           if (a === 'raise') break;
         }
         if (x.hero && ans.length === live - 1) cnt(key + ' everyone folded', ans.every((a) => a === 'fold') ? 'yes' : 'no');
       }
       if (x.act === 'fold') folded.add(x.who);
+      if (STREETS.includes(x.st)) {
+        if (x.st !== curSt) { curSt = x.st; inStreet = {}; }
+        if (x.amt > 0) inStreet[x.who] = true;
+      }
     }
     // D: shown strength at river showdowns, by the chips the shower put in
     if ((h.board || []).length === 5) {
@@ -230,7 +236,23 @@ if (require.main === module) {
   const realFiles = list('real'), simFiles = list('sim');
   if (!realFiles.length) { console.log('usage: node test/sim/table-check.js --real <logs...> [--sim <entries...>] [--seats 4|3+|2,3] [--min 20] [--all]'); process.exit(1); }
   const seats = opt('seats', null);
-  const real = measure(loadHands(realFiles, { quiet: true }), { seats });
-  const sim = simFiles.length ? measure(simFiles.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8'))), { seats, sim: true }) : null;
+  let realHands = loadHands(realFiles, { quiet: true });
+  let simHands = simFiles.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+  // --match-seats: keep simulated hands of each table size in the real logs' proportions (every k-th hand), so a
+  // pooled row mixes table sizes as the real one does.
+  if (args.includes('--match-seats') && simHands.length) {
+    const size = (h) => (h.players || []).length;
+    const rc = {}, sc = {};
+    for (const h of simHands) sc[size(h)] = (sc[size(h)] || 0) + 1;
+    realHands = realHands.filter((h) => sc[size(h)]); // real hands at table sizes the sim has
+    for (const h of realHands) if (h.players && h.players.some((p) => p.hero)) rc[size(h)] = (rc[size(h)] || 0) + 1;
+    const scale = Math.min(...Object.keys(sc).filter((k) => rc[k]).map((k) => sc[k] / rc[k]));
+    const keep = {}, seen = {};
+    for (const k of Object.keys(sc)) keep[k] = rc[k] ? (rc[k] * scale) / sc[k] : 0;
+    simHands = simHands.filter((h) => { const k = size(h); seen[k] = (seen[k] || 0) + keep[k]; if (seen[k] >= 1) { seen[k] -= 1; return true; } return false; });
+    console.log('sim hands by table size kept: ' + JSON.stringify(Object.fromEntries(Object.keys(sc).map((k) => [k, Math.round(sc[k] * keep[k])]))) + '; real ' + JSON.stringify(rc));
+  }
+  const real = measure(realHands, { seats });
+  const sim = simHands.length ? measure(simHands, { seats, sim: true }) : null;
   console.log(report(real, sim, { min: +opt('min', 20), all: args.includes('--all') }));
 }
