@@ -263,10 +263,17 @@ function slim(r) {
         return;
       }
       // The reads start over; the hand log stays.
-      tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.learnSeats(tracker.db.history);
+      tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.whoAsks = null; tracker.learnSeats(tracker.db.history);
       save(DB_KEY, tracker.db); render();
     }
     else if (what === 'links') { ui.showLinks = !ui.showLinks; linkNote = ''; save(UI_KEY, ui); render(); }
+    else if (what === 'whoNew') {
+      // "Who is this?" answered "Someone new": not asked about that account again.
+      var nid = a.getAttribute('data-id'), nname = tracker.namesOf(nid)[0] || 'That player';
+      tracker.markNew(nid);
+      linkNote = nname + ' reads as a new player. Link reads can still join them to an older read.';
+      render();
+    }
     else if (what === 'linkYes' || what === 'linkNo' || what === 'unlink') {
       var id = a.getAttribute('data-id'), to = a.getAttribute('data-to');
       if (what === 'linkYes') {
@@ -347,8 +354,7 @@ function slim(r) {
     return 'Reads from ' + ids.length + ' accounts (' + names.join(', ') + ')';
   }
   function linkAsksHtml() {
-    var asks = tracker.linkAsks, seen = tracker.db.seen || {}, html = '';
-    if (!asks) return '';
+    var asks = tracker.linkAsks || {}, seen = tracker.db.seen || {}, html = '';
     Object.keys(asks).forEach(function (k) {
       var a = asks[k];
       a.matches.forEach(function (m) {
@@ -357,6 +363,17 @@ function slim(r) {
           '<div class="row"><button class="btn" data-a="linkYes" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Same player</button> ' +
           '<button class="btn" data-a="linkNo" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Different players</button></div></div>';
       });
+    });
+    // "Who is this?": a new account with no same-name read, offered the players seen most recently who aren't at the
+    // table (tracker askWho). A tap joins the reads; nothing is joined before that.
+    var who = tracker.whoAsks || {};
+    Object.keys(who).forEach(function (k) {
+      var a = who[k];
+      html += '<div class="ask"><b>' + esc(a.name) + '</b> is on a new account. Who is this?<div class="row">' +
+        a.matches.map(function (m) {
+          return '<button class="btn" data-a="linkYes" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '" title="' + esc(readLabel(m)) + '">' + esc(m.names[0] || '?') + ' (' + handsTxt(m.hands) + ')</button> ';
+        }).join('') +
+        '<button class="btn" data-a="whoNew" data-id="' + esc(a.id) + '">Someone new</button></div></div>';
     });
     return html;
   }
@@ -403,7 +420,8 @@ function slim(r) {
     var fresh = advice && !advice.stale;
     var logDue = unexported() >= LOG_REMIND;
     var asking = tracker.linkAsks && Object.keys(tracker.linkAsks).length;
-    var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
+    var askingWho = !asking && tracker.whoAsks && Object.keys(tracker.whoAsks).length;
+    var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : askingWho ? '<span class="badge">who is this?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
     dot.className = 'dot' + (blocked ? '' : hookProblem ? ' bad' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
@@ -520,7 +538,7 @@ function slim(r) {
       else if (advice && !advice.stale) { advice.stale = true; render(); }
     } else if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
     else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
-    else if (type === 'linkAsk') render();
+    else if (type === 'linkAsk' || type === 'whoAsk') render();
   });
 
   // ---------- reading the game ----------

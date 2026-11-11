@@ -81,6 +81,29 @@ const fs = require('fs');
     const split = await text();
     console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT: ' + split.split('\n').find((l) => /Split:/.test(l)) : 'NOT SPLIT\n' + split);
   }
+  // WHO=1: the opponent plays 11 more hands (so their read has 10+), then a new account under another name sits in
+  // their seat. The panel asks "Who is this?" with the old read to tap; the harness taps it and checks the join.
+  if (process.env.WHO) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (sel) => page.evaluate((q) => document.getElementById('patio-solver-host').shadowRoot.querySelector(q).click(), sel);
+    const snap0 = msgs.find((m) => m.snap).snap;
+    const oppP = snap0.players.find((p) => p.authUserId !== snap0.heroAuthId);
+    const send = async (list, ms) => { for (const m of list) { await page.evaluate(x => window.postMessage(Object.assign({ source: 'patio-solver-hook' }, x), location.origin), m); await page.waitForTimeout(ms); } };
+    for (let k = 0; k < 11; k++) await send(msgs, 5);
+    const again = JSON.parse(JSON.stringify(msgs).split(`"authUserId":"${oppP.authUserId}"`).join('"authUserId":"WHO-ID"').split(`"name":"${oppP.name}"`).join('"name":"Newbie77"'));
+    const upTo = again.findIndex((m) => m.ev === 'game:stage_began' && m.data && m.data.stageType === 'set_blinds');
+    await send(again.slice(0, upTo + 1), 40);
+    await page.waitForTimeout(300);
+    const asked = await text();
+    console.log('--- new account, another name ---');
+    const line = asked.split('\n').find((l) => /Who is this/.test(l));
+    console.log(line && asked.includes(oppP.name + ' (') ? 'WHO ASKED: ' + line : 'WHO NOT ASKED\n' + asked);
+    await page.screenshot({ path: path.join(out, 'ext_who.png') });
+    await click('[data-a="linkYes"]');
+    await page.waitForTimeout(300);
+    const joined = await text();
+    console.log(/Reads joined/.test(joined) && !/Who is this/.test(joined) ? 'WHO JOINED: ' + joined.split('\n').find((l) => /Reads joined/.test(l)) : 'WHO NOT JOINED\n' + joined);
+  }
   // EXPORT=1: "Hand log" opens the export list; "New hands" downloads the hands since the last
   // export (here every replayed hand), one per line; a session's button downloads that session.
   if (process.env.EXPORT) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.40
+// @version      1.8.41
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -7684,6 +7684,9 @@ ENGINE();
   // Names a site could hand out to many people (none seen at Marwin's tables yet): never matched.
   const GENERIC_NAME = /^(guest|player|user|anonymous|anon)[\s_#-]*\d*$/;
   const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+  // "Who is this?" (audit 10 Nov, finding 7): an account the reads have seen for under `hands` hands, with no same-name
+  // read to ask about, is offered the `max` most recently seen players with `minHands`+ hands who are not at the table.
+  const WHO = { hands: 10, minHands: 10, max: 8 };
 
   const STREET_BY_STAGE = { pre_flop: 0, flop: 3, turn: 4, river: 5 };
   const STREET_KEY = { 0: 'pre', 3: 'flop', 4: 'turn', 5: 'river' };
@@ -7839,6 +7842,47 @@ ENGINE();
       return asks;
     }
 
+    // "Who is this?" at each new hand: a new account (its own hands under WHO.hands, not linked, no same-name question,
+    // not answered "someone new") gets the known players who could be it: the most recently seen with WHO.minHands+
+    // hands, not dealt into this hand, never at a table with it and not answered "different players". Kept in
+    // `whoAsks` for the panel; 'whoAsk' fires when the list changes. Nothing is joined before Marwin picks one (7 Nov:
+    // all four friends sat down on new accounts and were linked by hand at hands 5 and 6, so their first hands read
+    // them as strangers).
+    askWho(dealt, heroId) {
+      const W = Object.assign({}, WHO, this.whoOpts || {});
+      const asks = {};
+      const newOk = this.db.newOk || {};
+      const dealtIds = new Set(dealt.map((p) => p.authUserId));
+      let groups = null;
+      for (const p of dealt) {
+        const id = p.authUserId;
+        if (!id || id === heroId || newOk[id] || (this.linkAsks && this.linkAsks[id])) continue;
+        const mine = this.groupOf(id);
+        if (mine.length > 1) continue;
+        const own = this.db.players[id] && this.db.players[id].tally;
+        const n = own ? (own.pfFold || 0) + (own.pfCall || 0) + (own.pfRaise || 0) : 0;
+        if (n >= W.hands) continue;
+        groups = groups || this.readGroups();
+        const m = groups.filter((g) => g.hands >= W.minHands && !g.ids.some((k) => dealtIds.has(k) || k === heroId) && !this.groupsApart(mine, g.ids))
+          .slice(0, W.max);
+        if (m.length) asks[id] = { id, name: p.name, matches: m };
+      }
+      const key = (a) => Object.keys(a).sort().map((k) => k + ':' + a[k].matches.map((x) => x.id).join(',')).join(';');
+      const changed = key(asks) !== key(this.whoAsks || {});
+      this.whoAsks = asks;
+      if (changed) this.emit('whoAsk', asks);
+      return asks;
+    }
+
+    // "Someone new" to "Who is this?": that account isn't asked about again (Link reads still joins it by hand).
+    markNew(id) {
+      const ok = this.db.newOk || (this.db.newOk = {});
+      ok[id] = this.now();
+      if (this.whoAsks) delete this.whoAsks[id];
+      this.emit('save', this.db);
+      return true;
+    }
+
     // "Different players": id and that read are never suggested together again.
     refuseLink(a, b) {
       const ns = this.db.notSame || (this.db.notSame = {});
@@ -7874,6 +7918,7 @@ ENGINE();
       for (const y of B) if (!this.db.players[y]) this.record(y, this.namesOf(y)[0]);
       this.joinGroups([B, A]);
       if (this.linkAsks) for (const x of this.groupOf(a)) delete this.linkAsks[x];
+      if (this.whoAsks) for (const x of this.groupOf(a)) delete this.whoAsks[x];
       const log = this.db.linkLog || (this.db.linkLog = []);
       log.push({ t: this.now(), id: a, name: this.namesOf(a)[0], ids: this.groupOf(a).slice() });
       if (log.length > 50) log.splice(0, log.length - 50);
@@ -7975,6 +8020,7 @@ ENGINE();
       if (this.linkReads !== false) {
         this.noteSeats(dealt.map((p) => p.authUserId), dealt.map((p) => p.name), this.now());
         this.askLinks(dealt, s.heroAuthId);
+        this.askWho(dealt, s.heroAuthId);
       }
       // Counts shrink for every id of a player dealt in (linked ids together), once a hand.
       const decayed = new Set();
@@ -9172,6 +9218,7 @@ ENGINE();
   PatioTracker.predSummary = predSummary;
   PatioTracker.blankTally = blankTally;
   PatioTracker.DECAY = DECAY;
+  PatioTracker.WHO = WHO;
   PatioTracker.MAX_HISTORY = MAX_HISTORY;
   PatioTracker.RAW_KEEP = RAW_KEEP;
   PatioTracker.accuracySummary = accuracySummary;
@@ -9448,10 +9495,17 @@ function slim(r) {
         return;
       }
       // The reads start over; the hand log stays.
-      tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.learnSeats(tracker.db.history);
+      tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.whoAsks = null; tracker.learnSeats(tracker.db.history);
       save(DB_KEY, tracker.db); render();
     }
     else if (what === 'links') { ui.showLinks = !ui.showLinks; linkNote = ''; save(UI_KEY, ui); render(); }
+    else if (what === 'whoNew') {
+      // "Who is this?" answered "Someone new": not asked about that account again.
+      var nid = a.getAttribute('data-id'), nname = tracker.namesOf(nid)[0] || 'That player';
+      tracker.markNew(nid);
+      linkNote = nname + ' reads as a new player. Link reads can still join them to an older read.';
+      render();
+    }
     else if (what === 'linkYes' || what === 'linkNo' || what === 'unlink') {
       var id = a.getAttribute('data-id'), to = a.getAttribute('data-to');
       if (what === 'linkYes') {
@@ -9532,8 +9586,7 @@ function slim(r) {
     return 'Reads from ' + ids.length + ' accounts (' + names.join(', ') + ')';
   }
   function linkAsksHtml() {
-    var asks = tracker.linkAsks, seen = tracker.db.seen || {}, html = '';
-    if (!asks) return '';
+    var asks = tracker.linkAsks || {}, seen = tracker.db.seen || {}, html = '';
     Object.keys(asks).forEach(function (k) {
       var a = asks[k];
       a.matches.forEach(function (m) {
@@ -9542,6 +9595,17 @@ function slim(r) {
           '<div class="row"><button class="btn" data-a="linkYes" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Same player</button> ' +
           '<button class="btn" data-a="linkNo" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '">Different players</button></div></div>';
       });
+    });
+    // "Who is this?": a new account with no same-name read, offered the players seen most recently who aren't at the
+    // table (tracker askWho). A tap joins the reads; nothing is joined before that.
+    var who = tracker.whoAsks || {};
+    Object.keys(who).forEach(function (k) {
+      var a = who[k];
+      html += '<div class="ask"><b>' + esc(a.name) + '</b> is on a new account. Who is this?<div class="row">' +
+        a.matches.map(function (m) {
+          return '<button class="btn" data-a="linkYes" data-id="' + esc(a.id) + '" data-to="' + esc(m.id) + '" title="' + esc(readLabel(m)) + '">' + esc(m.names[0] || '?') + ' (' + handsTxt(m.hands) + ')</button> ';
+        }).join('') +
+        '<button class="btn" data-a="whoNew" data-id="' + esc(a.id) + '">Someone new</button></div></div>';
     });
     return html;
   }
@@ -9588,7 +9652,8 @@ function slim(r) {
     var fresh = advice && !advice.stale;
     var logDue = unexported() >= LOG_REMIND;
     var asking = tracker.linkAsks && Object.keys(tracker.linkAsks).length;
-    var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
+    var askingWho = !asking && tracker.whoAsks && Object.keys(tracker.whoAsks).length;
+    var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : askingWho ? '<span class="badge">who is this?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
     dot.className = 'dot' + (blocked ? '' : hookProblem ? ' bad' : (fresh || thinking) ? ' turn' : tracker.snap ? ' live' : '');
     chev.textContent = ui.expanded ? '▴' : '▾';
     panel.classList.toggle('stale', !!(advice && advice.stale));
@@ -9705,7 +9770,7 @@ function slim(r) {
       else if (advice && !advice.stale) { advice.stale = true; render(); }
     } else if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
     else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
-    else if (type === 'linkAsk') render();
+    else if (type === 'linkAsk' || type === 'whoAsk') render();
   });
 
   // ---------- reading the game ----------

@@ -712,6 +712,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   of both name and id) or splits them. Import passes the links into `rebuildReads` and takes them back
   (`absorbLinks`). `tracker.linkReads = false` turns the seat notes and questions off. On the 31 Oct - 2 Nov logs
   replayed in order it asks exactly twice: Dew666 (1 Nov) and Jagger (2 Nov).
+  "Who is this?" (v1.8.41, audit 10 Nov finding 7; `askWho`, `tracker.whoAsks`, `PatioTracker.WHO` {hands 10,
+  minHands 10, max 8}; `tracker.whoOpts` replaces them): a player dealt in whose own read has under 10 hands, isn't
+  linked, has no same-name question open and wasn't marked new is offered up to 8 known players (10+ hands, newest
+  first) who aren't at the table and were never dealt into a hand with them. Tapping one links the reads (`link`);
+  "Someone new" (`markNew`, `db.newOk`) stops the question for that account. Same-name matches keep the old
+  question. It asks for nothing that changes the advice without a tap, and `linkReads = false` turns it off too.
 - Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
 - Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
   preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does
