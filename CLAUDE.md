@@ -442,6 +442,14 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   3-handed, early 53-55 -> 41-42% 4-handed) and smaller (button 4.4 -> 2.9bb 3-handed, early 4.6 -> 2.8bb 4-handed); in
   two of the runs most of the loss is later drift (hands with the same preflop that part afterwards). The tilt stays.
   Files: sims/2026-11-08-untilt14/, scripts/2026-11-08-untilt14/.
+  Fourth look (11 Nov, on v14r, whose bots answer hero's first preflop raise as the friends do pooled over table sizes):
+  the two-player rule at every table size (B `{"pendingTilt":false,"pfLimpCurve":true}` vs main), live, 1,000 deals each,
+  two-stage rule (a confirmation batch on fresh seeds only if the screening pools above +1 SE): 3-handed -9.9 ± 28.5
+  (seed 11301) and -17.5 ± 35.0 (11302), 4-handed -29.3 ± 31.6 (11303) and -14.4 ± 26.4 (11304); pooled about -17 ± 15,
+  so no confirmation. B opens less from early seats and the button (4-handed early 38 -> 27%, button 70 -> 63%) and
+  defends the big blind more (51/30 -> 66/43 VPIP/PFR); the big blind and weak hands lose most (-33.4 ± 15.2 and
+  -23.7 ± 11.4 in 11304). v14r's 4-handed bots fold to hero's 3.5-5bb opens less than the friends (0.62 against 0.79),
+  which favours B, so bots that match there wouldn't turn it. Files: sims/2026-11-11-pfpkg/.
 - Two-player tables preflop (v1.8.35, `input.pfHeadsUp: false` is the v1.8.34 rule): when the hand is dealt to two
   players (`input.seats`), players yet to act keep their read untilted (pendingTilt false) and a limper facing hero's raise
   answers from the size curve (pfLimpCurve on); an explicit `input.pendingTilt` / `input.pfLimpCurve` wins. Bigger tables
@@ -1178,6 +1186,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   per-player slope learns from showdowns only (`CHIP_TILT.sd`: shows after everyone folded are the player's pick; those
   118 fit a slope of 0.23); 10 Nov reads: Dew345 0.097 (43 big-pot showdowns), mwe 0.133 (26), Mark 0.154 (23). Files:
   sims/2026-11-10-chiptilt/.
+  Other depths (11 Nov, audit 10 Nov finding 5: run.js plays 150bb every hand, while Marwin's effective stack has a
+  median of 111bb, 13% of hands under 40bb and 21% over 175bb). The same A/B, v12r regulars as above, live budget, 1,000
+  deals each, `--stack` 60 and 300 (rule set before the runs: it stays on unless the pool is below -1 SE): heads-up 60bb
+  -0.4 ± 13.2 (seed 11203), 300bb -20.2 ± 44.0 (11204); 4-handed 60bb +12.2 ± 14.3 (11201), 300bb +41.1 ± 46.0 (11202).
+  Pooled about +6 ± 9 (60bb +5 ± 10, 300bb +9 ± 32), so it stays on. Main's own result grows with depth: heads-up 150 /
+  238 / 306 bb/100 at 60 / 150 / 300bb, 4-handed 165 / 279 / 416. So the simulator shows none of the logs' deep-stack
+  loss (-705bb over 170 hands at 200-350bb effective, about 1.4 SE below zero). No stack profile was added, because depth
+  moved the level and not this A/B. For a change aimed at deep stacks or big pots, add a `--stack 300` pair. Files:
+  sims/2026-11-11-depth/.
 - Not built (11 Nov, audit 10 Nov finding 3): a "facing hero" level in the read's fold fits, per player and shrunk to a
   group level, to replace the hero-only fold constants. First answers after the flop to 10 Nov (1,991, 825 to hero's
   bets; predictAction from earlier hands, scored sequentially): the read is off by the same amount against hero as

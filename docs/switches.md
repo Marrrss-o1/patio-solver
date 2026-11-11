@@ -22,8 +22,8 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `pfFlopEdge` | 0.06 | v1.8.13 | TD audit 4 Nov (opens +4.7 ± 1.2bb, n 86); sim 12 runs about +44 ± 7 | the flop-edge ledger (audit 10 Nov: added hands won about nothing at the table; 84 of 200 hands) |
 | `pfFlopEdgeMw` | 0.10 | v1.8.32 | TD multiway raises +3.18 ± 0.96bb; sim 0.10 vs 0.06 about +45 ± 16. 0.14 (v1.8.36-38) pooled +10 ± 11 over eight runs, so back to 0.10 | measured flop values at the leaves (audit finding 8) |
 | `pfFlopEdgeAggr`, `pfFlopEdgeAggrHU` | unset | sim only | raise-or-fold edge: about -8 ± 18 | |
-| `pendingTilt` | on at 3+ handed, off heads-up (`pfHeadsUp`) | | off at 3+ handed: -9 ± 17 (6 Nov), -27 ± 15 (8 Nov). Off fits the logs better (10.8 nats, 240 raises) | a sim that matches the friends' folds to hero's opens (table check row C) |
-| `pfLimpCurve` | off at 3+ handed, on heads-up (`pfHeadsUp`) | v1.8.24 (off v1.8.26) | logs: limpers' folds by raise size, -222.5 to -180.1; sim five runs +8.2 ± 9.8, 4-handed about -13 ± 15 | as pendingTilt |
+| `pendingTilt` | on at 3+ handed, off heads-up (`pfHeadsUp`) | | off at 3+ handed: -9 ± 17 (6 Nov), -27 ± 15 (8 Nov); with pfLimpCurve on v14r -17 ± 15 (11 Nov). Off fits the logs better (10.8 nats, 240 raises) | |
+| `pfLimpCurve` | off at 3+ handed, on heads-up (`pfHeadsUp`) | v1.8.24 (off v1.8.26) | logs: limpers' folds by raise size, -222.5 to -180.1; sim five runs +8.2 ± 9.8, 4-handed about -13 ± 15; with pendingTilt off on v14r -17 ± 15 (11 Nov) | |
 | `pfHeadsUp` | on | v1.8.35 | logs two-player tables: -176.1 to -139.1 (n 229); sim about +1 ± 16 (bots don't have Mark's habit) | |
 | `vsOpenSplit` | off | v1.8.20 | reads-bench vs-open 0.932 to 0.923; sim neutral (+1.0 ± 2.3; v12 +8 ± 15) | more friends facing 8bb+ opens |
 | `pfBigRaise` | on (heads-up only, `pfRaiseHUOnly`, up to `pfRaiseCapBB` 30) | v1.8.6 | sim +5.1 ± 3.9 heads-up; the multiway part isn't trusted | |
@@ -42,7 +42,7 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 
 | switch | default | since | decided on | would change it |
 | --- | --- | --- | --- | --- |
-| `chipTilt` | on, per player (`CHIP_TILT` slope 0.14) | v1.8.40 | shows: +20.2 nats over the narrow tilts (778); sim no-loss, about +12 ± 11 | shown hands in big pots; replaces the three below |
+| `chipTilt` | on, per player (`CHIP_TILT` slope 0.14) | v1.8.40 | shows: +20.2 nats over the narrow tilts (778); sim no-loss, about +12 ± 11; at 60bb and 300bb about +6 ± 9 | shown hands in big pots; replaces the three below |
 | `heroPotTilt` | replaced by chipTilt | v1.8.9 (per player v1.8.32) | logs: shows in hero's pots at 0.74 (n 23); sim -4 ± 5 on bots that don't trap | only with `chipTilt: false` |
 | `overbetTilt` | replaced by chipTilt | v1.8.14 | logs: 9 shown 3x+ river bets at 0.68 | only with `chipTilt: false` |
 | `riverRaiseTilt` | replaced by chipTilt | v1.8.19 (per player v1.8.32) | logs: 21 shown river raises at 0.64-0.69 | only with `chipTilt: false` |
