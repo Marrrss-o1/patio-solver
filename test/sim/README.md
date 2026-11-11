@@ -6,7 +6,7 @@ for measuring changes (those two still work and are left as they were).
 
 ```
 node test/sim/run.js --hands 2000 --players 4 --bots friends                  # solver vs bots fitted to Marwin's friends
-BOTPROFILES=test/sim/profiles-v12r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
+BOTPROFILES=test/sim/profiles-v14r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the main check: the regulars, live budget
 node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the same, with the budget Marwin plays
@@ -269,7 +269,8 @@ bots, seed and block size), so a third arm can be added later without replaying 
   checked-to-before-the-raiser habit covers. Plain bot-against-bot play is otherwise v11's; the view the bots see now
   has `prevAgg` (the street before's last bettor or raiser) and `prevAggActed`. Files: sims/2026-11-05-v10bots/v12/ in
   the project folder.
-* Regulars only, v12r (5 Nov; `BOTPROFILES=test/sim/profiles-v12r.json`): **the main check for solver changes.** The
+* Regulars only, v12r (5 Nov; `BOTPROFILES=test/sim/profiles-v12r.json`): the main check for solver changes from 5 to 11
+  Nov (v14r since). The
   seven regulars Marwin usually plays, one bot each (v12's profiles; for a regular seen under several names, the
   profile with the most hands): f1, f2, f3, f4, f5, f11, f23, plus `pool` and `hero`. v12's 24 profiles include 8
   one-session players and several profiles for one account (one regular has five). Regulars were matched by the
@@ -320,6 +321,27 @@ bots, seed and block size), so a third arm can be added later without replaying 
   little to big ones), so it is the bots' size answer, not a hero read. Hero's river bets are one row (heads-up and
   multiway together, as heroRiverAbs answers them). Cells with under 20 real answers stay at 0 (raises over limpers to
   2.5bb or 8bb+, opens to 8bb+), and re-raises of raises to 8bb+ at 1 (0 of 21, too few to tell).
+  Live-budget table check (11 Nov; cloud runs of main 4fd2e98, 2,000-5,000 hands at each of 2-5 handed, seeds
+  11101-11104; `table-check.js --match-seats` against all logs to 10 Nov). Rows off by 2 SE or more: pooled 47 on v12r
+  -> 23 on v14r; heads-up 28 -> 17, 3-handed 30 -> 28 (327 real hands, mostly tiny rows), 4-handed 36 -> 24, 5-handed
+  24 -> 23. Hero's result in the simulator (raw, not luck-corrected; the logs are the friends) came down from 2.92 to
+  1.89 bb a hand, against 0.82 ± 0.67 at the table. So the bots now give away about a third less after the flop, and
+  the gap is inside 1.4 SE (it was 2.7 SE).
+  Still off on v14r:
+  - Hero's turn bets come back 3.56 ± 0.60 bb below their EV in the simulator, against +1.18 ± 1.15 at the table, and
+    his turn checks -1.93 against +0.78. Flop checks are the other way: +1.70 against +0.28.
+  - The advised EV at the first decision is 1.02 bb a hand against 0.60. The solver reads the bots as softer than the
+    friends before the flop.
+  - The bots raise hero's 45-85% multiway flop bets 8% of the time (friends 2%, n 60).
+  - Bettors facing hero's heads-up flop raise fold 30% (friends 6%, n 17).
+  - Bettors facing his river raise fold 23% (friends 60%, n 10).
+  - Shown strength is flatter by chips in than the friends': 7-20bb 0.65 against 0.61, 50bb+ 0.76 against 0.80.
+  - By table size, the folds to hero's 3.5-5bb opens still miss: heads-up 0.58 against 0.38 (n 58), 4-handed 0.32
+    against 0.58 (n 19). 3-handed is on target (0.354 against 0.354, n 48). The shifts are one set for every table
+    size.
+  v14r is the main check for solver changes from 11 Nov, and v12r is the second look. A change whose effect runs
+  through one of the rows above (turn betting, the heads-up preflop answers) is still decided on the logs. Files:
+  /mnt/project-files/patio-solver/sims/2026-11-11-tablecheck/ (cmp-v12r-*.txt; v14r/cmp-*.txt).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that

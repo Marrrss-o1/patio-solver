@@ -78,15 +78,17 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # --budget live (the computer's full solve: phone budget + turn solver at 100 iterations)
                          # and --budget phone: judge every solver change at live, and run both for any change
                          # touching flops or turns. The default (3,000 Monte Carlo, 120 river) is for quick checks.
-                         # Main check for solver changes (since 5 Nov): BOTPROFILES=test/sim/profiles-v12r.json,
+                         # Main check for solver changes from 5 to 11 Nov: BOTPROFILES=test/sim/profiles-v12r.json,
                          # the regulars Marwin usually plays (one bot per regular account, v12 habits).
                          # profiles-v13r.json (v12r with heroRiverFloor: answers to hero's river bets by made-hand
                          # strength) is closer to the friends' heads-up folds to hero's river bets and further from
                          # their 3-4-handed ones (test/sim/README.md); a second look, not the yardstick.
                          # profiles-v14r.json (11 Nov): v12r with the answers to bets (by size, heads-up or multiway,
                          # hero's or anyone's) and to Marwin's first preflop raises (by raise-to) fitted to the logs
-                         # (test/sim/fit-v14.js from BOT_DUMP decisions); a candidate yardstick until its live-budget
-                         # table check is in.
+                         # (test/sim/fit-v14.js from BOT_DUMP decisions). THE MAIN CHECK since 11 Nov (live table
+                         # check: rows off 47 -> 23, hero's sim result 2.92 -> 1.89 bb a hand, the table 0.82);
+                         # v12r is the second look. Rows v14r still misses (turn TD, heads-up preflop answers):
+                         # test/sim/README.md, v14r.
 node test/sim/table-check.js --real <logs> --sim <entries.json...> [--match-seats]
                          # the rows a bot set must match (answers to bets and raises, preflop raises, shown strength
                          # by chips in, TD by street, result), real and simulated side by side with z; the sim side is
@@ -119,7 +121,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 
 ## Known gaps / ideas
 
-- Merge bar (Marwin, 5 Nov): a change goes in switched on when it wins in the simulator (v12r regulars) with npm test
+- Merge bar (Marwin, 5 Nov): a change goes in switched on when it wins in the simulator (the regulars: v14r since 11 Nov, v12r before) with npm test
   passing. A fix the simulator can't judge (the bots don't have the habit it reads) is decided on the logs and how the
   group plays: on if the log evidence is clear and the simulator shows no real loss (checkBetTilt, mwBetFold, bigRaiseRange).
   Per player (Marwin, 5 Nov: "never ever generalise, everything has to be player specific, unless data is insufficient"):
