@@ -82,6 +82,15 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # profiles-v13r.json (v12r with heroRiverFloor: answers to hero's river bets by made-hand
                          # strength) is closer to the friends' heads-up folds to hero's river bets and further from
                          # their 3-4-handed ones (test/sim/README.md); a second look, not the yardstick.
+                         # profiles-v14r.json (11 Nov): v12r with the answers to bets (by size, heads-up or multiway,
+                         # hero's or anyone's) and to Marwin's first preflop raises (by raise-to) fitted to the logs
+                         # (test/sim/fit-v14.js from BOT_DUMP decisions); a candidate yardstick until its live-budget
+                         # table check is in.
+node test/sim/table-check.js --real <logs> --sim <entries.json...> [--match-seats]
+                         # the rows a bot set must match (answers to bets and raises, preflop raises, shown strength
+                         # by chips in, TD by street, result), real and simulated side by side with z; the sim side is
+                         # fold-cal.js --entries. Hands in test/exclude-hands.json (deliberate plays, e.g. 10 Nov #24,
+                         # Marwin giving chips away) are left out of every log tool (loadHands; merge-logs.js --keep-excluded keeps them).
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
 node test/merge-logs.js <out.json> <exports or folders...>  # one merged log: each hand once, fuller copy kept
                          # (exports since v1.8.21 hold only new hands; every log tool below takes several

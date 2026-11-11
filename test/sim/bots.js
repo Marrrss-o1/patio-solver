@@ -322,7 +322,22 @@ const HOME_DEFAULT = {
   jam: 0, jamK: 1.52, jamTop: 0.7, jamMax: 0.3,        // v10: wide all-in re-raises over one raise, by stack depth (0: off)
   heroHuCut: 0,                                       // v11: heads-up flop and turn answers to hero's bets fold more (0: off)
   leadHu: null,                                       // v12: [flop, turn] scale on heads-up leads into the aggressor (null: off)
+  // v14 (table check, 11 Nov; null / 1: off). cutShift: answers to a first bet after the flop move the continue cut by
+  // { hero | others: { hu | mw: [under 45%, 45-85%, 85%+ of the pot] } }, by who bet, heads-up or multiway at the bet and
+  // the bet's size. riverAbsShift: the same by size for the heroRiverAbs threshold (hero's river bets). heroRR: preflop
+  // re-raise share x this facing a raise by the hero seat (a number, or one per raise-to bucket: up to 2.5bb, 3.5, 5, 8,
+  // more). pfContShift: { open | limp: [same buckets] } added to the continuing share facing hero's first raise.
+  // Friends re-raise Marwin's raises about half as often as each other's, less the bigger he raises, fold to his
+  // min-raises as often as to his big ones, and answer his bets by size in a shape the v12r bots don't have
+  // (test/sim/table-check.js; fitted by test/sim/fit-v14.js).
+  cutShift: null, riverAbsShift: null, heroRR: 1, pfContShift: null,
 };
+// BOT_DUMP=<file>: one JSON line per bot answer to a first bet after the flop and per answer to a preflop raise, with
+// what decided it, so the v14 shifts can be fitted offline (test/sim/fit-v14.js).
+const BOT_DUMP = process.env.BOT_DUMP || null;
+const dump = (o) => { if (BOT_DUMP) require('fs').appendFileSync(BOT_DUMP, JSON.stringify(o) + '\n'); };
+const sizeBucket = (f) => (f < 0.45 ? 0 : f < 0.85 ? 1 : 2);
+const pfBucket = (toBB) => (toBB <= 2.5 ? 0 : toBB <= 3.5 ? 1 : toBB <= 5 ? 2 : toBB <= 8 ? 3 : 4);
 const SIZES = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5];
 // With a wide spread (sizeSd above 0.45, as the real friends bet) the grid reaches tiny bets and 2x overbets too.
 const SIZES_WIDE = [0.08, 0.12, 0.18, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2];
@@ -380,7 +395,16 @@ function homeBot(params) {
         else if (!big && v.limped) cont = P.limpCont * Math.min(0.97, P.vpip * pm) * Math.pow(3 / Math.max(2, raiseBB), P.contElast);
         else if (!big && v.put > (v.pos === 'blinds' ? bb : 0) && v.seq.pre.length) cont = Math.max(cont, 0.85 * P.vpip * pm);
         cont = clamp(cont, 0.02, 0.97);
-        const tb = clamp(P.threeBet * Math.pow(P.rrDecay, v.raises - 1), 0.003, cont);
+        // v14: hero's first raise (an open, or a raise over limpers) by its raise-to (pfBucket): the continuing share
+        // moves by pfContShift.{open|limp}[bucket], the re-raise share x heroRR (a number, or one per bucket).
+        const vsHero = v.lastAgg === v.heroSeat;
+        const pb = pfBucket(raiseBB);
+        if (P.pfContShift && vsHero && v.raises === 1) {
+          const row = P.pfContShift[v.limpers > 0 ? 'limp' : 'open'];
+          if (row && row[pb]) cont = clamp(cont + row[pb], 0.02, 0.97);
+        }
+        const hrr = !vsHero ? 1 : Array.isArray(P.heroRR) ? (P.heroRR[pb] != null ? P.heroRR[pb] : 1) : P.heroRR;
+        const tb = clamp(P.threeBet * Math.pow(P.rrDecay, v.raises - 1) * hrr, 0.003, cont);
         // v10 jams (jam > 0): facing one raise, all-in with a share J of the spots, from the hands between their re-raise
         // range and jamTop x VPIP; the usual re-raises shrink by J, so they re-raise about as often in all (logs: 8 of 649
         // first raises faced were jammed, mostly from short stacks, shown hands at class rank 0.24-0.64, while the other
@@ -388,6 +412,7 @@ function homeBot(params) {
         const J = P.jam > 0 && v.raises === 1 && allinTo > v.cur ? Math.min(P.jamMax, P.jam * Math.pow(40 / Math.max(5, (v.stack + v.put) / bb), P.jamK)) : 0;
         const tbN = J > 0 ? Math.max(0.003, tb - J) : tb;
         const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tbN - pct) / (w * 0.7)));
+        if (BOT_DUMP && v.real && v.raises === 1) dump({ pf: 1, hero: vsHero ? 1 : 0, toBB: raiseBB, pb, limpers: v.limpers, pct, w, pCont, tb0: P.threeBet * hrr, cont, J });
         const out = [];
         if (v.raises < 8) {
           const minTo = v.cur + v.lastRaise;
@@ -466,10 +491,23 @@ function homeBot(params) {
       // Marwin's heads-up flop and turn bets 46% (n 110), about as the read says, and to each other's 41% (n 187); v10
       // bots facing the solver's folded 33% (n 1,191) where its read said 43%; with 0.12, 43% against 46%.
       if (P.heroHuCut && (v.street === 3 || v.street === 4) && v.nOpp === 1 && v.raises === 1 && v.lastAgg === v.heroSeat) tc += P.heroHuCut;
-      let pCont = sig((hpC - tc) / (P.wc * (hpNow ? P.hpWc : 1)));
+      // v14: by who bet, heads-up or multiway when the bet was made, and its size (a first bet only)
+      const first = v.raises === 1 && v.potAtStreet > 0;
+      const huAtBet = v.nLive + (v.foldsNow || 0) === 2;
+      const bkt = first ? sizeBucket(v.cur / v.potAtStreet) : -1;
+      const byHero = v.lastAgg === v.heroSeat;
+      if (P.cutShift && first) {
+        const cs = P.cutShift[byHero ? 'hero' : 'others'];
+        const row = cs && cs[huAtBet ? 'hu' : 'mw'];
+        if (row) tc += row[bkt] || 0;
+      }
+      const wcEff = P.wc * (hpNow ? P.hpWc : 1);
+      let pCont = sig((hpC - tc) / wcEff);
       const dc = P.drawCall * (hpNow ? P.hpDraw : 1);
-      if (strongDraw) pCont = Math.max(pCont, f <= 1 ? dc : dc / 2);
-      else if (weakDraw) pCont = Math.max(pCont, f <= 0.5 ? dc / 2 : 0.1 * (hpNow ? P.hpDraw : 1));
+      let floor = 0;
+      if (strongDraw) floor = f <= 1 ? dc : dc / 2;
+      else if (weakDraw) floor = f <= 0.5 ? dc / 2 : 0.1 * (hpNow ? P.hpDraw : 1);
+      pCont = Math.max(pCont, floor);
       // Part of their stack already in: fold odds x exp(commit x share in) (friends: about -1.8, see READ_PRIORS.home.commitFold).
       if (P.commit && v.put > 0) {
         const c = v.put / Math.max(1e-9, v.put + v.stack), fo = clamp(1 - pCont, 1e-4, 1 - 1e-4), m = Math.exp(P.commit * c);
@@ -482,14 +520,19 @@ function homeBot(params) {
       // v13 (heroRiverFloor 1): a floor only. With the pure rule the bots fold 51% to hero's heads-up river bets where the
       // friends fold 36% (n 72, all logs to 5 Nov; the made-call read says 36%): weak hands at the top of a weak range
       // fold although the friends call with them as read.
+      let abs = null;
       if (P.heroRiverAbs && v.street === 5 && v.lastAgg === v.heroSeat && (!P.heroRiverHU || v.nOpp === 1)) {
-        const abs = sig((hp - P.heroRiverAbs) / (P.heroRiverW || 0.02));
+        const shift = P.riverAbsShift && bkt >= 0 ? P.riverAbsShift[bkt] || 0 : 0;
+        abs = sig((hp - P.heroRiverAbs - shift) / (P.heroRiverW || 0.02));
         pCont = P.heroRiverFloor ? Math.max(pCont, abs) : abs;
       }
       const reR = P.reRaise !== 1 && (v.seq[STREET_OF[v.street]] || []).some((x) => x === 'bet' || x === 'raise') ? P.reRaise : 1;
       const pRv = v.raises < 4 ? Math.min(pCont, reR * P.raiseProb * sig((hpC - (P.raise[si] + P.mw * k)) / (P.w * 0.6))) : 0;
       const pRb = v.raises < 3 ? reR * P.bluffRaise * (strongDraw ? 2 : air ? 1 : 0.5) : 0;
       const pRaise = pRv + (1 - pCont) * pRb;
+      if (BOT_DUMP && v.real && first) dump({ st: v.street, hero: byHero ? 1 : 0, hu: huAtBet ? 1 : 0, b: bkt, hpC, hp, tc, wc: wcEff, floor, commit: P.commit && v.put > 0 ? P.commit * v.put / Math.max(1e-9, v.put + v.stack) : 0,
+        abs: abs != null ? 1 : 0, absT: abs != null ? P.heroRiverAbs + (P.riverAbsShift && bkt >= 0 ? P.riverAbsShift[bkt] || 0 : 0) : null, absW: P.heroRiverW || 0.02, absFloor: P.heroRiverFloor ? 1 : 0,
+        pRb, pRv, pCont });
       const to = Math.round(v.cur * P.raiseX);
       const out = [{ t: 'call', p: pCont - pRv }, { t: 'fold', p: (1 - pCont) * (1 - pRb) }];
       // Raise sizes: min-raises, all-ins and bigger raises in the friends' mix (the old bots: always raiseX).

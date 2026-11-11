@@ -215,7 +215,7 @@ function playBlock(cfg, block) {
     for (let w = 0; w < cfg.warm; w++) {
       const dl = deal(block * 100000 + w, 0, 31337);
       onHand(w);
-      playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [warmHero].concat(botSets[0]), hero: 0, names: NAMES, uidBase: 1000,
+      playHand(Object.assign({ n, stacks, sb: cfg.sb, bb: cfg.bb, seats: [warmHero].concat(botSets[0]), hero: 0, names: NAMES, uidBase: 1000, warm: true,
         emit: listeners.length ? (ev, data, snapFn) => { const s = snapFn(); for (const h of listeners) h.tracker.handle(ev, data, s); } : null,
         watchers: allWatchers }, dl));
     }
