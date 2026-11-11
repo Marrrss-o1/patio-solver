@@ -1175,6 +1175,17 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   per-player slope learns from showdowns only (`CHIP_TILT.sd`: shows after everyone folded are the player's pick; those
   118 fit a slope of 0.23); 10 Nov reads: Dew345 0.097 (43 big-pot showdowns), mwe 0.133 (26), Mark 0.154 (23). Files:
   sims/2026-11-10-chiptilt/.
+- Not built (11 Nov, audit 10 Nov finding 3): a "facing hero" level in the read's fold fits, per player and shrunk to a
+  group level, to replace the hero-only fold constants. First answers after the flop to 10 Nov (1,991, 825 to hero's
+  bets; predictAction from earlier hands, scored sequentially): the read is off by the same amount against hero as
+  against each other (heads-up 0.357 folded vs 0.395 read, n 635; each other's 0.419 vs 0.461, n 661). On hero's
+  answers the read scores -527.2 nats, plain heads-up/multiway intercepts -526.4, facing-hero terms -527.7, a per-player
+  facing-hero effect -533.9 to -544.1 (tau 0.3-1). What differs is ranking: within 25-45% pot the read separates
+  friends' heads-up answers to each other (-61.2 vs -71.9 for a constant, n 116), not to hero (-163.1 vs -164.8, n
+  280). On 484 heads-up hero bets the solver with the constants scores -303.1, the read -308.0, a size-only curve
+  -307.0 (flop and turn the solver best, river the size curve). So the constants correct the solver's own additions
+  (credibility, multiway Monte Carlo, river ranking), not a habit the read misses. Files:
+  /mnt/project-files/patio-solver/scripts/2026-11-11-facehero/ (README.md).
 - Tried and dropped (10 Nov): bets after hero's river check in the river solver's tree (v1.8.40, `CHECK_BET_TILT.tree`,
   off: `input.checkBetTilt: { tree: true }` turns it on). Audit 10 Nov (finding 6): hero's heads-up river checks first to
   act came back 1.6 ± 1.2bb below their EV (n 61), check-calls 13.1 ± 3.4 (n 9): the tree's opponent bets the read's
