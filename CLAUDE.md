@@ -89,10 +89,15 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # sim result 2.92 -> 1.89 bb a hand, the table 0.82.
                          # profiles-v15r.json (11 Nov): v14r with the answers to Marwin's first preflop raises fitted
                          # by table size too (`pfContShiftN`, fit-v14.js --by-size; friends fold to his 3.5-5bb opens
-                         # 0.38 heads-up, 0.79 4-handed). THE MAIN CHECK since 11 Nov (live table check by table
-                         # size: rows off 92 -> 90, preflop rows 25 -> 16; heads-up opens folded 0.58 -> 0.46, the
-                         # friends 0.38); v14r is the second look. Rows v15r still misses (turn TD: bots raise and
-                         # call hero's turn bets with stronger hands than read): test/sim/README.md, v15r.
+                         # 0.38 heads-up, 0.79 4-handed). Live table check by table size: rows off 92 -> 90, preflop
+                         # rows 25 -> 16; heads-up opens folded 0.58 -> 0.46, the friends 0.38. The main check on
+                         # 11 Nov until v16r.
+                         # profiles-v16r.json (11 Nov): v15r with river bets at the friends' size (`sizeSt`
+                         # [0, 0, 0.55]: the bots bet a median 33% of the pot on the river, the friends 68%). THE MAIN
+                         # CHECK since 11 Nov (live table check pooled: rows off 32 -> 26, bet-size rows 9 -> 2; hero's
+                         # sim result 2.24 -> 2.02 bb a hand, the table 0.82); v15r is the second look. Rows v16r
+                         # still misses (turn TD: bots raise and call hero's turn bets with stronger hands than read;
+                         # turn bets after a call too small): test/sim/README.md, v15r and v16r.
 node test/sim/table-check.js --real <logs> --sim <entries.json...> [--match-seats]
                          # the rows a bot set must match (answers to bets and raises, preflop raises, shown strength
                          # by chips in, TD by street, result, others' bet sizes), real and simulated side by side
@@ -125,7 +130,7 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 
 ## Known gaps / ideas
 
-- Merge bar (Marwin, 5 Nov): a change goes in switched on when it wins in the simulator (the regulars: v15r since 11 Nov, v14r earlier that day, v12r before) with npm test
+- Merge bar (Marwin, 5 Nov): a change goes in switched on when it wins in the simulator (the regulars: v16r since 11 Nov, v15r and v14r earlier that day, v12r before) with npm test
   passing. A fix the simulator can't judge (the bots don't have the habit it reads) is decided on the logs and how the
   group plays: on if the log evidence is clear and the simulator shows no real loss (checkBetTilt, mwBetFold, bigRaiseRange).
   Per player (Marwin, 5 Nov: "never ever generalise, everything has to be player specific, unless data is insufficient"):
