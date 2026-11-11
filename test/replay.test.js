@@ -1417,7 +1417,7 @@ test('mwBetFold per player (v1.8.29): no answers read as the table, folds raise 
   const A = (mw) => ({ name: 'A', tally: Object.assign({}, T2, { mwFolds: mw }), actions: { pre: 'call', flop: '' }, committed: 6, stack: 300 });
   const B = { name: 'B', tally: T2, actions: { pre: 'raise', flop: '' }, committed: 6, stack: 300 };
   const spot = (mw, extra) => E.analyzeSync(Object.assign({ hero: C('Ah 5h'), board: C('Kc 7d 2s'), pot: 18, toCall: 0, stack: 300, bigBlind: 2,
-    inPosition: false, mix: false, seed: 7, iterations: 6000, lookahead: false, opponents: [A(mw), B] }, extra));
+    inPosition: false, mix: false, seed: 7, iterations: 6000, lookahead: false, mwBetFold: true, opponents: [A(mw), B] }, extra));
   const fold = (r) => r.ranked.find((s) => s.kind === 'bet' && s.amount === 14).foldPct;
   const r0 = spot([]), rf = spot(ans(1, 12)), rc = spot(ans(0, 12)), rflat = spot(ans(1, 12), { mwBetFold: { tau: 0 } });
   assert.ok(fold(rf) > fold(r0) + 0.02 && fold(rc) < fold(r0) - 0.02, `all-fold at 14: folder ${fold(rf)}, none ${fold(r0)}, caller ${fold(rc)}`);
@@ -1667,11 +1667,11 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
   // heroPotTilt the bet is about 93% of checking here). With the multiway first answers' extra folds (mwBetFold,
   // v1.8.28: in the logs everyone folded to hero's multiway bets of 40%+ of the pot 47% of the time, read 28%)
   // the pot-and-a-half bet is everyone-folded 56% of the time instead of 35%, so checking to let them bet comes out
-  // ahead (the bet about 77% of checking); top set still wins about as much.
+  // ahead (the bet about 77% of checking); top set still wins about as much. Off by default since v1.8.42.
   const qqSpot = (extra) => run(Object.assign({ hero: C('Qs Qc'), board: C('Qh 8d 3c'), pot: 24, toCall: 0, stack: 250, bigBlind: 2, inPosition: false, heroPotTilt: false,
     heroActions: { pre: 'call', flop: '' }, heroCommitted: 8,
     opponents: [0, 1].map((i) => ({ name: 'P' + i, tally: {}, actions: { pre: i ? 'call' : 'raise', flop: '' }, committed: 8, stack: 250 })) }, extra));
-  const qq = qqSpot({ mwBetFold: false }), qqOn = qqSpot({});
+  const qq = qqSpot({}), qqOn = qqSpot({ mwBetFold: true });
   assert.ok(qq.ranked[0].ev > 50, 'top set EV ' + qq.ranked[0].ev);
   assert.ok(ev(qq, 'bet') >= 0.95 * qq.ranked[0].ev, 'top set bet EV ' + ev(qq, 'bet') + ' vs best ' + qq.ranked[0].ev);
   assert.ok(qqOn.ranked[0].ev > 0.95 * qq.ranked[0].ev, 'mwBetFold: top set EV ' + qqOn.ranked[0].ev + ' vs ' + qq.ranked[0].ev);

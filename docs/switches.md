@@ -2,7 +2,7 @@
 
 One line per behavioural switch in `createAnalysis`'s input (src/engine.js), so a review can see what is on, what each
 was decided on, and what would change the decision. Budget and size knobs (iterations, samples, time limits, bet menus)
-are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41). Update a row
+are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42). Update a row
 when its switch changes.
 
 Columns:
@@ -58,7 +58,7 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | switch | default | since | decided on | would change it |
 | --- | --- | --- | --- | --- |
 | `storyCentre` | 0.05 (heads-up) | v1.8.34 | logs: -295.5 to -290.4 (465 answers); sim no-loss, about -7 ± 9 | |
-| `mwBetFold` | odds x2, per player | v1.8.28 (v1.8.29) | logs: everyone-folds at 40%+ pot 0.28 to 0.47 predicted, 0.47 done (n 34); sim +9.1 ± 14.3 | |
+| `mwBetFold` | off (was odds x2, per player) | v1.8.28 (v1.8.29); off since v1.8.42 | on: logs to 5 Nov, everyone-folds at 40%+ pot 0.28 to 0.47 predicted, 0.47 done (n 34). Off: the 28 such bets after the merge (6-11 Nov) folded 0.21, read 0.38 on, 0.20 off (-17.1 against -15.0); sim on v15r, off vs on, about -0.2 ± 13.8 | friends folding to your big multiway bets as often as before 6 Nov |
 | `riverMadeCall` (`turnMadeCall`, `planMadeCall`) | 0.55 | v1.8.19 | logs: hero's heads-up river bets -21.8 to -13.5 (n 30); sim on bots with the habit +31 ± 13 | |
 | `checkLine` | on | #47 | logs: face log-loss 0.895 to 0.877; sim neutral | |
 | `aggroFold` | 'unacted' | | sim +9.9 ± 17.7 against 'all' | |

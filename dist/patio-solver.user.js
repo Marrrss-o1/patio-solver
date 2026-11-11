@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.41
+// @version      1.8.42
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1505,7 +1505,7 @@ function ENGINE() {
     5: { aggr: 1.9, lead: 0.4, stab: 0.52, none: 1.22 },
   };
   const AGGR_ACT = /^(bet|raise|\dbet)$/;
-  // Hero's multiway bets after the flop (v1.8.28, input.mwBetFold: false turns it off, a number sets the odds): the
+  // Hero's multiway bets after the flop (v1.8.28, off since v1.8.42: input.mwBetFold true turns it on, a number sets the odds): the
   // first players to answer (heads-up reads, before anyone has stayed) fold more than read to bets of about half the
   // pot or more. Every hero bet into 2+ friends in the
   // logs to 5 Nov, re-solved at the live budget with reads from earlier hands (113 bets, 251 answers): at 40%+ of the
@@ -5979,8 +5979,10 @@ function ENGINE() {
     const INIT = street > 0 && input.initiative && Array.isArray(input.history)
       ? (typeof input.initiative === 'object' ? input.initiative : INITIATIVE) : null;
     const initR = INIT ? initiativeRoles(input.history) : null;
-    // Multiway bet folds (MW_BET_FOLD, v1.8.28; per player since v1.8.29): input.mwBetFold false turns it off, a number
-    // sets the table's odds, an object replaces fields ({ tau: 0 }: the table's odds for everyone, as in v1.8.28).
+    // Multiway bet folds (MW_BET_FOLD, v1.8.28; per player since v1.8.29; off since v1.8.42): input.mwBetFold true turns
+    // it on, a number sets the table's odds, an object replaces fields ({ tau: 0 }: the table's odds for everyone, as in
+    // v1.8.28). On the hands after it was merged (6-11 Nov) it read the all-fold at hero's 40%+ multiway bets 0.38 where
+    // 6 of 28 folded (off 0.20; log-likelihood -17.1 against -15.0 off); the simulator found no loss from turning it off.
     // Heads-up table preflop (PF heads-up gate above): both switches default on when two players were dealt in.
     const huTable = street === 0 && input.pfHeadsUp !== false && Array.isArray(input.seats) && input.seats.length === 2;
     const pendingTilt = input.pendingTilt != null ? input.pendingTilt : huTable ? false : undefined;
@@ -5988,7 +5990,7 @@ function ENGINE() {
     // Chips-in tilt (CHIP_TILT, v1.8.40): input.chipTilt false is the v1.8.39 rule (the narrow tilts), a number sets the
     // slope, an object replaces fields ({ own: 0 }: the group's slope for everyone).
     const CHT = input.chipTilt === false || street < 3 ? null : Object.assign({}, CHIP_TILT, typeof input.chipTilt === 'number' ? { slope: input.chipTilt } : input.chipTilt && typeof input.chipTilt === 'object' ? input.chipTilt : {});
-    const MWBF = input.mwBetFold === false ? null : Object.assign({}, MW_BET_FOLD, typeof input.mwBetFold === 'number' ? { odds: input.mwBetFold } : input.mwBetFold && typeof input.mwBetFold === 'object' ? input.mwBetFold : {});
+    const MWBF = input.mwBetFold == null || input.mwBetFold === false ? null : Object.assign({}, MW_BET_FOLD, typeof input.mwBetFold === 'number' ? { odds: input.mwBetFold } : input.mwBetFold && typeof input.mwBetFold === 'object' ? input.mwBetFold : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
