@@ -69,6 +69,10 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
     await page.waitForTimeout(200);
     const split = await text();
     console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT' : 'NOT SPLIT\n' + split);
+    // The old account, on its own read and not at the table, is listed under "Recent, not at the table" (v1.8.43).
+    if (!/Recent, not at the table|Joined reads add/i.test(await text())) { await click('[data-a="links"]'); await page.waitForTimeout(200); }
+    const recent = await page.evaluate((o) => { const r = document.getElementById('patio-solver-host').shadowRoot; return /Recent, not at the table/i.test(r.querySelector('.panel').innerText) && !!r.querySelector(`select[data-a="linkPick"][data-id="${o}"]`); }, opp);
+    console.log(recent ? 'RECENT LISTED' : 'RECENT NOT LISTED\n' + (await text()));
   }
   // WHO=1: the opponent plays 11 more hands, then a new account under another name sits in their seat; the panel
   // shows the "who is this?" badge and asks with the old read to tap; the harness taps it.

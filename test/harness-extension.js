@@ -80,6 +80,17 @@ const fs = require('fs');
     await page.waitForTimeout(300);
     const split = await text();
     console.log(/Split:/.test(split) && !/Reads from 2 accounts/.test(split) ? 'SPLIT: ' + split.split('\n').find((l) => /Split:/.test(l)) : 'NOT SPLIT\n' + split);
+    // The old account, now on its own read and not at the table, is listed under "Recent, not at the table" with a
+    // picker; joining it there to the new account's read works like joining a seated player (v1.8.43).
+    if (!/Recent, not at the table|Joined reads add/i.test(await text())) { await click('[data-a="links"]'); await page.waitForTimeout(200); }
+    const recent = await page.evaluate((o) => { const r = document.getElementById('patio-solver-host').shadowRoot; return { sec: /Recent, not at the table/i.test(r.querySelector('.panel').innerText), sel: !!r.querySelector(`select[data-a="linkPick"][data-id="${o}"]`) }; }, opp);
+    console.log(recent.sec && recent.sel ? 'RECENT LISTED' : 'RECENT NOT LISTED ' + JSON.stringify(recent));
+    if (recent.sel) {
+      await page.evaluate((o) => { const sel = document.getElementById('patio-solver-host').shadowRoot.querySelector(`select[data-a="linkPick"][data-id="${o}"]`); sel.value = 'NEW-ID'; sel.dispatchEvent(new Event('change', { bubbles: true })); }, opp);
+      await page.waitForTimeout(300);
+      const rj = await text();
+      console.log(/Reads joined/.test(rj) ? 'RECENT JOINED: ' + rj.split('\n').find((l) => /Reads joined/.test(l)) : 'RECENT NOT JOINED\n' + rj);
+    }
   }
   // WHO=1: the opponent plays 11 more hands (so their read has 10+), then a new account under another name sits in
   // their seat. The panel asks "Who is this?" with the old read to tap; the harness taps it and checks the join.

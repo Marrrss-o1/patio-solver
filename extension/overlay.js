@@ -440,6 +440,8 @@
   // asked here and joined only on "Same player"; "Link reads" joins or splits any of them by hand.
   const day = (t) => (t ? new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
   const handsTxt = (n) => `${Math.round(n)} hand${Math.round(n) === 1 ? '' : 's'}`;
+  // "Link reads" also lists accounts on their own read seen in the last 3 days (newest 5) that aren't at the table.
+  const RECENT_MS = 3 * 24 * 3600 * 1000, RECENT_N = 5;
   function readLabel(g) {
     const also = g.names.slice(1, 3);
     return `${g.names[0] || '?'}${also.length ? ' (also ' + also.join(', ') + ')' : ''} · ${handsTxt(g.hands)}${g.last ? ' · seen ' + day(g.last) : ''}`;
@@ -503,11 +505,20 @@
     let html = '<div><div class="sec">Link reads</div>';
     const at = h ? Object.values(h.players).filter((p) => p.id !== heroId && p.auth) : [];
     if (!at.length) html += '<div class="muted">Players at the table show here once a hand starts.</div>';
-    for (const p of at) {
-      const opts = linkOptions(p.auth, groups);
-      html += `<div class="lk"><span class="nm">${esc(p.name)}</span>` + (opts.length
-        ? `<select data-a="linkPick" data-id="${esc(p.auth)}"><option value="">Same player as…</option>${opts.map((g) => `<option value="${esc(g.id)}">${esc(readLabel(g))}</option>`).join('')}</select>`
+    const pick = (id, name, label) => {
+      const opts = linkOptions(id, groups);
+      return `<div class="lk"><span class="nm"${label ? ` title="${esc(label)}"` : ''}>${esc(name)}</span>` + (opts.length
+        ? `<select data-a="linkPick" data-id="${esc(id)}"><option value="">Same player as…</option>${opts.map((g) => `<option value="${esc(g.id)}">${esc(readLabel(g))}</option>`).join('')}</select>`
         : '<span class="muted">no other reads to join</span>') + '</div>';
+    };
+    for (const p of at) html += pick(p.auth, p.name);
+    // Accounts on their own read seen in the last few days but not at the table now (v1.8.43), so a friend who
+    // played one session on a new account can be joined afterwards (11 Nov: "Mark" on a new account for 18 hands).
+    const atIds = new Set(at.flatMap((p) => tracker.groupOf(p.auth)));
+    const recent = groups.filter((g) => g.ids.length === 1 && !g.ids.some((k) => atIds.has(k)) && g.last && tracker.now() - g.last < RECENT_MS).slice(0, RECENT_N);
+    if (recent.length) {
+      html += '<div class="sec" style="margin-top:6px">Recent, not at the table</div>';
+      for (const g of recent) html += pick(g.id, `${g.names[0] || '?'} (${handsTxt(g.hands)}, ${day(g.last)})`, readLabel(g));
     }
     const linked = groups.filter((g) => g.ids.length > 1);
     if (linked.length) {
