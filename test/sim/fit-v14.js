@@ -11,6 +11,8 @@
 // Each shift moves the bots' continue cut (or re-raise share) until the bots' fold (re-raise) share over the dumped
 // decisions equals the friends' share; dumps of several table sizes are weighted to the logs' mix.
 // Usage: node test/sim/fit-v14.js --real <logs...> --dump <n>:<dump.jsonl>:<entries.json> ... [--base <profiles.json>]
+//        node test/sim/fit-v14.js --by-size --real <logs...> --dump <n>:<dump.jsonl> ... [--base profiles-v14r.json]
+//          (v15: pfContShiftN, answers to hero's first preflop raise by table size; see fitBySize)
 //   (n = the table size of that dump; entries = that run's fold-cal --entries file, for its measured hand count)
 // Prints the fitted shifts, the real and simulated shares before and after, and with --out writes a profiles file
 // (the base profiles with the shifts set on every bot but `hero`). Dumps hold measured hands only (game.js marks the
@@ -55,6 +57,7 @@ function realTargets(hands, sizes) {
             if (y.who === x.who) break;
             if (!['fold', 'call'].includes(y.act) && !isRaise(y.act)) continue;
             add(`pf.${kind}.${pb}`, y.act === 'fold');
+            add(`pf.${kind}.${pb}.n${Math.min(5, n)}`, y.act === 'fold'); // by table size (--by-size)
             add(`rr.${pb}`, isRaise(y.act));
             if (isRaise(y.act)) break;
           }
@@ -117,7 +120,64 @@ function solve(fn, target, lo, hi) {
   return (lo + hi) / 2;
 }
 
-if (require.main === module) {
+// --by-size (v15): pfContShiftN, a shift per table size on top of the base profiles' pfContShift, fitted on dumps of bots
+// that already play with it (each dump is one table size). A size's target is its own friends' fold share shrunk toward
+// the share at every size by --k (20) answers, so a thin cell ends at the pooled share v14 was fitted to.
+function fitBySize(dumps, T, K, minN) {
+  const fit = {}, rows = [];
+  const cells = {};
+  for (const D of dumps) {
+    const ns = Math.min(5, D.n);
+    for (const ln of fs.readFileSync(D.dump, 'utf8').trim().split('\n')) {
+      const d = JSON.parse(ln);
+      if (!d.pf || !d.hero) continue;
+      const key = `pf.${d.limpers > 0 ? 'limp' : 'open'}.${pbOf(d)}`;
+      (cells[key + '.n' + ns] || (cells[key + '.n' + ns] = [])).push(d);
+    }
+  }
+  for (const key of Object.keys(cells).sort()) {
+    const arr = cells[key];
+    const [, kind, b, nn] = key.split('.');
+    const ns = nn.slice(1);
+    const all = T[`pf.${kind}.${b}`], t = T[key] || { n: 0, k: 0 };
+    if (!all) { rows.push(`${key.padEnd(16)} no real answers at any size, left at 0`); continue; }
+    // a size the friends hardly met (or the bots hardly played) keeps v14's pooled shift: the pooled share there is
+    // mostly other table sizes' answers
+    if (t.n < minN || arr.length < 30) { rows.push(`${key.padEnd(16)} real ${t.k}/${t.n}, ${arr.length} bot decisions: too few, left at 0`); continue; }
+    const pAll = all.k / all.n;
+    const target = (t.k + K * pAll) / (t.n + K);
+    const mean = (f) => arr.reduce((a, d) => a + f(d), 0) / arr.length;
+    const before = mean((d) => pfFold(d, 0));
+    const x = solve((c) => -mean((d) => pfFold(d, c)), -target, -0.5, 0.5);
+    const xr = Math.round(x * 1000) / 1000;
+    const S = fit[ns] || (fit[ns] = { open: [0, 0, 0, 0, 0], limp: [0, 0, 0, 0, 0] });
+    S[kind][+b] = xr;
+    rows.push(`${key.padEnd(16)} real ${t.n ? (t.k / t.n).toFixed(3) : '  -  '} (${t.n}), all sizes ${pAll.toFixed(3)} (${all.n}), target ${target.toFixed(3)}  bots ${before.toFixed(3)} (${arr.length}) -> ${mean((d) => pfFold(d, xr)).toFixed(3)}  shift ${xr >= 0 ? '+' : ''}${xr}`);
+  }
+  return { fit, rows };
+}
+
+if (require.main === module && args.includes('--by-size')) {
+  const dumps = list('dump').map((s) => { const [n, d] = s.split(':'); return { n: +n, dump: d }; });
+  const real = loadHands(list('real'), { quiet: true });
+  const T = realTargets(real, [2, 3, 4, 5]);
+  const prev = opt('prev', null); // add onto an earlier pfContShiftN (a second pass on dumps of bots playing with it)
+  const { fit, rows } = fitBySize(dumps, T, +opt('k', 20), +opt('min', 10));
+  console.log(rows.join('\n'));
+  const base = JSON.parse(fs.readFileSync(opt('base', path.join(ROOT, 'test/sim/profiles-v14r.json')), 'utf8'));
+  const anyP = Object.values(base).map((p) => p.params || p).find((P) => P.pfContShiftN);
+  const was = prev ? JSON.parse(prev) : anyP ? anyP.pfContShiftN : null;
+  if (was) for (const ns of Object.keys(fit)) for (const kind of ['open', 'limp']) for (let b = 0; b < 5; b++) {
+    fit[ns][kind][b] = Math.round(((was[ns] && was[ns][kind][b]) || 0) * 1000 + fit[ns][kind][b] * 1000) / 1000;
+  }
+  console.log(JSON.stringify(fit));
+  const out = opt('out', null);
+  if (out) {
+    for (const id of Object.keys(base)) { if (id === 'hero') continue; const P = base[id].params || base[id]; P.pfContShiftN = JSON.parse(JSON.stringify(fit)); }
+    fs.writeFileSync(out, JSON.stringify(base, null, 1));
+    console.log('wrote ' + out);
+  }
+} else if (require.main === module) {
   const dumps = list('dump').map((s) => { const [n, d, e] = s.split(':'); return { n: +n, dump: d, entries: e }; });
   const sizes = dumps.map((d) => d.n);
   const real = loadHands(list('real'), { quiet: true });
