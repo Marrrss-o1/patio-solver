@@ -9,6 +9,8 @@
 //   E  what came back against the advice's EV, per hero decision by street (TD: EV at hero's next decision, or what
 //      came back, minus chips put in, minus the EV of the action taken; decisions where hero followed the advice)
 //   F  hero's result: bb/100 and the advised EV at the first decision
+//   G  the size of first bets after the flop by players other than hero, by street and line (after calling a bet on the
+//      street before, or not), in the size buckets of A, and below and above half the pot
 // Usage:
 //   node test/sim/table-check.js --real <exports or folders...> [--sim <entries.json...>] [--seats 2|3|4|5+|3+]
 //     [--min 30] [--all] [--match-seats]
@@ -94,10 +96,11 @@ function measure(hands, opts = {}) {
     const log = h.log.filter((x) => x.act);
     // live players by street: everyone dealt in, minus folds so far
     const folded = new Set();
-    let raisedPre = false, limpers = 0, curSt = 'pre', inStreet = {};
+    let raisedPre = false, limpers = 0, curSt = 'pre', inStreet = {}, called = {}, calledPrev = {};
     for (let i = 0; i < log.length; i++) {
       const x = log[i];
       if (x.act === 'sb' || x.act === 'bb') continue;
+      if (STREETS.includes(x.st) && x.st !== curSt) { curSt = x.st; inStreet = {}; calledPrev = called; called = {}; }
       const live = h.players.filter((p) => !folded.has(p.name)).length;
       if (x.st === 'pre' && !raisedPre && isRaise(x.act)) {
         // C: answers to the first raise before the flop
@@ -123,6 +126,11 @@ function measure(hands, opts = {}) {
         const who = x.hero ? 'hero' : 'others';
         const hu = live - 1 === 1 ? 'HU' : 'MW';
         const key = first ? `A ${who} ${x.st} ${hu} ${sizeB(x.potPct)}` : `B ${who} raise ${x.st} ${hu}`;
+        if (first && !x.hero && x.potPct != null) {
+          const line = x.st !== 'flop' && calledPrev[x.who] ? 'after a call' : 'other';
+          cnt(`G others bet size ${x.st} ${line}`, sizeB(x.potPct));
+          cnt(`G others bet size ${x.st} ${line} half pot`, x.potPct < 50 ? 'under' : 'over'); // share over half the pot
+        }
         const ans = [];
         for (let j = i + 1; j < log.length && log[j].st === x.st; j++) {
           const y = log[j];
@@ -140,8 +148,10 @@ function measure(hands, opts = {}) {
       }
       if (x.act === 'fold') folded.add(x.who);
       if (STREETS.includes(x.st)) {
-        if (x.st !== curSt) { curSt = x.st; inStreet = {}; }
         if (x.amt > 0) inStreet[x.who] = true;
+        // a call of a bet as the player's last action on the street (G: bets after a call)
+        if (x.act === 'call') called[x.who] = true;
+        else if (x.act === 'bet' || isRaise(x.act)) delete called[x.who];
       }
     }
     // D: shown strength at river showdowns, by the chips the shower put in
@@ -212,7 +222,8 @@ function report(real, sim, opts = {}) {
     const a = real.R[k], b = sim && sim.R[k];
     if ((a ? a.n : 0) < min && (b ? b.n : 0) < min) continue;
     const isMean = (a || b).mean;
-    const outs = isMean ? [null] : k.endsWith('everyone folded') ? ['yes'] : ['fold', 'call', 'raise'];
+    const outs = isMean ? [null] : k.endsWith('everyone folded') ? ['yes'] : k.endsWith('half pot') ? ['over'] :
+      k.startsWith('G ') ? ['<45%', '45-85%', '85%+'] : ['fold', 'call', 'raise'];
     for (const o of outs) {
       const ra = a ? (isMean ? mean(a) : rate(a, o)) : null;
       const rb = b ? (isMean ? mean(b) : rate(b, o)) : null;

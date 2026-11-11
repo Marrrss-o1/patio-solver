@@ -24,7 +24,7 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `pfFlopEdgeAggr`, `pfFlopEdgeAggrHU` | unset | sim only | raise-or-fold edge: about -8 ± 18 | |
 | `pendingTilt` | on at 3+ handed, off heads-up (`pfHeadsUp`) | | off at 3+ handed: -9 ± 17 (6 Nov), -27 ± 15 (8 Nov); with pfLimpCurve on v14r -17 ± 15 (11 Nov). Off fits the logs better (10.8 nats, 240 raises) | |
 | `pfLimpCurve` | off at 3+ handed, on heads-up (`pfHeadsUp`) | v1.8.24 (off v1.8.26) | logs: limpers' folds by raise size, -222.5 to -180.1; sim five runs +8.2 ± 9.8, 4-handed about -13 ± 15; with pendingTilt off on v14r -17 ± 15 (11 Nov) | |
-| `pfHeadsUp` | on | v1.8.35 | logs two-player tables: -176.1 to -139.1 (n 229); sim about +1 ± 16 (bots don't have Mark's habit) | |
+| `pfHeadsUp` | on | v1.8.35 | logs two-player tables: -176.1 to -139.1 (n 229); sim about +1 ± 16 (bots don't have Mark's habit); on v15r, whose bots do, +28 ± 13 (11 Nov) | |
 | `vsOpenSplit` | off | v1.8.20 | reads-bench vs-open 0.932 to 0.923; sim neutral (+1.0 ± 2.3; v12 +8 ± 15) | more friends facing 8bb+ opens |
 | `pfBigRaise` | on (heads-up only, `pfRaiseHUOnly`, up to `pfRaiseCapBB` 30) | v1.8.6 | sim +5.1 ± 3.9 heads-up; the multiway part isn't trusted | |
 | `pfShoveBB` | 25 | | 40 lost: -41.8 ± 6.0 (whole table at 30bb) | |
