@@ -95,8 +95,8 @@ node test/sim/run.js ...  # THE simulator for measuring changes: duplicate deals
                          # call hero's turn bets with stronger hands than read): test/sim/README.md, v15r.
 node test/sim/table-check.js --real <logs> --sim <entries.json...> [--match-seats]
                          # the rows a bot set must match (answers to bets and raises, preflop raises, shown strength
-                         # by chips in, TD by street, result), real and simulated side by side with z; the sim side is
-                         # fold-cal.js --entries. Hands in test/exclude-hands.json (deliberate plays, e.g. 10 Nov #24,
+                         # by chips in, TD by street, result, others' bet sizes), real and simulated side by side
+                         # with z; the sim side is fold-cal.js --entries. Hands in test/exclude-hands.json (deliberate plays, e.g. 10 Nov #24,
                          # Marwin giving chips away) are left out of every log tool (loadHands; merge-logs.js
                          # --keep-excluded keeps them).
 node test/bench.js       # engine speed; --ref <git ref> checks results are bit-identical (speed changes must be)
@@ -475,6 +475,11 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   0.333, folded 0.344; opens 0.431 vs 0.419), where Mark folds far less than read, so the bots don't have the habit. On by
   the merge bar (clear log evidence, no real loss in the simulator). Files:
   /mnt/project-files/patio-solver/sims/2026-11-06-hupf/, analysis/2026-11-06-mark-calls.md.
+  Re-checked on v15r (11 Nov), whose heads-up bots defend hero's opens nearly as widely as the friends do (folds to his
+  3.5-5bb opens 0.46, friends 0.38; v14r 0.58). Main vs `{"pfHeadsUp":false}`, live budget, 1,000 deals each (rule
+  set before the runs: stays on unless the pool is below -1 SE): +35.9 ± 28.8, +35.9 ± 27.3, +35.3 ± 24.7, +5.8 ± 26.8
+  (seeds 11401-11404); pooled about +28 ± 13. The button gains about +18 and the big blind about +10; strong hands gain
+  about +12. So with bots that have the habit, the simulator agrees with the logs. Files: sims/2026-11-11-hupf15/.
 - Showdown-based reads move slowly (#60): `SHOW_VALUE_K` 30 pseudo-shows behind a player's value share of bets
   (`stats.valueShare`, was 5) and the home prior's range tilt penalty k 30 / kUp 100 (was 6 / 20). Per-player
   showdown fits overfit: shown hands were predicted worse the more a player was seen. Shown-hand likelihood on
