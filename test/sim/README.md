@@ -6,7 +6,7 @@ for measuring changes (those two still work and are left as they were).
 
 ```
 node test/sim/run.js --hands 2000 --players 4 --bots friends                  # solver vs bots fitted to Marwin's friends
-BOTPROFILES=test/sim/profiles-v14r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
+BOTPROFILES=test/sim/profiles-v15r.json node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the main check: the regulars, live budget
 node test/sim/run.js --hands 1000 --players 4 --bots friends --budget live \
      --a-ref main --b-ref my-branch                                           # the same, with the budget Marwin plays
@@ -338,10 +338,44 @@ bots, seed and block size), so a third arm can be added later without replaying 
   - Shown strength is flatter by chips in than the friends': 7-20bb 0.65 against 0.61, 50bb+ 0.76 against 0.80.
   - By table size, the folds to hero's 3.5-5bb opens still miss: heads-up 0.58 against 0.38 (n 58), 4-handed 0.32
     against 0.58 (n 19). 3-handed is on target (0.354 against 0.354, n 48). The shifts are one set for every table
-    size.
-  v14r is the main check for solver changes from 11 Nov, and v12r is the second look. A change whose effect runs
-  through one of the rows above (turn betting, the heads-up preflop answers) is still decided on the logs. Files:
+    size. (v15r, below, fits them by table size.)
+  v14r was the main check for solver changes on 11 Nov until v15r. Files:
   /mnt/project-files/patio-solver/sims/2026-11-11-tablecheck/ (cmp-v12r-*.txt; v14r/cmp-*.txt).
+* v15r (11 Nov; `BOTPROFILES=test/sim/profiles-v15r.json`): v14r with the answers to Marwin's first preflop raise
+  fitted by table size. The friends defend his opens far wider heads-up than 4-handed (folds to his 3.5-5bb opens,
+  all logs to 10 Nov: heads-up 0.38, n 58; 3-handed 0.57, n 85; 4-handed 0.79, n 47), and v14r's one set of shifts
+  averaged that out (live table check: heads-up 0.58, 4-handed 0.63). The bots' position rule doesn't give it either.
+  Knob (bots.js, off in v14r, bit-identical off): `pfContShiftN` { '2' | '3' | '4' | '5': { open | limp: [5 raise-to
+  buckets] } }, by the players dealt in (5 = 5 or more), added on top of pfContShift. Fitted by
+  `node test/sim/fit-v14.js --by-size` on default-budget dumps of v14r (fold-cal.js, 1,400 / 1,000 / 800 / 700 hands at
+  2 / 3 / 4 / 5 handed, seeds 11502-11505), in two passes as for v14r. Each cell's target is that table size's fold
+  share, shrunk toward the share over every size by 20 answers; cells with under 10 real answers or 30 bot decisions
+  stay at 0. The biggest shifts (continuing share): heads-up opens to 3.5-5bb +0.171 and 5-8bb +0.082, 4-handed opens
+  to 3.5-5bb -0.095, raises over limpers to 2.5-3.5bb +0.126 at 5+ handed and -0.094 3-handed.
+  Table check, rows off by 2 SE or more, v14r -> v15r. Default budget (the fit's dumps): heads-up 16 -> 11 (preflop
+  rows 3 -> 0), 3-handed 18 -> 17, 4-handed 20 -> 20, 5-handed 22 -> 22. Live budget (cloud, the same seeds as v14r's,
+  11101-11104): heads-up 17 -> 16, 3-handed 28 -> 25, 4-handed 24 -> 23, 5-handed 23 -> 26; preflop rows 5 -> 0,
+  7 -> 6, 9 -> 6, 4 -> 4. The three new 5-handed rows sit at z 2.0, all after the flop, where the knob does nothing
+  (folds to small multiway river bets and heads-up flop bets with 2 and 7 real answers; shown strength at 50bb+).
+  Pooled over table sizes (`--match-seats`) both have 23: pooled, v14r already fit by construction. Folds to hero's
+  3.5-5bb opens: heads-up 0.580 -> 0.459 (friends 0.379), 3-handed 0.571 -> 0.569 (0.565), 4-handed 0.625 -> 0.740
+  (0.787). The preflop rows left are re-raises (the friends re-raised none of his 47 4-handed 3.5-5bb opens or his 41
+  5+ handed raises over limpers to 5-8bb; the bots 4-5%) and cells with 3-26 real answers. Hero's simulator result
+  pooled 1.89 -> 2.24 bb a hand against 0.82 ± 0.67 at the table; by table size heads-up 1.14 -> 1.29, 3-handed
+  2.17 -> 2.01, 4-handed 1.97 -> 2.27, 5-handed 3.11 -> 2.97, each ± 0.5-0.6, so the same within noise.
+  Heads-up runs seat one regular per 100-deal block (run.js `lineup()`), so a 2,000-deal heads-up run is 20 draws of
+  the 7 regulars, and its heads-up rows move with which regulars were drawn. That, not the budget, was the gap between
+  v14r's heads-up preflop rows at the live and default budgets. Judge heads-up rows on many blocks.
+  Still off on v15r: the v14r list above but the table-size item. The turn TD (live, pooled): hero's turn bets come
+  back -3.28 ± 0.61 bb against their EV, the table +1.18 ± 1.15. They get raised about as often as at the table (9%
+  against 8%), but a raised turn bet comes back -21.7 ± 2.8 against -5.8 ± 4.1 (n 15) and a called one -1.5 ± 0.8
+  against +2.6 ± 1.7 (n 105), so the bots raise and call hero's turn bets with stronger hands than the read says. Tried
+  and not kept (11 Nov): the friends' postflop raise sizes. The bots raise to one of two sizes (a min-raise 36% of the
+  time, else 6.58x: `raiseMin`, `raiseX`), where the friends spread 2-9x; with the friends' spread the size rows matched
+  and the flop's raised-bet gap halved, but the turn TD stayed and more rows were off.
+  v15r is the main check for solver changes from 11 Nov, and v14r is the second look. A change whose effect runs
+  through a row v15r still misses (turn betting) is still decided on the logs. Files:
+  /mnt/project-files/patio-solver/sims/2026-11-11-tablecheck/v15r/ (cmp-*.txt, td-pooled.txt; fit/).
 * `solver` (or `solver@REF` for src/ of a git ref): the solver itself in a bot seat, with its own tracker that
   watches the table from that seat (its own hole cards, reads on everyone including hero), like a friend running
   the same overlay. Mix with friends as a comma list, e.g. `--bots solver,home:f4,home:f2`. Use it to check that

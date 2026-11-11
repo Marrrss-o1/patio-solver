@@ -331,6 +331,11 @@ const HOME_DEFAULT = {
   // min-raises as often as to his big ones, and answer his bets by size in a shape the v12r bots don't have
   // (test/sim/table-check.js; fitted by test/sim/fit-v14.js).
   cutShift: null, riverAbsShift: null, heroRR: 1, pfContShift: null,
+  // v15 (11 Nov): pfContShiftN { '2' | '3' | '4' | '5': { open | limp: [5 buckets] } } on top of pfContShift, by the
+  // players dealt in (5 = 5 or more). The friends defend Marwin's opens wider heads-up than 4-handed (folds to his
+  // 3.5-5bb opens, all logs to 10 Nov: heads-up 0.38, 3-handed 0.57, 4-handed 0.79), which the bots' position rule
+  // doesn't give and v14's one set for every table size averaged out (test/sim/fit-v14.js --by-size).
+  pfContShiftN: null,
 };
 // BOT_DUMP=<file>: one JSON line per bot answer to a first bet after the flop and per answer to a preflop raise, with
 // what decided it, so the v14 shifts can be fitted offline (test/sim/fit-v14.js).
@@ -403,6 +408,11 @@ function homeBot(params) {
           const row = P.pfContShift[v.limpers > 0 ? 'limp' : 'open'];
           if (row && row[pb]) cont = clamp(cont + row[pb], 0.02, 0.97);
         }
+        if (P.pfContShiftN && vsHero && v.raises === 1) {
+          const bySize = P.pfContShiftN[String(Math.min(5, v.n))];
+          const row = bySize && bySize[v.limpers > 0 ? 'limp' : 'open'];
+          if (row && row[pb]) cont = clamp(cont + row[pb], 0.02, 0.97);
+        }
         const hrr = !vsHero ? 1 : Array.isArray(P.heroRR) ? (P.heroRR[pb] != null ? P.heroRR[pb] : 1) : P.heroRR;
         const tb = clamp(P.threeBet * Math.pow(P.rrDecay, v.raises - 1) * hrr, 0.003, cont);
         // v10 jams (jam > 0): facing one raise, all-in with a share J of the spots, from the hands between their re-raise
@@ -412,7 +422,7 @@ function homeBot(params) {
         const J = P.jam > 0 && v.raises === 1 && allinTo > v.cur ? Math.min(P.jamMax, P.jam * Math.pow(40 / Math.max(5, (v.stack + v.put) / bb), P.jamK)) : 0;
         const tbN = J > 0 ? Math.max(0.003, tb - J) : tb;
         const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tbN - pct) / (w * 0.7)));
-        if (BOT_DUMP && v.real && v.raises === 1) dump({ pf: 1, hero: vsHero ? 1 : 0, toBB: raiseBB, pb, limpers: v.limpers, pct, w, pCont, tb0: P.threeBet * hrr, cont, J });
+        if (BOT_DUMP && v.real && v.raises === 1) dump({ pf: 1, hero: vsHero ? 1 : 0, toBB: raiseBB, pb, limpers: v.limpers, pct, w, pCont, tb0: P.threeBet * hrr, cont, J, n: v.n });
         const out = [];
         if (v.raises < 8) {
           const minTo = v.cur + v.lastRaise;
