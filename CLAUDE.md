@@ -132,7 +132,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
 
 - Merge bar (Marwin, 5 Nov): a change goes in switched on when it wins in the simulator (the regulars: v16r since 11 Nov, v15r and v14r earlier that day, v12r before) with npm test
   passing. A fix the simulator can't judge (the bots don't have the habit it reads) is decided on the logs and how the
-  group plays: on if the log evidence is clear and the simulator shows no real loss (checkBetTilt, mwBetFold, bigRaiseRange).
+  group plays: on if the log evidence is clear and the simulator shows no real loss (checkBetTilt, bigRaiseRange;
+  mwBetFold until its later hands disagreed, v1.8.42).
   Per player (Marwin, 5 Nov: "never ever generalise, everything has to be player specific, unless data is insufficient"):
   every read, fix and exploit is built per player, with the group's number only as the starting point a player moves away
   from as their own hands come in (shrunk by how much data there is: deepShoveTrust, heroPotLearned, mwBetOdds,
@@ -1277,8 +1278,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   v12r bots 58% / 12%), so the simulator is a fair test. Second round (6 Nov night, v1.8.35, same settings; pooling
   rule set before the runs): heads-up -18.6 ± 20.3, 3-handed -27.6 ± 28.8, 4-handed +24.5 ± 24.1, 5-handed
   -5.7 ± 23.8; all six runs pooled about +1 ± 9. No win, so it stays off. Files: sims/2026-11-06-init2/.
-- Hero's multiway bets (v1.8.28, `MW_BET_FOLD` {odds 2, from 0.3, to 0.45}; `input.mwBetFold: false` turns it off, a
-  number sets the odds): the first players to answer hero's bet into 2+ opponents (heads-up reads, before anyone stays) fold
+- Hero's multiway bets (v1.8.28, `MW_BET_FOLD` {odds 2, from 0.3, to 0.45}; off since v1.8.42, below: `input.mwBetFold:
+  true` turns it on, a number sets the odds): the first players to answer hero's bet into 2+ opponents (heads-up reads, before anyone stays) fold
   with odds x2 on the current street, ramped in from 30% to 45% of the pot (`statsHU.betOdds`, read in foldAtSize; Monte
   Carlo and the multiway turn and river solvers). All 113 of hero's postflop bets into 2+ friends in the logs to 5 Nov,
   re-solved at the live budget (251 answers): at 40%+ of the pot the first answers folded 70% where the solver said 52%
@@ -1321,6 +1322,20 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   `xp:riverxb` heads-up +1.0 ± 5.2 (53 of 2,000 hands differ), `xp:riverxb` + friends 3-handed -20.8 ± 21.9 (pooled
   +0.8 ± 4.8; the three multiway runs -0.6 ± 13.2): no real loss. Files: /mnt/project-files/patio-solver/sims/
   2026-11-06-perplayer/ (replay/ has the log replay and the split scripts).
+  Off since v1.8.42 (11 Nov), on the hands it was not fitted on (the audit's switch ledger: hands after its merge, 5 Nov
+  23:17 UTC to 11 Nov, frozen captures re-solved with it off, live budget, mix off). Hero's multiway bets of 40%+ of the
+  pot with nothing to call: everyone folded 6 of 28 (0.21), read 0.38 with it and 0.20 without (log-likelihood -17.1
+  against -15.0); at 30%+ 7 of 53, read 0.25 and 0.15 (-21.9 against -19.4). 6-10 Nov alone 3 of 24 (0.37 / 0.20); 11 Nov
+  3 of 4 (0.44 / 0.25). The last player to answer after the others folded continued 79% there (27-44% before 6 Nov). Over
+  all logs, the fitted hands included, on and off now tie (-41.2 against -42.4). A per-player version from x1
+  (`{ odds: 1, fitOdds: 1.4 }`) scored in between (6-10 Nov -11.1 against -10.0 off; it ties off in sample). It changes 47
+  of 191 multiway postflop decisions after the merge: with it off 20 bets become checks (mostly cheap flop stabs; 11 Nov's
+  #37 river bluff into two players too), 17 bets change size, 4 calls become raises, 3 checks become bets, and 3 all-ins
+  become checks or a call.
+  Simulator, v15r regulars, live budget, 1,000 deals each, off vs on (rule set before the runs: off unless the pool is
+  below -1 SE): 3-handed +30.1 ± 27.5 (seed 11601), 4-handed +40.0 ± 27.7 (11602) and -76.5 ± 26.6 (11603; button
+  -33 ± 11, strong and good hands), 5-handed +12.3 ± 28.6 (11604); pooled about 0 ± 14. Files:
+  /mnt/project-files/patio-solver/sims/2026-11-11-mwoff/, scripts/2026-11-11-ledger/ (foldll.js, out/).
 - Multiway fold structure (logs, first bets of 25-110% pot answered by 2+ friends, 128 hands): the first to answer
   folds 47%, the last 52% when the rest folded but 69% when someone stayed, and two players both fold 21% (three:
   26%). Multiplying each player's multiway fold rate gave about 38% for two. Since v1.7.2 players answer a bet in turn
