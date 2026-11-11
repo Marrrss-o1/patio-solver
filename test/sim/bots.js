@@ -336,6 +336,13 @@ const HOME_DEFAULT = {
   // 3.5-5bb opens, all logs to 10 Nov: heads-up 0.38, 3-handed 0.57, 4-handed 0.79), which the bots' position rule
   // doesn't give and v14's one set for every table size averaged out (test/sim/fit-v14.js --by-size).
   pfContShiftN: null,
+  // v16 (11 Nov): sizeSt [flop, turn, river] moves the bet-size target (log of the pot share) by street. The friends'
+  // first bets after the flop by others than Marwin, all logs to 10 Nov, against v15r bots at the same pot (in big
+  // blinds): flop +0.05, turn -0.04, river +0.33 (n 285; after calling the turn +0.45, n 51) in log size, so the bots'
+  // river bets were about 0.7x the friends' (median 33% of the pot against 68%). Every friend with 12+ river bets bets
+  // bigger there than on the flop and turn (+0.23 to +0.63, pot-adjusted), the bots not at all, so one river offset for
+  // every bot: v16r has [0, 0, 0.55] (0.55 to move the bots' log size by about 0.3, since the size grid is capped).
+  sizeSt: null,
 };
 // BOT_DUMP=<file>: one JSON line per bot answer to a first bet after the flop and per answer to a preflop raise, with
 // what decided it, so the v14 shifts can be fitted offline (test/sim/fit-v14.js).
@@ -472,7 +479,8 @@ function homeBot(params) {
         // 5 Nov), v11 bots 31% / 26%.
         if (P.leadHu && si <= 1 && v.nOpp === 1 && v.prevAgg >= 0 && v.prevAgg !== v.seat && !v.prevAggActed) pBet *= P.leadHu[si];
         // Bet size: a min-bet sometimes, otherwise around their usual size, bigger when stronger.
-        const target = Math.log(P.betSize) + P.sizeTell * (hp - 0.7) + (P.potSlope ? P.potSlope * (Math.log(Math.max(1, pot / bb)) - Math.log(12)) : 0);
+        const target = Math.log(P.betSize) + P.sizeTell * (hp - 0.7) + (P.potSlope ? P.potSlope * (Math.log(Math.max(1, pot / bb)) - Math.log(12)) : 0) +
+          (P.sizeSt ? P.sizeSt[si] || 0 : 0);
         const sd = P.sizeSd, grid = sd > 0.45 || P.potSlope ? SIZES_WIDE : SIZES;
         let ws = grid.map((s) => Math.exp(-Math.pow(Math.log(s) - target, 2) / (2 * sd * sd)));
         const tw = ws.reduce((a, b) => a + b, 0); ws = ws.map((x) => x / tw);
