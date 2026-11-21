@@ -778,6 +778,39 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   main, about +13 ± 10 pooled on d8e866e. This fix instead: 4-handed +40.5 ± 22.9 and +14.9 ± 22.2 on two seeds of
   1,000 deals (pooled about +28 ± 16), heads-up +14.2 ± 22.9 (1,500 deals; the gate was -17 ± 13 heads-up). Re-raise rate 1x instead of 2x:
   -20.8 ± 21.2 (4-handed, 1,000 deals). `input.reraiseModel: false` turns it off.
+  Since v1.8.44 the 2x is RAISED_RR's per-player multiplier (below, "Answers to hero's raises").
+- Answers to hero's raises after the flop (v1.8.44, `COLD_RAISE` {odds 2, rr 0.25, tau 0.5} and `RAISED_RR` {mult 0.7,
+  fitMult 0.6, tau 0.5}; `input.coldRaise: false` / `input.raisedRR: false` are the v1.8.43 rules, a number sets the
+  table's odds / mult). All logs to 21 Nov (1,584 hands; every logged decision re-solved on main from frozen captures,
+  every friend's answer to a raise after the flop scored with the read from earlier hands; scripts/2026-11-21-session/):
+  - Players facing a bet and a raise who hadn't bet the street (checked earlier, called the bet, or not acted yet) fold
+    more than read: 0.70 against predictAction's 0.54 (n 117; fold odds x2.0, +5.5 nats; fitted on either half in time,
+    x2.15 / x1.85, each scores the other +2.1 / +3.1 nats), and re-raised 0 of 117 times against 7.4 predicted. Against
+    hero's raises 0.83 where the Monte Carlo said 0.59 (n 41: checked 0.89 vs 0.64, called 0.75 vs 0.52, not acted 0.91
+    vs 0.60), and everyone folded to hero's multiway raises 0.33 of the time against 0.12 (n 27). Fold odds x2 and
+    re-raise share x0.25 for those players, in the Monte Carlo's first answers to hero's raise and, when hero only calls
+    a street someone raised, for the players still to act (they skip OVERCALL_FOLD then). The multiway turn and river
+    solvers play the field as one hand and don't take it.
+  - A bettor facing hero's raise re-raised 5 of 76 times where the Monte Carlo said 0.205 (rrAgg 2x; at 1x about 0.10);
+    over everyone's raises bettors re-raised 15 of 203 against predictAction's 25.2 (x0.60). So 0.7x their raise rate.
+  - Per player: the tracker keeps every answer to a raise after the flop (`tally.vsRaise`, newest 60, out of decay,
+    merged over linked ids: { y f/c/r, f price / pot, n street, role b bettor / x raiser / c called / k checked / u not
+    acted, ck, ag, rr, h hero raised }; stored hands fill it in once, `tagVsRaise`, `db.vrTagged`; 29 of 30 players'
+    lists the same as replaying the raw events). `vsRaiseReads` fits a log-odds offset on the player's cold answers
+    against predictAction's fold (sd 0.5) and one on their answers as the bettor against its raise share x 0.6; advice
+    reads carry `vr` {cold, nCold, rr, nBet}. At the end of the logs: Mark cold 12 of 17 folded (x2.43), as the bettor
+    0 re-raises in 40 (x0.50); Dew345 x2.51 (25) and 3 in 17 (x1.05); Jagger x1.91 (7) and 4 in 49 (x0.59).
+  - On the 76 hero raises (frozen captures with the per-player lists): all-fold predicted 0.190 -> 0.210 (0.342 done;
+    log-likelihood -57.7 -> -54.9), re-raised 0.205 -> 0.085 (0.066 done; -29.2 -> -20.6). Of the 473 logged decisions
+    facing a bet after the flop, 14 picks change, 8 in kind (5 flop raises become calls, mostly draws and medium hands
+    that wanted the cold callers; 2 calls become raises).
+  - Simulator (v16r regulars, live budget, 1,000 deals each, both on vs both off; rule set before the runs: on if pooled
+    above -1 SE): 3-handed +17.6 ± 19.1 (seed 12101), 4-handed +24.4 ± 23.2 (12103) and -23.9 ± 25.6 (12102), 5-handed
+    -25.2 ± 19.2 (12104); pooled about -1 ± 11. The bots fold cold to hero's raises about as the friends do (flop 0.81 vs
+    0.83, table check) and re-raise them about twice as often (flop heads-up 0.18 vs 0.12), which the per-player
+    multiplier learns from their answers. Files: sims/2026-11-21-vsraise/.
+  - Not changed: the bettor's own fold to hero's raise (raiseAggFold 0.55): the Monte Carlo said 0.26 where 0.355
+    folded (n 76), but the first half of the logs is on target (odds x1.05) and the second half x2.45. Watch it.
 - Raised bettors fold less (v1.7.4): continueRule scales a raised bettor's fold-to-bet by 0.55 (was 0.75;
   `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
   about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
