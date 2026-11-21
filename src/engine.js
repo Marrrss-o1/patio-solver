@@ -6255,8 +6255,10 @@
     const vsRaiseAdjust = (o, rule) => {
       if (!CR || o.aggressor || !o.vsRaise) return rule;
       const cont = clamp(1 - oddsScale(1 - rule.cont, o.vsRaise.odds), 0.03, 0.97);
-      return Object.assign({}, rule, { cont, reraise: Math.min((rule.reraise || 0) * CR.rr, cont) });
+      return Object.assign({}, rule, { cont, reraise: Math.min((rule.reraise || 0) * CR.rr, cont), cold: true });
     };
+    // The street already has a raise (an opponent raised it): when hero only calls, the players still to act are cold too.
+    const coldCall = !!CR && CR.call !== false && opps.some((o) => o.raiser);
     for (const sc of scenarios) {
       sc.opp = opps.map((o, i) => {
         const stay = { cont: 1, nut: 0, add: 0 };
@@ -6270,7 +6272,8 @@
         if (!raising) {
           if (!unmatched(i)) return stay;
           if (i === bigBlindSeat) return { cont: 1, nut: 0, add: 0, reraise: clamp(o.stats.pfr * 0.6, 0.02, 0.2) };
-          const rule = continueRule(o, ctx, pot / (pot + toCall), { amount: toCall });
+          // Hero calls a raise: players still to act face the bet and the raise (COLD_RAISE, coldCall).
+          const rule = coldCall ? vsRaiseAdjust(o, continueRule(o, ctx, pot / (pot + toCall), { amount: toCall })) : continueRule(o, ctx, pot / (pot + toCall), { amount: toCall });
           rule.add = oweOr(i, toCall, toCall);
           rule.reraise = street === 0 ? clamp(toCall <= bigBlind ? o.stats.pfr : o.stats.pfr * 0.4, 0.02, 0.3) : Math.min(rule.reraise, rule.cont);
           if (toCall >= stack) rule.reraise = 0;
@@ -6340,7 +6343,7 @@
           if (sc.kind === 'fold' || sc.kind === 'check' || (toCall > 0 && sc.amount > toCall + 1e-9)) continue;
           sc.oppAfter = opps.map((o, i) => {
             const r = sc.opp[i];
-            if (!unmatched(i) || r.cont >= 0.999) return r;
+            if (!unmatched(i) || r.cont >= 0.999 || r.cold) return r;
             const cont = clamp(1 - oddsScale(1 - r.cont, ocf), 0.03, 0.97);
             return Object.assign({}, r, { cont, reraise: Math.min(r.reraise || 0, cont) });
           });
