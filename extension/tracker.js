@@ -31,6 +31,7 @@
   const MAX_SHOWS = 80;
   const MAX_JAM_SHOWS = 20;
   const MAX_MW_FOLDS = 40;
+  const MAX_VS_RAISE = 60;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -40,7 +41,7 @@
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -100,6 +101,11 @@
       // (v1.8.29, MW_BET_FOLD's per-player read): { y: 1 folded, f: bet / pot before it, n: street, ck: checked first on
       // the street, ag: bet or raised earlier in the hand, rr: re-raised preflop, k: opponents }. Newest MAX_MW_FOLDS.
       mwFolds: [],
+      // Answers to a raise after the flop (v1.8.44, COLD_RAISE and RAISED_RR's per-player reads): { y: 'f' | 'c' | 'r',
+      // f: price / pot before it, n: street, role: 'b' had bet or raised the street, 'c' called it, 'k' checked, 'u' not
+      // acted, ck: first action on the street a check, ag: bet or raised earlier in the hand, rr: re-raised preflop,
+      // h: the raise was hero's }. Newest MAX_VS_RAISE.
+      vsRaise: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -129,7 +135,7 @@
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -149,6 +155,9 @@
     const mw = [];
     for (const t of list) for (const a of t.mwFolds || []) mw.push(a);
     out.mwFolds = mw.slice(-MAX_MW_FOLDS);
+    const vr = [];
+    for (const t of list) for (const a of t.vsRaise || []) vr.push(a);
+    out.vsRaise = vr.slice(-MAX_VS_RAISE);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -791,6 +800,19 @@
           if (kind !== 'fold') mo.stayed = true;
         }
       }
+      // Answers to a raise after the flop (tally.vsRaise): this street had a bet and a raise before this action.
+      if (r && street > 0 && facing > 0 && (kind === 'fold' || kind === 'call' || kind === 'raise')) {
+        const a = PatioTracker.vsRaiseEntry(h.log.slice(0, -1), h.log[h.log.length - 1]);
+        if (a) {
+          a.f = Math.round((facing / Math.max(1, potBefore - facing)) * 1000) / 1000;
+          a.ag = p.agg.length > 0 ? 1 : 0;
+          a.rr = /^\dbet$/.test(PatioTracker.preAction(p)) ? 1 : 0;
+          const t = r.tally;
+          if (!t.vsRaise) t.vsRaise = [];
+          t.vsRaise.push(a);
+          if (t.vsRaise.length > MAX_VS_RAISE) t.vsRaise.splice(0, t.vsRaise.length - MAX_VS_RAISE);
+        }
+      }
       if (street === 0) {
         if (r && !p.faced3 && h.preRaises === 1 && kind !== 'check') {
           p.faced3 = true;
@@ -1219,6 +1241,43 @@
       return n;
     }
 
+    // Answers to raises after the flop from hands stored before v1.8.44 (tally.vsRaise, COLD_RAISE and RAISED_RR's
+    // per-player reads), found in each stored hand's action log as the live tracker counts them, oldest first (the
+    // account id as tagMwFolds finds it). Meant to run once, before any hand of this version. Returns how many were added.
+    tagVsRaise(entries) {
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log) && Array.isArray(e.players)).sort((a, b) => (a.t || 0) - (b.t || 0));
+      let n = 0;
+      for (const e of list) {
+        const log = e.log.filter((x) => x && x.act);
+        log.forEach((x, i) => {
+          if (x.hero || !(x.facing > 0)) return;
+          const a = PatioTracker.vsRaiseEntry(log.slice(0, i), x);
+          if (!a) return;
+          const id = idFor(x.who, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) return;
+          const before = log.slice(0, i).filter((y) => y.who === x.who);
+          a.f = Math.round((x.facing / Math.max(1, (x.pot || 0) - x.facing)) * 1000) / 1000;
+          a.ag = before.some((y) => y.st !== 'pre' && (y.act === 'bet' || y.act === 'raise')) ? 1 : 0;
+          a.rr = before.some((y) => y.st === 'pre' && /^\dbet$/.test(y.act)) ? 1 : 0;
+          const t = r.tally || (r.tally = blankTally());
+          if (!t.vsRaise) t.vsRaise = [];
+          t.vsRaise.push(a);
+          if (t.vsRaise.length > MAX_VS_RAISE) t.vsRaise.splice(0, t.vsRaise.length - MAX_VS_RAISE);
+          n++;
+        });
+      }
+      return n;
+    }
+
     // More tendencies, counted before this action updates the hand state:
     // limps, fold to 3-bet, donk bets, check-raises, and how long they take for each kind of action.
     extraStats(p, t, kind, facing, key) {
@@ -1380,6 +1439,9 @@
           rrTilt: o.stats.tiltRaise && o.stats.tiltRaise.n ? { tilt: r2(o.stats.tiltRaise.tilt), n: o.stats.tiltRaise.n } : undefined,
           // v1.8.40: the chips-in tilt this player's range got (slope x ln(bb in / 15)), their slope and the shows it rests on.
           chTilt: o.stats.chipTilt && o.stats.chipTilt.tilt ? { tilt: r2(o.stats.chipTilt.tilt), slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
+          // v1.8.44: answers to hero's raise after the flop (COLD_RAISE, RAISED_RR): cold fold odds and the bettor's
+          // re-raise multiplier, with the answers each rests on.
+          vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -1482,6 +1544,25 @@
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind === 'allin' && kind === 'call') return !(adv.amount > (adv.toCall || 0) + 1e-9);
       return group(adv.kind) === group(kind);
+    }
+
+    // An answer to a raise after the flop (tally.vsRaise): `log` is the hand's actions before it, `me` the answer (both in
+    // the hand log's form). Null unless the street had a bet and a raise before it. Role: 'b' their last action on the
+    // street was the bet, 'x' a raise (facing a re-raise), 'c' a call, 'k' a check, 'u' none yet. f, ag and rr are filled
+    // in by the caller.
+    static vsRaiseEntry(log, me) {
+      if (!me || !me.st || me.st === 'pre' || (me.act !== 'fold' && me.act !== 'call' && me.act !== 'raise')) return null;
+      let nb = 0, last = null;
+      const mine = [];
+      for (const x of log) {
+        if (!x || x.st !== me.st) continue;
+        if (x.act === 'bet' || x.act === 'raise') { nb++; last = x; }
+        if (x.who === me.who) mine.push(x);
+      }
+      if (nb < 2) return null;
+      const lastMine = mine.filter((x) => x.act !== 'sb' && x.act !== 'bb').pop();
+      const role = !lastMine ? 'u' : lastMine.act === 'bet' ? 'b' : lastMine.act === 'raise' ? 'x' : lastMine.act === 'call' ? 'c' : 'k';
+      return { y: me.act === 'fold' ? 'f' : me.act === 'call' ? 'c' : 'r', f: 0, n: { flop: 3, turn: 4, river: 5 }[me.st], role, ck: mine.length && mine[0].act === 'check' ? 1 : 0, ag: 0, rr: 0, h: last.hero ? 1 : 0 };
     }
 
     static preAction(p) {

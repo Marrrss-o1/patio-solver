@@ -2,7 +2,7 @@
 
 One line per behavioural switch in `createAnalysis`'s input (src/engine.js), so a review can see what is on, what each
 was decided on, and what would change the decision. Budget and size knobs (iterations, samples, time limits, bet menus)
-are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42). Update a row
+are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44). Update a row
 when its switch changes.
 
 Columns:
@@ -67,6 +67,8 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `nearAllIn` | 0.9 | v1.8.10 | sim five runs +1.0 ± 2.7 | |
 | `reraiseRaiserFold` | 0.25 | v1.8.10 | logs: 0 of 9 folded; sim nine runs -1.6 ± 2.3 | |
 | `reraiseModel` (`reraiseAgg` 2x) | on | v1.7.3 | sim about +28 ± 16 (4-handed), +14 ± 23 heads-up | |
+| `raisedRR` (bettor re-raises hero's raise at 0.7x, per player; replaces reraiseAgg's 2x) | on | v1.8.44 | logs: re-raised 5 of 76 of hero's raises where the solver said 0.205, bettors re-raised 15 of 203 against 25.2 read; sim with coldRaise about -1 ± 11 (four runs) | bettors re-raising hero's raises more than read again |
+| `coldRaise` (players facing a bet and hero's raise fold odds x2, re-raise x0.25, per player) | on | v1.8.44 | logs: 0.70 folded against 0.54 read (n 117, both halves agree), 0 of 117 re-raised; at hero's raises 0.83 vs 0.59 (n 41); sim with raisedRR about -1 ± 11 | cold players calling hero's raises as read |
 | `raiseAggFold` | 0.55 | v1.7.4 | logs: raised bettors folded 6 of 19; sim +22.6 ± 20.6 4-handed | |
 | `raisePrice` | on | v1.8.13 | the 4 Nov QQ spot (a 1-chip all-in read as a full raise); 2 of 1,017 decisions change | |
 | `riverRaiseFold` | off | | sim about neutral; changes no logged decision | |

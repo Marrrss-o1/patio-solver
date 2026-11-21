@@ -1545,7 +1545,7 @@ test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river che
   assert.strictEqual(t.tagCheckBet([hand(1, 4, 'call')]), 0, 'already there');
 });
 
-test('vsRaise (v1.8.44): answers to raises after the flop by role, the same from stored hands; per-player reads', () => {
+test('vsRaise (v1.8.44, on): answers to raises after the flop by role, the same from stored hands; per-player reads', () => {
   // A bets, B calls, C raises: A answers as the bettor, B as having called, D (not acted) cold.
   const L = [{ st: 'pre', who: 'A', act: 'call' }, { st: 'flop', who: 'D0', act: 'check' }, { st: 'flop', who: 'A', act: 'bet', amt: 4 },
     { st: 'flop', who: 'B', act: 'call', amt: 4 }, { st: 'flop', who: 'C', act: 'raise', amt: 16, hero: true }];
@@ -1591,11 +1591,11 @@ test('vsRaise (v1.8.44): answers to raises after the flop by role, the same from
     opponents: [{ name: 'A', tally: T2, actions: { pre: 'call', flop: 'bet' }, committed: 12, stack: 290 },
       { name: 'B', tally: T2, actions: { pre: 'call', flop: '' }, committed: 4, stack: 290 },
       { name: 'D', tally: T2, actions: { pre: 'call', flop: '' }, committed: 4, stack: 290 }] }, extra));
-  const off = spot(), on = spot({ coldRaise: true, raisedRR: true });
+  const off = spot({ coldRaise: false, raisedRR: false }), on = spot();
   const raise = (r) => r.ranked.filter((x) => x.kind === 'raise').sort((a, b) => a.amount - b.amount)[0];
   assert.ok(raise(on).foldPct > raise(off).foldPct * 1.5, `all fold ${raise(off).foldPct} -> ${raise(on).foldPct}`);
   assert.ok(raise(on).reraisedPct < raise(off).reraisedPct, `re-raised ${raise(off).reraisedPct} -> ${raise(on).reraisedPct}`);
-  assert.strictEqual(JSON.stringify(spot({ coldRaise: false }).ranked.map((x) => x.ev)), JSON.stringify(off.ranked.map((x) => x.ev)), 'off is the old rule');
+  assert.strictEqual(JSON.stringify(spot({ coldRaise: false, raisedRR: false, reraiseAgg: 2 }).ranked.map((x) => x.ev)), JSON.stringify(off.ranked.map((x) => x.ev)), 'off is the old rule');
 });
 
 test("multiway: hero's story moves every player's folds, as heads-up", () => {
@@ -1711,10 +1711,14 @@ test('multiway lookahead: no stabs or raises with weak hands that only win when 
     const fe = b.foldPct * spots.stabJackHigh.pot;
     assert.ok(b.ev - chk.ev <= fe + 1.5 * (b.se || 0), `J-high 4-way: bet ${b.amount} EV ${b.ev} vs check ${chk.ev}, fold equity ${fe} (SE ${b.se})`);
   }
+  // Since v1.8.44 players facing the bet and hero's raise fold more (COLD_RAISE, as in the logs) and the bettor
+  // re-raises less (RAISED_RR), so K-high's raise comes out about even (+0.8 chips, call +3.8); it must stay well
+  // below the best option, and below 0 with both reads off.
   for (const k of ['raiseMiddlePair', 'raiseKingHigh']) {
-    const r = run(spots[k]);
+    const r = run(spots[k]), old = run(Object.assign({}, spots[k], { coldRaise: false, raisedRR: false }));
     assert.notStrictEqual(r.best.kind, 'raise', k + ': best was raise ' + r.best.amount);
-    assert.ok(ev(r, 'raise') < 0, k + ': raise EV ' + ev(r, 'raise'));
+    assert.ok(ev(r, 'raise') < r.best.ev - 2, k + ': raise EV ' + ev(r, 'raise') + ' vs best ' + r.best.ev);
+    assert.ok(ev(old, 'raise') < 0, k + ': raise EV with the reads off ' + ev(old, 'raise'));
   }
   // A strong hand still wins a lot, and betting it is about as good as anything (the lookahead alone: with
   // heroPotTilt the bet is about 93% of checking here). With the multiway first answers' extra folds (mwBetFold,

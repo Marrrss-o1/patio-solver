@@ -1534,6 +1534,66 @@
     }
     return { odds: cfg.odds * Math.exp(u), n: obs.length, u };
   }
+  // Players facing hero's raise after the flop who did not bet or raise the street themselves (COLD_RAISE, v1.8.44): they
+  // checked earlier, called the bet before hero raised, or had not acted yet, and now face a bet and a raise. Every
+  // postflop answer to a raise in the logs to 21 Nov (1,584 hands, reads replayed in order): such players folded 0.70
+  // where their read (predictAction at the price) said 0.54 (n 117; both halves of the logs x2.15 / x1.85, each scoring
+  // the other +2.1 / +3.1 nats over the read), and re-raised 0 of 117 times against 7.4 predicted; to hero's raises
+  // 0.83 against the Monte Carlo's 0.59 (n 41), the all-fold at hero's multiway raises 0.33 against 0.12 (n 27).
+  // Fold odds x `odds` (per player: a log-odds offset u fitted on their own cold answers, tally.vsRaise roles k/c/u,
+  // against predictAction's fold there, normal prior sd `tau`; odds x exp(u)), re-raise share x `rr`. Also the players
+  // still to act when hero only calls a street someone raised. Monte Carlo answers only (the multiway turn and river
+  // solvers play the field as one hand). On since v1.8.44 with RAISED_RR (input.coldRaise: false turns it off): on the
+  // logs the all-fold at hero's raises read 0.190 -> 0.210 (0.342 done, +2.8 nats) and being re-raised 0.205 -> 0.085
+  // (0.066 done, +8.6 nats); 14 of 473 decisions facing a bet after the flop change, 8 in kind (5 flop raises become
+  // calls). Simulator, v16r regulars, live budget, 1,000 deals each, both on vs off (rule set before the runs: on if
+  // pooled above -1 SE): 3-handed +17.6 +- 19.1, 4-handed +24.4 +- 23.2 and -23.9 +- 25.6, 5-handed -25.2 +- 19.2;
+  // pooled about -1 +- 11. The v16r bots fold cold to hero's raises about as the friends do (flop 0.81 vs 0.83) and
+  // re-raise them about twice as often (the per-player read learns that from their answers).
+  const COLD_RAISE = { odds: 2, rr: 0.25, tau: 0.5, max: 40 };
+  // A bettor facing hero's raise after the flop re-raises at rrAgg x their raise rate (2 since v1.7.3, from 4 of 22
+  // spots). All logs to 21 Nov: bettors facing a raise re-raised 15 of 203 times where predictAction said 25.2 (x0.60),
+  // and 5 of hero's 76 raises against the Monte Carlo's 0.205 (x2). RAISED_RR (v1.8.44, input.raisedRR): the table's
+  // `mult` replaces 2, moved per player by a log-odds offset on their own answers as bettors (tally.vsRaise role b)
+  // against predictAction's raise share times `fitMult`, sd `tau`. input.raisedRR: false is the old 2x (reraiseAgg).
+  const RAISED_RR = { mult: 0.7, fitMult: 0.6, tau: 0.5, max: 40 };
+  // Log-odds offset u for a player's answers: obs [{ l: log-odds as read, y }], table offset b0, normal prior sd tau.
+  function fitOffset(obs, b0, tau) {
+    if (!(tau > 0) || !obs.length) return 0;
+    const prec = 1 / (tau * tau);
+    let u = 0;
+    for (let it = 0; it < 8; it++) {
+      let g = -u * prec, h = -prec;
+      for (const o of obs) { const q = 1 / (1 + Math.exp(-(o.l + b0 + u))); g += o.y - q; h -= q * (1 - q); }
+      u = clamp(u - g / h, -2, 2);
+    }
+    return u;
+  }
+  // A player's own cold-fold odds and bettor re-raise multiplier from tally.vsRaise ({ y: 'f'|'c'|'r', f: price as a
+  // share of the pot before it, n: street, role: 'b' bet or raised the street | 'k' checked | 'c' called | 'u' had not
+  // acted, ck: first action on the street a check }). Returns { odds, nCold, mult, nBet }.
+  function vsRaiseReads(stats, cold, rrc, list) {
+    const out = { odds: cold ? cold.odds : 1, nCold: 0, mult: rrc ? rrc.mult : null, nBet: 0 };
+    if (!Array.isArray(list) || !list.length) return out;
+    const base = Object.assign({}, stats, { betOdds: null, commitOdds: null, foldShift: 0, coldOdds: null });
+    const oc = [], ob = [];
+    for (const a of list.slice(-Math.max(cold ? cold.max || 40 : 0, rrc ? rrc.max || 40 : 0))) {
+      if (!a || !(a.n >= 3 && a.n <= 5) || !(a.f > 0)) continue;
+      if (a.role === 'x') continue;
+      const pa = predictAction(base, { kind: 'face', n: a.n, frac: a.f, mw: true, checked: a.role === 'u' ? false : a.ck ? true : null, aggLine: !!a.ag, reraised: !!a.rr });
+      const sum = Math.max(1e-9, pa.fold + pa.call + pa.raise);
+      if (a.role === 'b') {
+        const p = clamp(pa.raise / sum, 0.005, 0.95);
+        ob.push({ l: Math.log(p / (1 - p)), y: a.y === 'r' ? 1 : 0 });
+      } else {
+        const p = clamp(pa.fold / sum, 0.02, 0.98);
+        oc.push({ l: Math.log(p / (1 - p)), y: a.y === 'f' ? 1 : 0 });
+      }
+    }
+    if (cold && oc.length) { out.nCold = oc.length; out.odds = cold.odds * Math.exp(fitOffset(oc.slice(-(cold.max || 40)), Math.log(cold.odds), cold.tau)); }
+    if (rrc && ob.length) { out.nBet = ob.length; out.mult = rrc.mult * Math.exp(fitOffset(ob.slice(-(rrc.max || 40)), Math.log(rrc.fitMult || rrc.mult), rrc.tau)); }
+    return out;
+  }
   // Roles from the hand's action history (input.history: { st, who, act } in order): roles[name][street] = the role at
   // their first action on that street; now(name, street) = their role if they acted next on `street`.
   function initiativeRoles(history) {
@@ -5975,6 +6035,11 @@
     // slope, an object replaces fields ({ own: 0 }: the group's slope for everyone).
     const CHT = input.chipTilt === false || street < 3 ? null : Object.assign({}, CHIP_TILT, typeof input.chipTilt === 'number' ? { slope: input.chipTilt } : input.chipTilt && typeof input.chipTilt === 'object' ? input.chipTilt : {});
     const MWBF = input.mwBetFold == null || input.mwBetFold === false ? null : Object.assign({}, MW_BET_FOLD, typeof input.mwBetFold === 'number' ? { odds: input.mwBetFold } : input.mwBetFold && typeof input.mwBetFold === 'object' ? input.mwBetFold : {});
+    // Answers to hero's raise after the flop (v1.8.44): COLD_RAISE (input.coldRaise: false is the v1.8.43 rule, a number
+    // sets the table's odds, an object replaces fields) and RAISED_RR (input.raisedRR: false is the old 2x, a number sets
+    // the table's mult, an object replaces fields).
+    const CR = street >= 3 && toCall > 0 && input.coldRaise !== false ? Object.assign({}, COLD_RAISE, typeof input.coldRaise === 'number' ? { odds: input.coldRaise } : input.coldRaise && typeof input.coldRaise === 'object' ? input.coldRaise : {}) : null;
+    const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6096,6 +6161,7 @@
         // Whether the plans and solvers fold them at foldAfterAgg (see AGGRO_FOLD).
         aggroFold: AGGRO_FOLD === 'none' ? false : street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')) && !(AGGRO_FOLD === 'unacted' && now === 'check'),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
+        vsRaise: CR || RRR ? (stats.vsRaiseRead = vsRaiseReads(stats, CR, RRR, o.tally && o.tally.vsRaise)) : null,
       };
     });
 
@@ -6191,6 +6257,16 @@
     // nothing, so hero needed to beat their whole checking range (or, with an all-in player, the main pot's).
     const facing = opps.map((o, i) => input.checkersFace !== false && street > 0 && toCall > 0 && !o.pending && !allIn(i) && (owe(i, toCall) || 0) > 1e-9);
     const unmatched = (i) => opps[i].pending || facing[i];
+    // COLD_RAISE / RAISED_RR on hero's raises after the flop (see there): the bettor's re-raise rate through ctx.rrAgg,
+    // the cold players' folds and re-raises on the rule.
+    const rrCtx = (o) => (RRR && o.aggressor && !o.raiser && o.vsRaise && o.vsRaise.mult != null && rrModel ? Object.assign({}, ctx, { rrAgg: o.vsRaise.mult }) : ctx);
+    const vsRaiseAdjust = (o, rule) => {
+      if (!CR || o.aggressor || !o.vsRaise) return rule;
+      const cont = clamp(1 - oddsScale(1 - rule.cont, o.vsRaise.odds), 0.03, 0.97);
+      return Object.assign({}, rule, { cont, reraise: Math.min((rule.reraise || 0) * CR.rr, cont), cold: true });
+    };
+    // The street already has a raise (an opponent raised it): when hero only calls, the players still to act are cold too.
+    const coldCall = !!CR && CR.call !== false && opps.some((o) => o.raiser);
     for (const sc of scenarios) {
       sc.opp = opps.map((o, i) => {
         const stay = { cont: 1, nut: 0, add: 0 };
@@ -6204,7 +6280,8 @@
         if (!raising) {
           if (!unmatched(i)) return stay;
           if (i === bigBlindSeat) return { cont: 1, nut: 0, add: 0, reraise: clamp(o.stats.pfr * 0.6, 0.02, 0.2) };
-          const rule = continueRule(o, ctx, pot / (pot + toCall), { amount: toCall });
+          // Hero calls a raise: players still to act face the bet and the raise (COLD_RAISE, coldCall).
+          const rule = coldCall ? vsRaiseAdjust(o, continueRule(o, ctx, pot / (pot + toCall), { amount: toCall })) : continueRule(o, ctx, pot / (pot + toCall), { amount: toCall });
           rule.add = oweOr(i, toCall, toCall);
           rule.reraise = street === 0 ? clamp(toCall <= bigBlind ? o.stats.pfr : o.stats.pfr * 0.4, 0.02, 0.3) : Math.min(rule.reraise, rule.cont);
           if (toCall >= stack) rule.reraise = 0;
@@ -6222,7 +6299,7 @@
           rule = { cont, nut: 0.965, reraise: clamp(o.stats.pfr * 0.4, 0.02, 0.12) / Math.max(cont, 0.05), add: sc.amount - bigBlind };
         } else {
           const mdf = unmatched(i) ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
-          rule = continueRule(o, ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser, openTo });
+          rule = vsRaiseAdjust(o, continueRule(o, rrCtx(o), mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser, openTo }));
           rule.add = unmatched(i) ? sc.amount : sc.amount - toCall;
           if (!(street === 0 && o.pending)) rule.reraise = Math.min(rule.reraise, rule.cont);
         }
@@ -6259,7 +6336,7 @@
           const r = sc.opp[i];
           if (r.cont >= 0.999 || !o.statsHU) return r;
           const mdf = unmatched(i) ? pot / (pot + sc.amount) : (pot + toCall) / (pot + sc.amount);
-          const hu = continueRule(Object.assign({}, o, { stats: o.statsHU }), ctx, mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser });
+          const hu = vsRaiseAdjust(o, continueRule(Object.assign({}, o, { stats: o.statsHU }), rrCtx(o), mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser }));
           hu.reraise = sc.amount >= stack ? 0 : Math.min(hu.reraise, hu.cont);
           hu.add = r.add;
           return hu;
@@ -6274,7 +6351,7 @@
           if (sc.kind === 'fold' || sc.kind === 'check' || (toCall > 0 && sc.amount > toCall + 1e-9)) continue;
           sc.oppAfter = opps.map((o, i) => {
             const r = sc.opp[i];
-            if (!unmatched(i) || r.cont >= 0.999) return r;
+            if (!unmatched(i) || r.cont >= 0.999 || r.cold) return r;
             const cont = clamp(1 - oddsScale(1 - r.cont, ocf), 0.03, 0.97);
             return Object.assign({}, r, { cont, reraise: Math.min(r.reraise || 0, cont) });
           });
@@ -7498,7 +7575,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
