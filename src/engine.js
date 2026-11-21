@@ -6153,7 +6153,7 @@
         // Whether the plans and solvers fold them at foldAfterAgg (see AGGRO_FOLD).
         aggroFold: AGGRO_FOLD === 'none' ? false : street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')) && !(AGGRO_FOLD === 'unacted' && now === 'check'),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
-        vsRaise: CR || RRR ? vsRaiseReads(stats, CR, RRR, o.tally && o.tally.vsRaise) : null,
+        vsRaise: CR || RRR ? (stats.vsRaiseRead = vsRaiseReads(stats, CR, RRR, o.tally && o.tally.vsRaise)) : null,
       };
     });
 

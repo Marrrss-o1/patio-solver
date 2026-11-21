@@ -129,6 +129,8 @@ function slim(r) {
   if (!tracker.db.mwTagged) { tracker.tagMwFolds(tracker.db.history || []); tracker.db.mwTagged = 1; save(DB_KEY, tracker.db); }
   // Shows saved before v1.8.36 (whether they reached a showdown, for the read of river bets after hero's check): once.
   if (!tracker.db.sdTagged) { tracker.tagShowdown(tracker.db.history || []); tracker.db.sdTagged = 1; save(DB_KEY, tracker.db); }
+  // Answers to raises after the flop (tally.vsRaise, v1.8.44) from hands stored before: once.
+  if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

@@ -1439,6 +1439,9 @@
           rrTilt: o.stats.tiltRaise && o.stats.tiltRaise.n ? { tilt: r2(o.stats.tiltRaise.tilt), n: o.stats.tiltRaise.n } : undefined,
           // v1.8.40: the chips-in tilt this player's range got (slope x ln(bb in / 15)), their slope and the shows it rests on.
           chTilt: o.stats.chipTilt && o.stats.chipTilt.tilt ? { tilt: r2(o.stats.chipTilt.tilt), slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
+          // v1.8.44: answers to hero's raise after the flop (COLD_RAISE, RAISED_RR): cold fold odds and the bettor's
+          // re-raise multiplier, with the answers each rests on.
+          vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
