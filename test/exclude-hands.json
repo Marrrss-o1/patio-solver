@@ -1,6 +1,19 @@
 {
-  "note": "Hands left out of every log study (test/merge-logs.js loadHands drops them unless opts.keepExcluded). Key: the hand's start time t (ms) and hero's cards, as keyOf in merge-logs.js. Only hands that say nothing about how anyone plays: Marwin giving chips away on purpose and the like.",
+  "note": "Hands left out of every log study (test/merge-logs.js loadHands drops them unless opts.keepExcluded). hands: matched by the hand's start time t (ms) and hero's cards, as keyOf in merge-logs.js. ranges: every hand with from <= t <= to. Only hands that say nothing about how anyone plays: Marwin giving chips away on purpose, sessions the friends didn't play for real, and the like. Exports from v1.8.47 also mark the hands a session's \"Leave out\" took out of the reads (excluded: true), which loadHands drops the same way.",
   "hands": [
-    { "t": 1794318883077, "hero": "2s2d", "date": "2026-11-10 20:54 Bangkok", "why": "Deliberate chip dump (Marwin, 11 Nov): raise to 41bb where 6bb was advised, fold the flop where check was advised. Dew345 called." }
+    {
+      "t": 1794318883077,
+      "hero": "2s2d",
+      "date": "2026-11-10 20:54 Bangkok",
+      "why": "Deliberate chip dump (Marwin, 11 Nov): raise to 41bb where 6bb was advised, fold the flop where check was advised. Dew345 called."
+    }
+  ],
+  "ranges": [
+    {
+      "from": 1795525657037,
+      "to": 1795527534950,
+      "date": "2026-11-24 20:07-20:38 Bangkok",
+      "why": "Not played for real (Marwin, 24 Nov: \"my friends played like super stupidly since this wasn't 'real'\"). 65 hands, MarAllin with PrimeTada (Tader / Primekokomi) and Nigstar123."
+    }
   ]
 }

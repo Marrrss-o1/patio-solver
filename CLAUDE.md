@@ -31,6 +31,7 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
   handlog.js             Hand log storage: one chrome.storage key per hand (unlimitedStorage), newest 1,000 kept.
                          Exports (v1.8.21): "Hand log" opens a list: New hands (since the export mark, `nextMark`),
                          one session (45-minute breaks, `sessions`) or everything; one hand per line (`toFile`).
+                         Each session can be left out of the reads there (v1.8.47, Known gaps: Left-out hands).
   backup.js              A copy of the reads (and the newest 150 hands, no raw events) in pokerpatio.com's IndexedDB,
                          which survives removing the extension; a fresh install loads it (v1.8.5).
   background.js          Service worker. Forwards solves to the offscreen page (falls back to analyzeSync itself).
@@ -620,6 +621,26 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   computer or browser profile. A copy that couldn't be read isn't written over, nor one with far more history than
   the reads replacing it (under half, unless "Reset reads" was pressed). `REINSTALL=1 npm run test:extension` wipes
   the extension's storage after the replay and checks the reads come back.
+- Left-out hands (v1.8.47; Marwin, 24 Nov: the friends played 20:07-20:38 for fun): "Leave out" on a session in the
+  panel's Hand log list takes its hands out of the reads, as if they were never played; "Put back" undoes it. The
+  ranges are kept with the reads (`db.leftOut`, hand start times, both ends in; `PatioTracker.leftOutTest`), so
+  Import's rebuild leaves them out too (`rebuildReads` opts.leftOut), and exports mark those hands `excluded: true`,
+  which `loadHands` (merge-logs.js) and calibrate.js drop like test/exclude-hands.json (now also `ranges`: 24 Nov
+  20:07-20:38, 65 hands). The hand log keeps them. `PatioTracker.dropHands(db, stored, isOut, { was })`: every count
+  shrinks by one factor a hand (DECAY) and what a hand adds depends only on its events, so a count before = (count now
+  - the same hands replayed from zero) / the shrink they applied (a `_k` probe), exactly. Lists drop the entries those
+  hands added at their end and get back the ones they pushed out of a full list from up to 400 earlier stored hands
+  (a regained entry's read-dependent part, a show's fit or a chance's P(bet), as the reads then see it). The read's
+  accuracy (`pred`) is matched by replaying from the state before until it ends where the reads are, and the later
+  hands that stay in are replayed on top. On all logs plus that session (links from the start; scratch check): the 5
+  reads it touches come back within 1e-14 of a rebuild that never saw those hands, pred too, and PrimeTada's betRecent
+  (60 entries, all from that session) regains its 28 older ones; leaving out only the first 30 hands and keeping the
+  rest gives the same. A link made during those hands counts from their start (Nigstar123's account was joined at its
+  first hand, so the group's other ids shrink once more: 0.3%). `check` is the largest count gap between that replay
+  and the reads (0 when the log has every hand the reads saw; a hand that starts and is never played shrinks counts
+  without being logged); the panel says so above 0.5%. makePredictor caches the average player's read until the pool's
+  preflop folds change, so in made-up hands where nobody folds preflop a replay that starts partway scores pred.pop
+  differently from the table (the test uses an uncached predictor).
 - Bet-size flag (v1.8.5): when hero bets or raises under 60% of the advised chips (the tracker's `sizeRatio`), the
   stale advice says so ("Smaller than advised: you put in $22 of the advised $42") and the panel counts it for the
   session. In the 31 Oct + 1 Nov logs hero's smaller bets cluster at a third of the pot and at the minimum bet, often

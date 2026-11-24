@@ -246,6 +246,11 @@
       if (ui.showLog) { logView = null; refreshLog(); } else render();
     } else if (what === 'logNew' || what === 'logAll' || what === 'logSession') {
       exportLog(what, +a.getAttribute('data-from'), +a.getAttribute('data-to'));
+    } else if (what === 'leaveOut' || what === 'putBack') {
+      if (!tracker || leaving) return;
+      const label = what === 'leaveOut' ? 'Leave out' : 'Put back';
+      if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = label; }, 3000); return; }
+      leaveOut(+a.getAttribute('data-from'), +a.getAttribute('data-to'), what === 'putBack');
     } else if (what === 'import') {
       if (!tracker || importing) return;
       fileIn.value = '';
@@ -329,7 +334,7 @@
       const known = {};
       for (const [id, r] of Object.entries(tracker.db.players)) if (r && r.name && id.slice(0, 5) !== 'name:') known[r.name] = tracker.canon(id);
       const res = await PatioTracker.rebuildReads(stored.concat(fresh), {
-        known, heroAuth: tracker.snap && tracker.snap.heroAuthId, yieldEvery: 10,
+        known, heroAuth: tracker.snap && tracker.snap.heroAuthId, yieldEvery: 10, leftOut: tracker.db.leftOut,
         same: tracker.db.same, notSame: tracker.db.notSame, linkLog: tracker.db.linkLog,
         setup: (t) => {
           t.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, t.poolTally());
@@ -353,7 +358,8 @@
       await moveMark(got).catch(() => null);
       if (ui.showLog) refreshLog();
       importNote = `Imported ${add.added} new hand${add.added === 1 ? '' : 's'} (${got.length - fresh.length} already here). Reads rebuilt from ${res.replayed} hands` +
-        (res.skipped ? `; ${res.skipped} without raw events only went into the log` : '') + (kept ? `; ${kept} reads with more history kept as they were` : '') + '.';
+        (res.skipped ? `; ${res.skipped} without raw events only went into the log` : '') + (res.leftOut ? `; ${res.leftOut} you left out stay out` : '') +
+        (kept ? `; ${kept} reads with more history kept as they were` : '') + '.';
     } catch (e) {
       importNote = 'Import failed: ' + ((e && e.message) || e);
     }
@@ -410,6 +416,9 @@
         hands = (tracker.db.history || []).filter((e) => e.t > from && e.t <= to);
         note = " The stored hands couldn't be read, so this has only the page's newest 150.";
       }
+      // Hands left out of the reads go out marked, so the log tools leave them out too (test/merge-logs.js).
+      const isOut = PatioTracker.leftOutTest(tracker.db.leftOut);
+      hands = hands.map((e) => (isOut(e) && !e.excluded ? Object.assign({}, e, { excluded: true }) : e));
       if (!hands.length) logNote = 'No hands to export.';
       else {
         const name = download(hands);
@@ -427,6 +436,55 @@
       logNote = 'Export failed: ' + ((e && e.message) || e);
     }
     exporting = false;
+    await refreshLog();
+  }
+
+  // "Leave out" (v1.8.47; Marwin, 24 Nov: friends who played a session for fun): a session's hands come out of the
+  // reads, which come back as if those hands had never been played (PatioTracker.dropHands), and "Put back" puts them
+  // in again. The ranges are kept with the reads (db.leftOut, hand start times), so Import's rebuild leaves them out
+  // too, and their hands export marked `excluded`, which the log tools skip. The hand log keeps them.
+  let leaving = false;
+  async function leaveOut(from, to, back) {
+    if (!tracker || leaving) return;
+    leaving = true;
+    logNote = back ? 'Putting those hands back into the reads…' : 'Taking those hands out of the reads…'; render();
+    try {
+      const was = tracker.db.leftOut || [];
+      const next = back ? was.filter((r) => !(r.from <= to && r.to >= from)) : was.concat([{ from, to, at: Date.now() }]);
+      const known = {};
+      for (const [id, r] of Object.entries(tracker.db.players)) if (r && r.name && id.slice(0, 5) !== 'name:') known[r.name] = tracker.canon(id);
+      const stored = await handLog.exportAll(tracker.db);
+      // Hands played while this runs would be lost from the reads it returns, so it starts over if any came in.
+      let res = null;
+      for (let tries = 0; tries < 3; tries++) {
+        const before = JSON.stringify(tracker.db.players);
+        res = await PatioTracker.dropHands(tracker.db, stored, PatioTracker.leftOutTest(next), {
+          was: PatioTracker.leftOutTest(was), known, heroAuth: tracker.snap && tracker.snap.heroAuthId, yieldEvery: 10,
+          setup: (t) => {
+            t.scorer = (show, tally) => PokerEngine.scoreShow(show, tally, ui.tableStyle, t.poolTally());
+            t.predictor = PokerEngine.makePredictor(() => ui.tableStyle, () => t.poolTally());
+            t.fitVersion = PokerEngine.FIT_VERSION;
+          },
+          onProgress: (i, n) => { logNote = `Replaying hands: ${i} of ${n}…`; render(); },
+        });
+        if (JSON.stringify(tracker.db.players) === before) break;
+        res = undefined;
+      }
+      if (res === undefined) throw new Error('hands kept coming in. Try again between hands');
+      tracker.db.leftOut = next;
+      if (res) { tracker.db.players = res.db.players; tracker.linkAsks = null; tracker.whoAsks = null; }
+      await saveDb();
+      if (advice && !advice.stale) requestAdvice();
+      const names = res ? [...new Set(res.ids.map((k) => tracker.namesOf(tracker.canon(k))[0] || k))] : [];
+      logNote = !res ? 'None of those hands are stored with their events, so the reads stay as they were.'
+        : (back ? `Put back ${handsTxt(res.back)}` : `Left out ${handsTxt(res.out)}`) + (names.length ? `. Reads changed: ${names.join(', ')}` : '') +
+          (res.redone ? `; ${handsTxt(res.redone)} played after them replayed on top` : '') + '.' +
+          // The reads saw hands the log doesn't have (an extension reload mid-hand and the like): close, not exact.
+          (res.check > 0.005 ? ` Some counts saw hands the log doesn't have, so they come back within about ${Math.max(1, Math.round(res.check * 100))}%.` : '');
+    } catch (e) {
+      logNote = (back ? 'Putting back' : 'Leaving out') + ' failed: ' + ((e && e.message) || e);
+    }
+    leaving = false;
     await refreshLog();
   }
 
@@ -544,16 +602,24 @@
     html += '<div class="lk">' + (fresh ? `<button class="btn" data-a="logNew">New hands (${fresh})</button>` : '<span class="muted">No new hands since the last export.</span>') +
       `<button class="btn" data-a="logAll">Everything (${times.length})</button></div>`;
     const ss = PatioHandLog.sessions(times).slice(-6).reverse();
+    const isOut = PatioTracker.leftOutTest(tracker.db.leftOut);
+    const out = (t) => isOut({ t });
     if (ss.length) {
       html += '<div class="sec" style="margin-top:6px">Sessions</div>';
       for (const s of ss) {
         const end = day(s.from) === day(s.to) ? hhmm(s.to) : day(s.to) + ' ' + hhmm(s.to);
         const done = mark != null && s.to <= mark ? ' · exported' : '';
-        html += `<div class="lk"><span>${esc(day(s.from) + ' ' + hhmm(s.from) + '–' + end)} · ${handsTxt(s.n)}${done}</span><span style="flex:1"></span>` +
-          `<button class="btn" data-a="logSession" data-from="${s.from - 1}" data-to="${s.to}">Export</button></div>`;
+        // Left out of the reads (all or some of its hands): "Put back"; else "Leave out", for hands not played for real.
+        const outN = times.filter((t) => t >= s.from && t <= s.to && out(t)).length;
+        const outTxt = outN ? (outN === s.n ? ' · left out of the reads' : ` · ${outN} left out of the reads`) : '';
+        html += `<div class="lk"><span>${esc(day(s.from) + ' ' + hhmm(s.from) + '–' + end)} · ${handsTxt(s.n)}${done}${outTxt}</span><span style="flex:1"></span>` +
+          `<button class="btn" data-a="logSession" data-from="${s.from - 1}" data-to="${s.to}">Export</button>` +
+          (outN ? `<button class="btn" data-a="putBack" data-from="${s.from}" data-to="${s.to}" title="Count these hands in the reads again">Put back</button>`
+            : `<button class="btn" data-a="leaveOut" data-from="${s.from}" data-to="${s.to}" title="Not played for real: the reads go back to as if these hands were never played. The hand log keeps them">Leave out</button>`) + '</div>';
       }
     }
     if (logNote) html += `<div class="status${/failed|couldn't/.test(logNote) ? ' neg' : ''}">${esc(logNote)}</div>`;
+    else if (ss.length) html += '<div class="muted">“Leave out” takes a session that wasn\'t played for real out of the reads, as if it had never been played.</div>';
     return html + '</div>';
   }
   const handsOfTally = (r) => { const t = (r && r.tally) || {}; return (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0); };

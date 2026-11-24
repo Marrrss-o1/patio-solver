@@ -1833,6 +1833,192 @@
     if (!p || !(p.n >= 1)) return null;
     return { n: Math.round(p.n), gain: Math.round(((p.pop - p.read) / p.n) * 1000) / 1000, surprise: Math.round((p.read / p.n) * 1000) / 1000 };
   }
+  // Hand-log entries replayed in order through tracker `t`, each on its own recorded clock (it ended at e.t), so think
+  // times come out as played. idOf(e, name, accountId) gives a seat's account id; o.heroAuth hero's when the hand doesn't
+  // say; o.yieldEvery / o.onProgress keep a page usable.
+  async function replayEntries(t, list, idOf, o) {
+    let i = 0;
+    for (const e of list) {
+      const heroP = (e.players || []).find((p) => p.hero);
+      const heroName = heroP ? heroP.name : null;
+      let snap = null;
+      const last = e.raw[e.raw.length - 1];
+      const base = (e.t || 0) - ((last && last.t) || 0);
+      let cur = base;
+      t.clock = () => cur;
+      for (const r of e.raw) {
+        cur = base + (r.t || 0);
+        if (r.s) {
+          const players = r.s.map(([id, name, stack, posType, playState, auth]) => ({ id, name, stack, posType, playState, authUserId: idOf(e, name, auth) }));
+          const me = heroName && players.find((x) => x.name === heroName);
+          snap = { tableType: 'private', heroAuthId: me ? me.authUserId : o.heroAuth || null, bigBlind: r.bb || (snap && snap.bigBlind) || e.bigBlind, players };
+        }
+        try { t.handle(r.ev, r.d, r.s ? snap : null); } catch (err) { /* a broken event skips itself */ }
+      }
+      if (t.hand && !t.hand.finished) t.finishHand();
+      if (o.yieldEvery && ++i % o.yieldEvery === 0) {
+        if (o.onProgress) o.onProgress(i, list.length);
+        await new Promise((res) => setTimeout(res, 0));
+      }
+    }
+  }
+
+  // Hands left out of the reads (db.leftOut: [{ from, to }], hand start times, both ends in) or flagged `excluded`.
+  function leftOutTest(ranges) {
+    const rs = (ranges || []).filter((r) => r && r.from != null && r.to != null);
+    return (e) => !!(e && (e.excluded || rs.some((r) => e.t >= r.from && e.t <= r.to)));
+  }
+
+  // Hands left out of the reads, or put back (v1.8.47, "Leave out" on the panel's sessions; Marwin, 24 Nov: friends who
+  // played a session for fun). The reads now are the stored hands minus those `was` leaves out; they come back as the
+  // stored hands minus those `isOut` leaves out, as if the hands left out had never been played. Every id dealt into a
+  // hand from the first one that differs on goes back to where it stood before it, and the hands from there that stay
+  // in are replayed. Every count shrinks by the same factor each hand (DECAY) and what a hand adds to it depends only on
+  // its events, so a count then = (count now - what those hands added, replayed from zero) / the shrink they applied,
+  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent; newest kept) lose the entries those hands added at
+  // their end, and get back the older ones they pushed out of a full list from the stored hands before. The read's own
+  // accuracy (pred.read / pred.pop) is what the read predicted at the time, so it is matched by replaying the same hands
+  // from the state then with the reads as they were, until the replay ends where the reads are now.
+  // A link made during those hands counts as made before them (each of the player's ids shrinks once a hand there).
+  // entries: stored hands (with raw events). opts: setup, known, heroAuth, yieldEvery, onProgress (as rebuildReads),
+  // was (default: nothing left out yet).
+  // -> null if no stored hand changes side, else { db: { players }, ids (reads changed), removed (ids with no hand
+  //    left), out / back (hands left out / put back), redone (hands replayed after), regained (list entries found
+  //    again), check (largest gap, over every count, between the replay from the state then and the reads now: about 0
+  //    when the stored hands are the ones the reads saw) }
+  async function dropHands(db, entries, isOut, opts) {
+    const o = opts || {};
+    const was = o.was || (() => false);
+    const copy = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
+    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent'];
+    const list = (entries || []).filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
+    const i0 = list.findIndex((e) => !was(e) !== !isOut(e));
+    if (i0 < 0) return null;
+    const tail = list.slice(i0);
+    const inNow = tail.filter((e) => !was(e)), inAfter = tail.filter((e) => !isOut(e));
+    const known = o.known || {};
+    const idOf = (e, name, given) => given || known[name] || 'name:' + name;
+    const make = (players, scored) => {
+      const t = new PatioTracker({ players, same: copy(db.same), notSame: copy(db.notSame), seen: copy(db.seen) });
+      t.rawKeep = 0; t.linkReads = false; t.rescoreLimit = 0;
+      if (scored && o.setup) o.setup(t);
+      // From zero: a flat predictor, so the lists that keep the read's chances (betRecent) get their entries.
+      else if (!scored) { const one = { fold: 1, call: 1, raise: 1, check: 1, bet: 1 }; t.predictor = () => [one, one]; }
+      return t;
+    };
+    const zeroed = (t) => {
+      const z = {};
+      for (const k of Object.keys(t)) {
+        const v = t[k];
+        z[k] = LISTS.includes(k) ? [] : typeof v === 'number' ? 0 : v && typeof v === 'object' && !Array.isArray(v) ? zeroed(v) : copy(v);
+      }
+      return z;
+    };
+    // What the hands in the reads now added from the first one that changes side, replayed from zero; `_k` the shrink.
+    const now = {}, zp = {};
+    for (const [id, r] of Object.entries(db.players || {})) {
+      if (!r) continue;
+      now[id] = upgradeTally(copy(r.tally || {}));
+      zp[id] = { name: r.name, tally: Object.assign(zeroed(now[id]), { _k: 1 }) };
+    }
+    const tz = make(zp, false);
+    await replayEntries(tz, inNow, idOf, o);
+    const hasAny = (t) => (t.pfFold || 0) + (t.pfCall || 0) + (t.pfRaise || 0) > 1e-9 || LISTS.some((k) => (t[k] || []).length);
+    const ids = Object.keys(now).filter((id) => tz.db.players[id] && (tz.db.players[id].tally._k < 1 || hasAny(tz.db.players[id].tally)));
+    const fac = {}, then = {};
+    const sub = (c, a, f) => {
+      const out = {};
+      for (const k of Object.keys(c)) {
+        const v = c[k], w = a ? a[k] : undefined;
+        if (LISTS.includes(k)) out[k] = (v || []).slice(0, Math.max(0, (v || []).length - ((w && w.length) || 0)));
+        else if (typeof v === 'number') out[k] = Math.max(0, (v - (typeof w === 'number' ? w : 0)) / f);
+        else if (v && typeof v === 'object' && !Array.isArray(v)) out[k] = sub(v, w, f);
+        else out[k] = copy(v);
+      }
+      return out;
+    };
+    for (const id of ids) {
+      fac[id] = tz.db.players[id].tally._k;
+      then[id] = sub(now[id], tz.db.players[id].tally, fac[id]);
+    }
+    const base = () => {
+      const p = copy(db.players);
+      for (const id of ids) p[id] = Object.assign({}, p[id], { tally: copy(then[id]) });
+      return p;
+    };
+    // Entries those hands pushed out of a full list are found again in the hands before (up to 400 of them), replayed
+    // with the reads then: a regained entry's read-dependent part (a show's fit, a betting chance's P(bet)) is as the
+    // reads then see it, not as it was when first kept.
+    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT };
+    const short = [];
+    for (const id of ids) for (const k of LISTS) if (((tz.db.players[id].tally[k] || []).length) && (now[id][k] || []).length >= MAXL[k]) short.push([id, k]);
+    let regained = 0;
+    if (short.length && i0 > 0) {
+      const hp = base();
+      for (const [id, k] of short) hp[id].tally[k] = [];
+      const th = make(hp, true);
+      await replayEntries(th, list.slice(Math.max(0, i0 - 400), i0), idOf, o);
+      for (const [id, k] of short) {
+        const got = (th.db.players[id] && th.db.players[id].tally[k]) || [], have = then[id][k];
+        const n = Math.min(MAXL[k] - have.length, got.length - have.length);
+        if (n > 0) { then[id][k] = got.slice(got.length - have.length - n, got.length - have.length).concat(have); regained += n; }
+      }
+    }
+    // The read's accuracy (counted only with a predictor, so the replay from zero has none of it): replay from the state
+    // then with the scorer and predictor, until it ends where the reads are.
+    const gap = (g, w, top) => {
+      let m = 0;
+      for (const k of Object.keys(w)) {
+        if (LISTS.includes(k) || (top && k === 'pred')) continue;
+        const a = g ? g[k] : undefined, b = w[k];
+        if (typeof b === 'number') m = Math.max(m, Math.abs((typeof a === 'number' ? a : 0) - b) / Math.max(1, Math.abs(b)));
+        else if (b && typeof b === 'object' && !Array.isArray(b)) m = Math.max(m, gap(a, b, false));
+      }
+      return m;
+    };
+    let check = 0;
+    for (let it = 0; it < 5 && ids.length; it++) {
+      const tr = make(base(), true);
+      await replayEntries(tr, inNow, idOf, o);
+      let move = 0;
+      check = 0;
+      for (const id of ids) {
+        const got = tr.db.players[id].tally, want = now[id], pr = then[id].pred;
+        check = Math.max(check, gap(got, want, true));
+        for (const k of ['n', 'read', 'pop']) {
+          const d = (want.pred[k] - got.pred[k]) / fac[id];
+          pr[k] = Math.max(0, pr[k] + d);
+          move = Math.max(move, Math.abs(d));
+        }
+      }
+      if (move < 1e-8) break;
+    }
+    // From the state then, the hands that stay in.
+    let final = base();
+    if (inAfter.length) {
+      const tk = make(final, true);
+      await replayEntries(tk, inAfter, idOf, o);
+      final = tk.db.players;
+    }
+    const players = Object.assign({}, db.players);
+    const linked = new Set();
+    for (const [k, v] of Object.entries(db.same || {})) { linked.add(k); linked.add(v); }
+    const removed = [];
+    // Players the reads had none of (every hand of theirs was left out) come back from the replay.
+    for (const id of Object.keys(final)) if (!db.players[id] && !ids.includes(id)) ids.push(id);
+    for (const id of ids) {
+      const r = final[id];
+      if (!r || (!hasAny(r.tally) && !linked.has(id))) { delete players[id]; removed.push(id); continue; }
+      delete r.tally._k;
+      players[id] = Object.assign({}, r, { name: (db.players[id] && db.players[id].name) || r.name });
+    }
+    return {
+      db: { players }, ids, removed, check, regained,
+      out: tail.filter((e) => isOut(e) && !was(e)).length, back: tail.filter((e) => was(e) && !isOut(e)).length,
+      redone: inAfter.filter((e) => !isOut(e) && !was(e)).length,
+    };
+  }
+
   // Reads rebuilt from hand-log entries (an export, or the stored log plus an import): every hand
   // with raw events is replayed, oldest first, through a fresh tracker, exactly as at the table.
   // Raw snapshots from v1.8.1 on carry each player's account id; older ones only names, so a name
@@ -1863,37 +2049,18 @@
     const t = new PatioTracker({ players: {}, same: copy(o.same), notSame: copy(o.notSame), linkLog: copy(o.linkLog) });
     t.rawKeep = 0;
     if (o.setup) o.setup(t);
-    const list = entries.filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
-    let i = 0;
-    for (const e of list) {
-      const heroP = (e.players || []).find((p) => p.hero);
-      const heroName = heroP ? heroP.name : null;
-      let snap = null;
-      // Replay on the hand's own clock (it ended at e.t), so think times come out as they were played.
-      const last = e.raw[e.raw.length - 1];
-      const base = (e.t || 0) - ((last && last.t) || 0);
-      let cur = base;
-      t.clock = () => cur;
-      for (const r of e.raw) {
-        cur = base + (r.t || 0);
-        if (r.s) {
-          const players = r.s.map(([id, name, stack, posType, playState, auth]) => ({ id, name, stack, posType, playState, authUserId: idOf(e, name, auth) }));
-          const me = heroName && players.find((x) => x.name === heroName);
-          snap = { tableType: 'private', heroAuthId: me ? me.authUserId : o.heroAuth || null, bigBlind: r.bb || (snap && snap.bigBlind) || e.bigBlind, players };
-        }
-        try { t.handle(r.ev, r.d, r.s ? snap : null); } catch (err) { /* a broken event skips itself */ }
-      }
-      if (t.hand && !t.hand.finished) t.finishHand();
-      if (o.yieldEvery && ++i % o.yieldEvery === 0) {
-        if (o.onProgress) o.onProgress(i, list.length);
-        await new Promise((res) => setTimeout(res, 0));
-      }
-    }
+    // Hands left out of the reads on the panel (db.leftOut, v1.8.47) stay out of a rebuild too.
+    const out = leftOutTest(o.leftOut);
+    const all = entries.filter((e) => e && Array.isArray(e.raw) && e.raw.length);
+    const list = all.filter((e) => !out(e)).sort((a, b) => (a.t || 0) - (b.t || 0));
+    await replayEntries(t, list, idOf, o);
     const db = { players: t.db.players };
     for (const k of ['same', 'notSame', 'seen', 'linkLog']) if (t.db[k]) db[k] = t.db[k];
-    return { db, replayed: list.length, skipped: entries.length - list.length };
+    return { db, replayed: list.length, skipped: entries.length - all.length, leftOut: all.length - list.length };
   }
   PatioTracker.rebuildReads = rebuildReads;
+  PatioTracker.dropHands = dropHands;
+  PatioTracker.leftOutTest = leftOutTest;
   PatioTracker.predSummary = predSummary;
   PatioTracker.blankTally = blankTally;
   PatioTracker.DECAY = DECAY;

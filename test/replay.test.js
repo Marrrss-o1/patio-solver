@@ -1546,6 +1546,19 @@ test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river che
   assert.strictEqual(t.tagCheckBet([hand(1, 4, 'call')]), 0, 'already there');
 });
 
+test('trustShows (off): read trust from the table\'s showdown hit rate, not the player\'s own', () => {
+  const tally = (hits) => {
+    const t = T.blankTally();
+    t.pfFold = 10; t.pfCall = 15; t.pfRaise = 2;
+    t.shows = Array.from({ length: 5 }, (_, i) => ({ cards: ['As', 'Kd'], board: ['2c', '3c', '4c'], fit: { top: i < hits ? 0.2 : 0.8, lr: 1, sq: 0.5, v: E.FIT_VERSION } }));
+    return t;
+  };
+  const ew = (hits, ctx) => E.computeStats(tally(hits), 'typical', null, ctx).exploitWeight;
+  assert.ok(ew(4) > ew(1) + 0.1, 'by default one player\'s hits move it: ' + ew(1) + ' ' + ew(4));
+  near(ew(1, { hitTrust: 0.9 }), ew(4, { hitTrust: 0.9 }));
+  near(ew(1, { hitTrust: 0.9 }), Math.max(0.3, Math.min(0.95, (0.5 + (0.4 * 27) / 120) * 0.9)), 0.01);
+});
+
 test('vsRaise (v1.8.44, on): answers to raises after the flop by role, the same from stored hands; per-player reads', () => {
   // A bets, B calls, C raises: A answers as the bettor, B as having called, D (not acted) cold.
   const L = [{ st: 'pre', who: 'A', act: 'call' }, { st: 'flop', who: 'D0', act: 'check' }, { st: 'flop', who: 'A', act: 'bet', amt: 4 },

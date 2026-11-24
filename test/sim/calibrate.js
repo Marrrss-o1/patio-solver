@@ -60,10 +60,11 @@ const BB = 2, STACK = 300;
 // ---------- targets ----------
 // Exports overlap (each holds the last 150 hands), so hands are taken once by their time stamp.
 const seenT = new Set();
-// Hands in test/exclude-hands.json (deliberate chip dumps) are left out, as in loadHands.
-const DROP = require('../merge-logs.js').excluded();
+// Hands in test/exclude-hands.json (deliberate chip dumps, sessions not played for real) and hands an export marks
+// `excluded` are left out, as in loadHands.
+const DROP = require('../merge-logs.js').excluder();
 const entries = files.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8'))).filter((h) => (h.t == null || !seenT.has(h.t)) && (seenT.add(h.t), true))
-  .filter((h) => !DROP.has(h.t + ':' + (h.hero || []).join('')));
+  .filter((h) => !DROP(h));
 const tallies = prof.profileEntries(entries);
 const names = Object.keys(tallies).filter((n) => tallies[n].hands >= MIN_HANDS).sort((a, b) => tallies[b].hands - tallies[a].hands);
 const pool = prof.summarize(prof.mergeTallies(Object.values(tallies)));
