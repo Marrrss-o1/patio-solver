@@ -1598,6 +1598,87 @@ test('vsRaise (v1.8.44, on): answers to raises after the flop by role, the same 
   assert.strictEqual(JSON.stringify(spot({ coldRaise: false, raisedRR: false, reraiseAgg: 2 }).ranked.map((x) => x.ev)), JSON.stringify(off.ranked.map((x) => x.ev)), 'off is the old rule');
 });
 
+test('betRecent (v1.8.45): chances to bet after the flop kept per player, the same from stored hands; the offset', () => {
+  // Live tracker and stored hands agree (tagBetRecent): the same chances, in order, with the read's P(bet).
+  const live = new T({ players: {} });
+  live.predictor = E.makePredictor(() => 'typical', () => live.poolTally());
+  for (const m of real) { if (m.ev === 'hook:attached') { live.snap = m.snap; continue; } live.handle(m.ev, m.data, m.snap); }
+  const ids = Object.keys(live.db.players).filter((id) => (live.db.players[id].tally.betRecent || []).length);
+  assert.ok(ids.length >= 1, 'someone had a chance to bet');
+  for (const a of live.db.players[ids[0]].tally.betRecent) assert.ok(a.p > 0 && a.p < 1 && (a.y === 0 || a.y === 1) && a.t > 0, JSON.stringify(a));
+  const t2 = new T(JSON.parse(JSON.stringify(live.db)));
+  for (const r of Object.values(t2.db.players)) r.tally.betRecent = [];
+  t2.predictor = E.makePredictor(() => 'typical', () => t2.poolTally());
+  assert.strictEqual(t2.tagBetRecent(live.db.history), live.db.players[ids[0]].tally.betRecent.length);
+  assert.deepStrictEqual(t2.db.players[ids[0]].tally.betRecent.map((a) => a.y), live.db.players[ids[0]].tally.betRecent.map((a) => a.y));
+  assert.strictEqual(new T({ players: {} }).tagBetRecent(live.db.history), 0, 'no predictor, nothing');
+  // Out of decay, and merged over linked ids in time order.
+  const tl = T.blankTally ? T.blankTally() : { betRecent: [] };
+  const db = { players: { a: { name: 'X', tally: Object.assign({}, tl, { betRecent: [{ p: 0.3, y: 1, t: 1 }, { p: 0.3, y: 0, t: 5 }] }) },
+    b: { name: 'X2', tally: Object.assign({}, tl, { betRecent: [{ p: 0.4, y: 1, t: 3 }] }) } } };
+  const t3 = new T(db);
+  t3.link('a', 'b');
+  assert.deepStrictEqual(t3.readTally('a').betRecent.map((x) => x.t), [1, 3, 5]);
+  // The offset: none without a list, up after bets, down after checks, the newest weighing most.
+  const L = (ys, p) => ys.split('').map((y, i) => ({ p: p || 0.4, y: +y, t: i }));
+  const O = (list) => E.betRecentOdds(list, E.BET_RECENT);
+  assert.strictEqual(O([]).odds, 1);
+  assert.strictEqual(O(undefined).n, 0);
+  assert.ok(O(L('1'.repeat(20))).odds > 2, 'bets: x' + O(L('1'.repeat(20))).odds);
+  assert.ok(O(L('0'.repeat(20))).odds < 0.6, 'checks: x' + O(L('0'.repeat(20))).odds);
+  assert.ok(O(L('1111111111' + '0000000000')).odds < 1 && O(L('0000000000' + '1111111111')).odds > 1, 'newest first');
+  assert.ok(Math.abs(Math.log(O(L('0110100101', 0.5)).odds)) < 0.15, 'on target: x' + O(L('0110100101', 0.5)).odds);
+  assert.strictEqual(O(L('1'.repeat(200))).n, E.BET_RECENT.max);
+  // Through the engine (input.betRecent true; off by default since its simulator runs): an opponent who has been
+  // betting reads as betting more (and so as weaker when they bet). Off, the offset is still reported (on: false) and
+  // the advice is the old read's.
+  const T2 = { bet: 10, check: 20, call: 14, raise: 4, fold: 6 };
+  const facing = (list, extra) => E.analyzeSync(Object.assign({ hero: C('Qd Jc'), board: C('Qh 8h 3c 2s'), pot: 40, toCall: 20, stack: 280, bigBlind: 2,
+    inPosition: true, mix: false, seed: 7, iterations: 8000, lookahead: false, turnSolver: false, betRecent: true,
+    opponents: [{ name: 'A', tally: Object.assign({}, T2, { betRecent: list }), actions: { pre: 'call', flop: 'check', turn: 'bet' }, committed: 40, stack: 260 }] }, extra));
+  const plain = facing([]), aggro = facing(L('1'.repeat(20))), passive = facing(L('0'.repeat(20)));
+  assert.ok(aggro.opponents[0].stats.betFreq > plain.opponents[0].stats.betFreq + 0.1);
+  assert.ok(aggro.equity.share > plain.equity.share && passive.equity.share < plain.equity.share,
+    `equity ${passive.equity.share} / ${plain.equity.share} / ${aggro.equity.share}`);
+  const offR = facing(L('1'.repeat(20)), { betRecent: undefined }), offF = facing(L('1'.repeat(20)), { betRecent: false });
+  assert.strictEqual(JSON.stringify(offR.ranked.map((x) => x.ev)), JSON.stringify(plain.ranked.map((x) => x.ev)), 'off by default: the old read');
+  assert.strictEqual(JSON.stringify(offF.ranked.map((x) => x.ev)), JSON.stringify(plain.ranked.map((x) => x.ev)), 'false: the old read');
+  assert.strictEqual(offR.opponents[0].stats.betRecent.on, false, 'off still reports the offset');
+  assert.ok(Math.abs(offR.opponents[0].stats.betRecent.odds - aggro.opponents[0].stats.betRecent.odds) < 1e-12);
+  assert.strictEqual(offF.opponents[0].stats.betRecent, undefined);
+  assert.strictEqual(plain.opponents[0].stats.betRecent, undefined);
+  assert.deepStrictEqual(Object.keys(aggro.opponents[0].stats.betRecent), ['odds', 'n', 'on']);
+  assert.strictEqual(aggro.opponents[0].stats.betRecent.on, true);
+  assert.ok(facing(L('1'.repeat(20)), { betRecent: { sd: 0.5 } }).opponents[0].stats.betRecent.on, 'an object turns it on');
+  // Preflop is untouched.
+  const pf = (list) => E.analyzeSync({ hero: C('9c 8c'), board: [], pot: 3, toCall: 1, stack: 200, bigBlind: 2, inPosition: false, mix: false, seed: 7,
+    iterations: 3000, betRecent: true, opponents: [{ name: 'A', tally: Object.assign({}, T2, { betRecent: list }), actions: { pre: 'raise' }, committed: 2, stack: 198 }] });
+  assert.strictEqual(JSON.stringify(pf(L('1'.repeat(20))).ranked.map((x) => x.ev)), JSON.stringify(pf([]).ranked.map((x) => x.ev)));
+});
+
+test('hand log: the per-player read fields survive both panels\' slim (v1.8.45)', () => {
+  const fs = require('fs'), vm = require('vm');
+  const extSlim = vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../extension/slim.js'), 'utf8') + '\nslim', {});
+  const us = fs.readFileSync(path.join(__dirname, '../src/userscript-core.js'), 'utf8');
+  const i0 = us.indexOf('function slim(r) {');
+  const usSlim = vm.runInNewContext(us.slice(i0, us.indexOf('\n}\n', i0) + 2) + '\nslim', { isFinite });
+  const T2 = { bet: 10, check: 20, call: 14, raise: 4, fold: 6, pred: { n: 40, read: 30, pop: 33 },
+    vsRaise: [{ y: 'f', f: 0.8, n: 3, role: 'u', ck: 0, ag: 0, rr: 0 }], betRecent: [{ p: 0.4, y: 1, t: 1 }, { p: 0.4, y: 1, t: 2 }] };
+  const r = E.analyzeSync({ hero: C('Qd Jc'), board: C('Qh 8h 3c 2s'), pot: 120, toCall: 30, stack: 200, bigBlind: 2, inPosition: true, mix: false,
+    seed: 7, iterations: 4000, lookahead: false, turnSolver: false,
+    opponents: [{ name: 'A', tally: T2, actions: { pre: 'call', flop: 'bet', turn: 'bet' }, committed: 60, stack: 200 }] });
+  const reads = (res) => {
+    const t = new T({ players: {} });
+    t.hand = { board: C('Qh 8h 3c 2s'), finished: false };
+    t.noteAdvice('Call', 1, res, (sc) => sc.kind);
+    return t.hand.advice[0].reads;
+  };
+  const full = reads(r);
+  for (const k of ['chTilt', 'vr', 'br', 'act', 'noise', 'certainty', 'trust', 'callBig']) assert.ok(full[0][k] !== undefined, k + ' in the full result');
+  assert.deepStrictEqual(reads(extSlim(r)), full, 'extension');
+  assert.deepStrictEqual(reads(usSlim(r)), full, 'userscript');
+});
+
 test("multiway: hero's story moves every player's folds, as heads-up", () => {
   // The credibility shift (hero's line looks strong) used to reach only o.stats; multiway bets are
   // answered with the heads-up read until someone stays (#39), so all-fold rates ignored it.

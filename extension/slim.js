@@ -22,6 +22,13 @@ function slim(r) {
         exploitWeight: o.stats.exploitWeight, accuracy: o.stats.accuracy, strengthBias: o.stats.strengthBias,
         callBig: o.stats.callBig, tiltAgg: o.stats.tiltAgg, tiltPas: o.stats.tiltPas, tiltHero: o.stats.tiltHero,
         mwBet: o.stats.mwBet, tiltCheckBet: o.stats.tiltCheckBet ? { tilt: o.stats.tiltCheckBet.tilt, n: o.stats.tiltCheckBet.n } : undefined,
+        // The per-player reads the hand log keeps (tracker noteAdvice); before v1.8.45 they never reached it.
+        predAccuracy: o.stats.predAccuracy || undefined, rangeNoise: o.stats.rangeNoise, certainty: o.stats.certainty,
+        heroPotOwn: o.stats.heroPotOwn ? { tilt: o.stats.heroPotOwn.tilt, n: o.stats.heroPotOwn.n } : undefined,
+        tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
+        chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
+        vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
+        betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
       },
       topClasses: o.grid.topClasses.slice(0, 8).map((c) => c.name),
       heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance,

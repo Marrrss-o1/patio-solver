@@ -1594,6 +1594,45 @@
     if (rrc && ob.length) { out.nBet = ob.length; out.mult = rrc.mult * Math.exp(fitOffset(ob.slice(-(rrc.max || 40)), Math.log(rrc.fitMult || rrc.mult), rrc.tau)); }
     return out;
   }
+  // Recent betting (v1.8.45, BET_RECENT; off: input.betRecent true turns it on, an object turns it on and replaces fields;
+  // the offset is still computed and reported in stats.betRecent { odds, n, on } for the hand log): a player's bet
+  // rate when they can open the betting after the flop (check or bet, nobody's bet in yet), moved by how their newest
+  // such decisions went against the read at the time. The read remembers about 330 hands (DECAY), and on 21-24 Nov
+  // Jagger bet 0.74 of those spots against a read of 0.57 (n 101, z 3.7) and Mark 0.51 against 0.35 (n 84, z 3.2),
+  // where both had been on target before. The tracker keeps each player's newest `max` such decisions with the read's
+  // P(bet) then (tally.betRecent { p, y, t }, out of decay, merged over linked ids by time); the offset u is the MAP
+  // log-odds shift on them with weight lam^age (newest 1) and a normal prior sd `sd`, and the engine scales the player's
+  // bet rates (all streets after the flop, c-bets too) by exp(u) in odds. All logs (3,649 decisions, each predicted from
+  // earlier ones): +26.6 nats over the read, and better in each of the five periods (31 Oct-3 Nov +5.6, 4-5 Nov +2.2,
+  // 6-7 Nov +3.5, 10-11 Nov +7.5, 21-24 Nov +7.7); Mark +8.8, Jagger +7.7, everyone else +10.1. lam 0.93-0.97 and sd
+  // 0.5-0.7 score about the same. The same offset on folds to bets loses (-7.8 nats over 2,700 answers): only betting
+  // drifts from session to session. Off since its simulator runs (24 Nov): no loss against the v16r regulars (+0.4 ±
+  // 10.7 bb/100 over five runs), but -27.2 ± 14.9 over three runs against xp:switch, the style switcher it was built for.
+  const BET_RECENT = { lam: 0.95, sd: 0.5, max: 60 };
+  // { odds, n } for a player's betRecent list (odds 1 with no list).
+  function betRecentOdds(list, cfg) {
+    const out = { odds: 1, n: 0 };
+    if (!cfg || !Array.isArray(list) || !list.length || !(cfg.sd > 0)) return out;
+    const L = list.slice(-(cfg.max || 60)).filter((a) => a && a.p > 0 && a.p < 1);
+    if (!L.length) return out;
+    const prec = 1 / (cfg.sd * cfg.sd), lam = cfg.lam != null ? cfg.lam : 0.95;
+    let u = 0;
+    for (let it = 0; it < 30; it++) {
+      let g = -u * prec, h = -prec, w = 1;
+      for (let j = L.length - 1; j >= 0; j--) {
+        const p = clamp(L[j].p, 0.005, 0.995);
+        const q = 1 / (1 + Math.exp(-(Math.log(p / (1 - p)) + u)));
+        g += w * ((L[j].y ? 1 : 0) - q); h -= w * q * (1 - q);
+        w *= lam;
+        if (w < 1e-4) break;
+      }
+      const step = g / h;
+      u = clamp(u - step, -2, 2);
+      if (Math.abs(step) < 1e-7) break;
+    }
+    out.odds = Math.exp(u); out.n = L.length;
+    return out;
+  }
   // Roles from the hand's action history (input.history: { st, who, act } in order): roles[name][street] = the role at
   // their first action on that street; now(name, street) = their role if they acted next on `street`.
   function initiativeRoles(history) {
@@ -6040,6 +6079,8 @@
     // the table's mult, an object replaces fields).
     const CR = street >= 3 && toCall > 0 && input.coldRaise !== false ? Object.assign({}, COLD_RAISE, typeof input.coldRaise === 'number' ? { odds: input.coldRaise } : input.coldRaise && typeof input.coldRaise === 'object' ? input.coldRaise : {}) : null;
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
+    const BRon = input.betRecent === true || (!!input.betRecent && typeof input.betRecent === 'object');
+    const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6053,6 +6094,23 @@
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       // input.checkLine: false drops the check-line read (#47) everywhere, the lookahead's after-check folds too (simulator).
       if (input.checkLine === false) { const L1 = { checkedFold: 1, checkedRaise: 1, unactedRaise: 1 }; stats.line = L1; if (statsHU) statsHU.line = L1; }
+      // Recent betting (BET_RECENT): their bet rates after the flop move with their newest chances to bet, before the
+      // range is built, so their past bets this hand read as wide as their betting now is. Off by default: the offset is
+      // still worked out and reported (stats.betRecent.on false), so hand logs can keep checking it.
+      if (BRC && street >= 3) {
+        const br = betRecentOdds(o.tally && o.tally.betRecent, BRC);
+        if (br.n) stats.betRecent = { odds: br.odds, n: br.n, on: BRon };
+        if (BRon && br.n && br.odds !== 1) {
+          for (const S of statsHU ? [stats, statsHU] : [stats]) {
+            S.betFreq = oddsScale(S.betFreq, br.odds);
+            if (S.cbet != null) S.cbet = oddsScale(S.cbet, br.odds);
+            const bs = {};
+            for (const n of [3, 4, 5]) bs[n] = Object.assign({}, S.byStreet[n], { betFreq: oddsScale(S.byStreet[n].betFreq, br.odds) });
+            S.byStreet = Object.assign({}, S.byStreet, bs);
+          }
+          if (statsHU) statsHU.betRecent = stats.betRecent;
+        }
+      }
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
       // input.reraiseLines: false reads a re-raise war after the flop as one raise again (before v1.8.10).
       if (input.reraiseLines === false) { stats.reraiseLines = false; if (statsHU) statsHU.reraiseLines = false; }
@@ -7575,7 +7633,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
