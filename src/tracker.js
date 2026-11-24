@@ -1503,7 +1503,7 @@
           // re-raise multiplier, with the answers each rests on.
           vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           // v1.8.45: the player's recent-betting odds (BET_RECENT) and how many chances to bet they rest on.
-          br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n } : undefined,
+          br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }

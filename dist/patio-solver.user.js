@@ -1610,7 +1610,8 @@ function ENGINE() {
     if (rrc && ob.length) { out.nBet = ob.length; out.mult = rrc.mult * Math.exp(fitOffset(ob.slice(-(rrc.max || 40)), Math.log(rrc.fitMult || rrc.mult), rrc.tau)); }
     return out;
   }
-  // Recent betting (v1.8.45, BET_RECENT; input.betRecent: false turns it off, an object replaces fields): a player's bet
+  // Recent betting (v1.8.45, BET_RECENT; off: input.betRecent true turns it on, an object turns it on and replaces fields;
+  // the offset is still computed and reported in stats.betRecent { odds, n, on } for the hand log): a player's bet
   // rate when they can open the betting after the flop (check or bet, nobody's bet in yet), moved by how their newest
   // such decisions went against the read at the time. The read remembers about 330 hands (DECAY), and on 21-24 Nov
   // Jagger bet 0.74 of those spots against a read of 0.57 (n 101, z 3.7) and Mark 0.51 against 0.35 (n 84, z 3.2),
@@ -1621,7 +1622,8 @@ function ENGINE() {
   // earlier ones): +26.6 nats over the read, and better in each of the five periods (31 Oct-3 Nov +5.6, 4-5 Nov +2.2,
   // 6-7 Nov +3.5, 10-11 Nov +7.5, 21-24 Nov +7.7); Mark +8.8, Jagger +7.7, everyone else +10.1. lam 0.93-0.97 and sd
   // 0.5-0.7 score about the same. The same offset on folds to bets loses (-7.8 nats over 2,700 answers): only betting
-  // drifts from session to session.
+  // drifts from session to session. Off since its simulator runs (24 Nov): no loss against the v16r regulars (+0.4 ±
+  // 10.7 bb/100 over five runs), but -27.2 ± 14.9 over three runs against xp:switch, the style switcher it was built for.
   const BET_RECENT = { lam: 0.95, sd: 0.5, max: 60 };
   // { odds, n } for a player's betRecent list (odds 1 with no list).
   function betRecentOdds(list, cfg) {
@@ -6093,6 +6095,7 @@ function ENGINE() {
     // the table's mult, an object replaces fields).
     const CR = street >= 3 && toCall > 0 && input.coldRaise !== false ? Object.assign({}, COLD_RAISE, typeof input.coldRaise === 'number' ? { odds: input.coldRaise } : input.coldRaise && typeof input.coldRaise === 'object' ? input.coldRaise : {}) : null;
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
+    const BRon = input.betRecent === true || (!!input.betRecent && typeof input.betRecent === 'object');
     const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
@@ -6108,11 +6111,12 @@ function ENGINE() {
       // input.checkLine: false drops the check-line read (#47) everywhere, the lookahead's after-check folds too (simulator).
       if (input.checkLine === false) { const L1 = { checkedFold: 1, checkedRaise: 1, unactedRaise: 1 }; stats.line = L1; if (statsHU) statsHU.line = L1; }
       // Recent betting (BET_RECENT): their bet rates after the flop move with their newest chances to bet, before the
-      // range is built, so their past bets this hand read as wide as their betting now is.
+      // range is built, so their past bets this hand read as wide as their betting now is. Off by default: the offset is
+      // still worked out and reported (stats.betRecent.on false), so hand logs can keep checking it.
       if (BRC && street >= 3) {
         const br = betRecentOdds(o.tally && o.tally.betRecent, BRC);
-        if (br.n) stats.betRecent = { odds: br.odds, n: br.n };
-        if (br.n && br.odds !== 1) {
+        if (br.n) stats.betRecent = { odds: br.odds, n: br.n, on: BRon };
+        if (BRon && br.n && br.odds !== 1) {
           for (const S of statsHU ? [stats, statsHU] : [stats]) {
             S.betFreq = oddsScale(S.betFreq, br.odds);
             if (S.cbet != null) S.cbet = oddsScale(S.cbet, br.odds);
@@ -9165,7 +9169,7 @@ ENGINE();
           // re-raise multiplier, with the answers each rests on.
           vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           // v1.8.45: the player's recent-betting odds (BET_RECENT) and how many chances to bet they rest on.
-          br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n } : undefined,
+          br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -9548,7 +9552,7 @@ function slim(r) {
           tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
           chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
           vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
-          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n } : undefined
+          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined
         },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
         heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance

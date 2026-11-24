@@ -2,7 +2,7 @@
 
 One line per behavioural switch in `createAnalysis`'s input (src/engine.js), so a review can see what is on, what each
 was decided on, and what would change the decision. Budget and size knobs (iterations, samples, time limits, bet menus)
-are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44). Update a row
+are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44; betRecent in v1.8.45). Update a row
 when its switch changes.
 
 Columns:
@@ -69,6 +69,7 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `reraiseModel` (`reraiseAgg` 2x) | on | v1.7.3 | sim about +28 ± 16 (4-handed), +14 ± 23 heads-up | |
 | `raisedRR` (bettor re-raises hero's raise at 0.7x, per player; replaces reraiseAgg's 2x) | on | v1.8.44 | logs: re-raised 5 of 76 of hero's raises where the solver said 0.205, bettors re-raised 15 of 203 against 25.2 read; sim with coldRaise about -1 ± 11 (four runs) | bettors re-raising hero's raises more than read again |
 | `coldRaise` (players facing a bet and hero's raise fold odds x2, re-raise x0.25, per player) | on | v1.8.44 | logs: 0.70 folded against 0.54 read (n 117, both halves agree), 0 of 117 re-raised; at hero's raises 0.83 vs 0.59 (n 41); sim with raisedRR about -1 ± 11 | cold players calling hero's raises as read |
+| `betRecent` (a player's bet rate when they can open the betting after the flop moves with their newest 60 such chances, per player) | off | v1.8.45 | logs: +25.1 nats over 3,649 chances (every period better), held out on 24 Nov 13:03-13:51 +3.2 over 188 and 15:10-15:42 +2.9 over 106; sim: v16r regulars +0.4 ± 10.7 (five runs), `xp:switch` -27.2 ± 14.9 (three) | no loss against `xp:switchbet` (betting-only drift) in the simulator turns it on |
 | `raiseAggFold` | 0.55 | v1.7.4 | logs: raised bettors folded 6 of 19; sim +22.6 ± 20.6 4-handed | |
 | `raisePrice` | on | v1.8.13 | the 4 Nov QQ spot (a 1-chip all-in read as a full raise); 2 of 1,017 decisions change | |
 | `riverRaiseFold` | off | | sim about neutral; changes no logged decision | |

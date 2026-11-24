@@ -28,7 +28,7 @@ function slim(r) {
         tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
         chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
         vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
-        betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n } : undefined,
+        betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
       },
       topClasses: o.grid.topClasses.slice(0, 8).map((c) => c.name),
       heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance,

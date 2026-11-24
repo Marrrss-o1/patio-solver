@@ -420,7 +420,11 @@ bots, seed and block size), so a third arm can be added later without replaying 
   `riverxbluff` (the same with hands under 0.4 betting 35%, a third of the bets),
   `none` (the plain base, for comparisons), the older
   exploit.js presets, and
-  `switch<period>` (loose and tight in turns, every `period` hands, default 100). Seat it with the block's friend
+  `switch<period>` (loose and tight in turns, every `period` hands, default 100: VPIP, PFR, 3-bets, bluffs, calls and
+  raises all move), `switchbet<period>` (24 Nov: only the betting when nobody has bet yet after the flop moves, as
+  the friends' drift does; heads-up, over evenly spread hand strengths, it opens 0.44 / 0.47 / 0.68 of flops / turns /
+  rivers in the loose part and 0.20 / 0.25 / 0.46 in the tight part, the pool base 0.30 / 0.34 / 0.54; `switch` bets
+  the same). Seat it with the block's friend
   lineup: `--bots xp:trap,friends`. `--seat-stacks 20,150,...` sets the bots' stacks in big blinds. To see what an
   exploiter costs hero, run `xp:none,friends` on the same seed and pair the two A variants with
   `ANY_BOTS=1 node test/sim/diff.js none.json:A xp.json:A`; to see whether a read assumption is what it beats, run the

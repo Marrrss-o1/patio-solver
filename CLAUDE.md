@@ -45,7 +45,10 @@ extension/               Chrome MV3 extension (Load unpacked on this folder).
                          or logged for that decision (older logs may carry `advice.quick`). The tracker's `turn`
                          event carries `timeLeftMs` for `turnMs`. With
                          `FLOP_SOLVER` on, flops get the same treatment as turns (`flopSolver`, `flopTimeMs`).
-  slim.js                Shrinks a result for the overlay (used by background and workers).
+  slim.js                Shrinks a result for the overlay (used by background and workers). It passes the per-player
+                         read fields the hand log keeps (noteAdvice's chTilt, vr, hpOwn, rrTilt, act, noise, certainty,
+                         br); before v1.8.45 they never reached the extension's log. src/userscript-core.js has its own
+                         copy for the phone; the "survive both panels' slim" test checks both.
   engine.js, tracker.js  COPIES of src/ written by the build (blueprint.js too). Edit src/, then run the build.
   blueprint-{3,4,5}max.bin.gz  Trained self-play blueprints (150bb), loaded by the panel; not in the dist zip.
 dist/patio-solver.user.js       Built userscript (Userscripts app on iOS Safari, Tampermonkey, Violentmonkey).
@@ -811,6 +814,45 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     multiplier learns from their answers. Files: sims/2026-11-21-vsraise/.
   - Not changed: the bettor's own fold to hero's raise (raiseAggFold 0.55): the Monte Carlo said 0.26 where 0.355
     folded (n 76), but the first half of the logs is on target (odds x1.05) and the second half x2.45. Watch it.
+- Recent betting (v1.8.45, `BET_RECENT` {lam 0.95, sd 0.5, max 60}; off: `input.betRecent: true` turns it on, an object
+  turns it on and replaces fields, `false` doesn't compute it): a player's bet rate when they can open the betting after
+  the flop (check or bet, no bet in yet) moves with their newest such chances. The tracker keeps the newest 60 per player with the read's P(bet) before
+  each (`tally.betRecent` { p, y, t }, out of decay, merged over linked ids in time order, since a friend can go back and
+  forth between accounts; stored hands fill it in once with the current read's P(bet), `tagBetRecent`, `db.brTagged`:
+  on all logs the same chances and answers as replaying the raw events for all 31 accounts, offsets within 0.03 for
+  players with 80+ hands). The engine fits a log-odds offset u on them (`betRecentOdds`: weight lam^age, newest 1,
+  normal prior sd `sd`) and scales the player's bet rates after the flop (betFreq, cbet, every street's) by exp(u) in
+  odds before the range is built, so their earlier bets this hand read as wide as their betting now. Advice reads carry
+  `br` {odds, n, on} whether it is on or off, so the hand log shows each player's offset either way.
+  - Why (24 Nov review, analysis/2026-11-24-session.md): the read remembers about 330 hands (DECAY), and on 21-24 Nov
+    Jagger bet 0.74 of those spots against a read of 0.57 (n 101, z 3.7) and Mark 0.51 against 0.35 (n 84, z 3.2), on
+    every street and initiative role, after both had been on target before. Everyone else 0.44 against 0.41.
+  - All logs (3,649 chances, each predicted from earlier ones, through the real tracker with the panel's links;
+    scripts/2026-11-24-full/brcheck.js): +25.1 nats over the read, and better in each period (31 Oct-3 Nov +5.6, 4-5 Nov
+    +2.2, 6-7 Nov +3.7, 10-11 Nov +5.8, 21-24 Nov +7.8); Mark +7.3, Jagger +8.3, everyone else +9.5. For scale, the read
+    beats an average player's read by 135.8 nats there. lam 0.93-0.97 and sd 0.5-0.7 score about the same.
+  - Held out (24 Nov 13:03-13:51, hands the read was never tuned on): +3.2 nats over 188 chances, every player better.
+    Mark (Primechoo) bet 0.55 against a read of 0.38 (0.47 with the offset), Dew345 0.15 against 0.24 (0.20), leballs 0.19
+    against 0.32 (0.30). Second held-out session (24 Nov 15:10-15:42, 7-8 handed): +2.9 over 106 (SE 1.24), 5 of 7 players
+    better (leballs bet 0 of 13, read 0.30, with the offset 0.21; Ploen 0 of 18, 0.18 / 0.14); both sessions +6.1 over 294
+    (2.7 SE); all logs +31.2 over 3,943. It changes 1 of that session's 48 picks (a near-tie flop bet becomes a check).
+    Files: analysis/2026-11-24-session3.md, scripts/2026-11-24-late/.
+  - Only betting drifts: the same offset on folds to bets loses (-7.8 nats over 2,700 answers), on raises facing a bet it
+    gains +0.3 over 2,802, and faster decay of the whole read was dropped on 6 Nov (DECAY, above). Preflop raises gained
+    +15.0 nats over 4,133 (Dew, mkorn and Mark; Jagger -2.8): not built.
+  - Log replay (frozen captures, live budget, mix off): 185 of 1,855 postflop picks change, 96 in kind. Turn: against
+    players betting less than read hero bets where it checked (11 of 21 check -> bet), against players betting more it
+    checks to them (9 of 11 bet -> check). 9 calls and raises swap, 6 calls and folds; on the shown cards those are mixed
+    and too few to judge. 24 Nov's 83 hands: 4 of 202 picks change, 2 in kind, both near ties.
+  - Simulator (v16r regulars, live budget, 1,000 deals each, on vs `{"betRecent":false}`; rule set before the runs: on
+    if the regulars pool above -1 SE): heads-up +8.6 ± 23.2 (seed 12454), 3-handed -10.1 ± 27.8 (12453), 4-handed
+    +14.7 ± 23.5 (12451) and -39.2 ± 26.6 (12457), 5-handed +12.6 ± 20.7 (12456); pooled +0.4 ± 10.7, no loss. Against
+    `xp:switch` (loose and tight every 100 hands), the case it was built for: heads-up -36.3 ± 30.5 (12455), 4-handed with
+    friends -17.1 ± 22.3 (12452) and -34.6 ± 26.3 (12459); pooled -27.2 ± 14.9. That switcher also calls, raises and
+    plays preflop looser when it bets more, where the friends' folds and raises didn't drift (above), so the read is off
+    by default for now. It goes on if it shows no loss against `xp:switchbet` (only the betting when nobody has
+    bet moves; rule set before the runs: on if heads-up, 3-handed and two 4-handed runs pool above -1 SE). Files:
+    sims/2026-11-24-betrecent/.
 - Raised bettors fold less (v1.7.4): continueRule scales a raised bettor's fold-to-bet by 0.55 (was 0.75;
   `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
   about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
