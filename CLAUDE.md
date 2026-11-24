@@ -850,9 +850,16 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     `xp:switch` (loose and tight every 100 hands), the case it was built for: heads-up -36.3 ± 30.5 (12455), 4-handed with
     friends -17.1 ± 22.3 (12452) and -34.6 ± 26.3 (12459); pooled -27.2 ± 14.9. That switcher also calls, raises and
     plays preflop looser when it bets more, where the friends' folds and raises didn't drift (above), so the read is off
-    by default for now. It goes on if it shows no loss against `xp:switchbet` (only the betting when nobody has
-    bet moves; rule set before the runs: on if heads-up, 3-handed and two 4-handed runs pool above -1 SE). Files:
-    sims/2026-11-24-betrecent/.
+    by default. Against `xp:switchbet` (only the betting when nobody has bet moves, loose and tight every 100 hands;
+    rule set before the runs: on if heads-up, 3-handed and two 4-handed runs pool above -1 SE): heads-up +29.3 ± 27.1
+    (seed 12462), 3-handed with friends -34.6 ± 26.3 (12464), 4-handed -57.9 ± 27.8 (12463) and +2.8 ± 24.9 (12461);
+    pooled -14.1 ± 13.2 (-1.07 SE), so it stays off. The loss is in the lag after each switch: of the runs' average
+    -15.1, the first half of each 100-hand phase gives -14.7 ± 8.3 and the second half -0.5 ± 10.7 (the offset weighs
+    about the newest 20 chances, so it points the old way for a while after a switch). The 3-handed run split by the first decision where A and B differ
+    (`--diag`): flop -21.4 ± 16.4, turn -13.5 ± 14.7, river +2.2 ± 6.6, preflop drift -1.9 ± 13.0; flop checks that
+    become bets -13.3 ± 6.0 (101 hands). The friends' drift on the logs lasted sessions (Jagger and Mark, 21-24 Nov),
+    not 100 hands, so a switcher on a longer period is the open question. Files: sims/2026-11-24-betrecent/ (runsb.sh,
+    firstdiff.js, phase.js).
 - Raised bettors fold less (v1.7.4): continueRule scales a raised bettor's fold-to-bet by 0.55 (was 0.75;
   `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
   about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
