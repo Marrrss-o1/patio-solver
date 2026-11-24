@@ -314,6 +314,87 @@ test('import: linked reads and "different players" answers survive a rebuild', a
   assert.ok(Math.abs(hands(t2.readTally('J3')) - hands(r.db.players.J1.tally) - hands(r.db.players.J3.tally)) < 1e-9);
 });
 
+test('leave out (v1.8.47): the reads come back as if the hands were never played, and put back as they were', async () => {
+  // The recorded hand ends with the next hand's set_blinds: a hand that starts and is never played, so never logged.
+  const realAll = require('./fixtures/real-hand.json');
+  const real = realAll.slice(0, realAll.map((m) => m.ev).lastIndexOf('game:stage_began'));
+  const as = (list, id, name) => JSON.parse(JSON.stringify(list).replace(/"authUserId":"V"/g, `"authUserId":"${id}"`).replace(/"name":"(Vic|Testforyou)"/g, `"name":"${name}"`));
+  // The predictor without makePredictor's cache of the average player's read (refreshed when the pool's preflop folds
+  // change, which these hands never do), so a replay that starts partway gives the same scores as one from the start.
+  const setup = (t) => {
+    t.scorer = (show, tally) => E.scoreShow(show, tally, 'typical', t.poolTally());
+    t.predictor = (tally, d) => { const pl = t.poolTally(); return [E.predictAction(E.computeStats(tally, 'typical', pl), d), E.predictAction(E.computeStats({}, 'typical', pl), d)]; };
+    t.fitVersion = E.FIT_VERSION;
+  };
+  // Seven hands: Vic and Wes (one friend on two accounts, linked) and Ann; hands 4 and 5 not played for real.
+  const live = new T({ players: {}, same: { W: 'V' } });
+  setup(live);
+  let clock = Date.UTC(2026, 10, 24, 13);
+  live.clock = () => clock;
+  const feed = (list) => { for (const m of list) { clock += 700; if (m.ev === 'hook:attached') { live.snap = m.snap; continue; } live.handle(m.ev, m.data, m.snap); } };
+  const seq = [as(sd, 'V', 'Vic'), as(real, 'A', 'Ann'), as(sd, 'W', 'Wes'), as(sd, 'A', 'Ann'), as(real, 'W', 'Wes'), as(sd, 'V', 'Vic'), as(real, 'A', 'Ann')];
+  seq.forEach((list, i) => feed(i ? list.filter((m) => m.ev !== 'hook:attached') : list));
+  live.finishHand();
+  const hands = JSON.parse(JSON.stringify(live.db.history));
+  assert.strictEqual(hands.length, 7);
+  const out = new Set([hands[3].t, hands[4].t]);
+  const isOut = (e) => out.has(e.t);
+  const near = (a, b, path) => {
+    for (const k of new Set(Object.keys(a || {}).concat(Object.keys(b || {})))) {
+      const x = a ? a[k] : undefined, y = b ? b[k] : undefined;
+      if (Array.isArray(x) || Array.isArray(y)) assert.deepStrictEqual(x, y, path + k);
+      // The read's accuracy is matched by replaying until it stops moving (about 1e-8).
+      else if (typeof x === 'number' || typeof y === 'number') assert.ok(Math.abs((x || 0) - (y || 0)) <= (/pred\.$/.test(path) ? 1e-6 : 1e-9) * Math.max(1, Math.abs(y || 0)), `${path}${k}: ${x} vs ${y}`);
+      else if ((x && typeof x === 'object') || (y && typeof y === 'object')) near(x, y, path + k + '.');
+    }
+  };
+  // The truth: a rebuild that never saw hands 4 and 5. The reads to start from: a rebuild of all seven (as at the table).
+  const truth = await T.rebuildReads(hands.filter((e) => !isOut(e)), { same: { W: 'V' }, setup });
+  const now = await T.rebuildReads(hands, { same: { W: 'V' }, setup });
+  const res = await T.dropHands(Object.assign({}, now.db, { same: { W: 'V' } }), hands, isOut, { setup });
+  assert.deepStrictEqual([res.out, res.back, res.redone], [2, 0, 2]);
+  assert.deepStrictEqual(res.ids.slice().sort(), ['A', 'V', 'W']);
+  assert.ok(res.check < 1e-9, 'the replay from the state before ends where the reads are: ' + res.check);
+  for (const id of ['A', 'V', 'W']) near(res.db.players[id].tally, truth.db.players[id].tally, id + '.');
+  // From the reads built at the table (entry times a few seconds off a rebuild's): the counts and the read's accuracy.
+  const res2 = await T.dropHands(JSON.parse(JSON.stringify(live.db)), hands, isOut, { setup });
+  const counts = (tl) => { const c = JSON.parse(JSON.stringify(tl)); for (const k of ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent']) c[k] = (c[k] || []).length; return c; };
+  for (const id of ['A', 'V', 'W']) near(counts(res2.db.players[id].tally), counts(truth.db.players[id].tally), id + '.');
+  assert.ok(res2.check < 1e-9, String(res2.check));
+  // Reads that saw a hand the log doesn't have (it started and was never played, but shrank the counts): `check` says so.
+  const odd = new T({ players: {}, same: { W: 'V' } });
+  setup(odd);
+  for (const [i, list] of [as(sd, 'V', 'Vic'), as(realAll, 'A', 'Ann'), as(sd, 'A', 'Ann'), as(sd, 'W', 'Wes')].entries()) {
+    for (const m of list) { clock += 700; if (m.ev === 'hook:attached') { if (!i) odd.snap = m.snap; continue; } odd.handle(m.ev, m.data, m.snap); }
+  }
+  odd.finishHand();
+  const oddHands = JSON.parse(JSON.stringify(odd.db.history));
+  const res3 = await T.dropHands(JSON.parse(JSON.stringify(odd.db)), oddHands, (e) => e.t === oddHands[1].t, { setup });
+  assert.ok(res3.check > 1e-3, String(res3.check));
+  // Put back: the reads as they were with every hand in.
+  const back = await T.dropHands(Object.assign({}, res.db, { same: { W: 'V' } }), hands, () => false, { setup, was: isOut });
+  assert.deepStrictEqual([back.out, back.back], [0, 2]);
+  for (const id of ['A', 'V', 'W']) near(back.db.players[id].tally, now.db.players[id].tally, id + '.');
+  // Nothing changes side: nothing to do.
+  assert.strictEqual(await T.dropHands(now.db, hands, isOut, { setup, was: isOut }), null);
+  // A player seen only in the hands left out has no read left.
+  const solo = await T.rebuildReads(hands.slice(0, 4), { setup });
+  const only = await T.dropHands(solo.db, hands.slice(0, 4), (e) => e.t === hands[1].t || e.t === hands[3].t, { setup });
+  assert.deepStrictEqual(only.removed, ['A']);
+  assert.ok(!only.db.players.A && only.db.players.V && only.db.players.W);
+  // Put back, they come back.
+  const onlyBack = await T.dropHands(only.db, hands.slice(0, 4), () => false, { setup, was: (e) => e.t === hands[1].t || e.t === hands[3].t });
+  near(onlyBack.db.players.A.tally, solo.db.players.A.tally, 'A.');
+  // A rebuild (Import) leaves the ranges out too, and so does a hand marked excluded.
+  const lo = [{ from: hands[3].t, to: hands[4].t }];
+  const rb = await T.rebuildReads(hands, { same: { W: 'V' }, setup, leftOut: lo });
+  assert.strictEqual(rb.leftOut, 2);
+  near(rb.db.players.V.tally, truth.db.players.V.tally, 'V.');
+  const marked = hands.map((e) => (isOut(e) ? Object.assign({}, e, { excluded: true }) : e));
+  assert.strictEqual((await T.rebuildReads(marked, { same: { W: 'V' }, setup })).leftOut, 2);
+  assert.ok(T.leftOutTest(lo)({ t: hands[3].t }) && !T.leftOutTest(lo)({ t: hands[5].t }) && T.leftOutTest([])({ t: 1, excluded: true }));
+});
+
 // ---------- exports of new hands (v1.8.21) ----------
 test('export of a range: only those hands, reading only their keys, memory copies first', async () => {
   const area = fakeArea();
@@ -423,6 +504,13 @@ test('merge-logs: files and folders, each hand once, the fuller copy kept', () =
   assert.strictEqual(info2.excluded, 1);
   assert.strictEqual(M.loadHands([dir], { quiet: true, keepExcluded: true }).length, 6);
   fs.rmSync(path.join(dir, 'e-dump.json'));
+  // Hands a session's "Leave out" marked (v1.8.47) and hands in exclude-hands.json's ranges too.
+  fs.writeFileSync(path.join(dir, 'f-out.json'), HL.toFile([h(7, { excluded: true }), { t: 1795525700000, hero: ['Ah', 'Ad'], board: [] }]));
+  const info3 = {};
+  assert.strictEqual(M.loadHands([dir], { info: info3, quiet: true }).length, 5);
+  assert.strictEqual(info3.excluded, 2);
+  assert.strictEqual(M.loadHands([dir], { quiet: true, keepExcluded: true }).length, 7);
+  fs.rmSync(path.join(dir, 'f-out.json'));
   // The same hand time with other hero cards is another hand (two tables).
   fs.writeFileSync(path.join(dir, 'd.json'), JSON.stringify({ history: [h(5, { hero: ['2c', '2d'] })] }));
   assert.strictEqual(M.loadHands([dir], { quiet: true }).length, 6);

@@ -8,7 +8,8 @@
 // 70 / 81 / 30 events in one export and 65 / 90 / 23 in another).
 //
 // Hands listed in test/exclude-hands.json (deliberate chip dumps and the like, which say nothing about how anyone
-// plays) are left out unless opts.keepExcluded (info.excluded counts them).
+// plays), hands in its `ranges` (sessions not played for real) and hands an export marks `excluded` (sessions left out
+// of the reads on the panel, v1.8.47) are left out unless opts.keepExcluded (info.excluded counts them).
 //
 //   const { loadHands } = require('./merge-logs.js'); loadHands(['logs/'])  // or a list of files
 //   node test/merge-logs.js <out.json> <exports or folders...> [--keep-excluded]  // writes one merged file
@@ -17,12 +18,20 @@ const path = require('path');
 
 const keyOf = (h) => h.t + ':' + (h.hero || []).join('');
 
-// test/exclude-hands.json: { hands: [{ t, hero: "2s2d", why }] }, matched by keyOf.
+// test/exclude-hands.json: { hands: [{ t, hero: "2s2d", why }], ranges: [{ from, to, why }] }; hands matched by keyOf,
+// ranges by the hand's time t (ms, both ends in).
+function readExclude() {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'exclude-hands.json'), 'utf8')); } catch (e) { return {}; }
+}
 function excluded() {
-  try {
-    const x = JSON.parse(fs.readFileSync(path.join(__dirname, 'exclude-hands.json'), 'utf8'));
-    return new Set((x.hands || []).map((e) => e.t + ':' + e.hero));
-  } catch (e) { return new Set(); }
+  return new Set((readExclude().hands || []).map((e) => e.t + ':' + e.hero));
+}
+// isExcluded(h): whether a hand is left out of the log studies (listed, in a range, or marked by the panel).
+function excluder() {
+  const x = readExclude();
+  const keys = new Set((x.hands || []).map((e) => e.t + ':' + e.hero));
+  const ranges = (x.ranges || []).filter((r) => r && r.from != null && r.to != null);
+  return (h) => !!(h && (h.excluded || keys.has(keyOf(h)) || ranges.some((r) => h.t >= r.from && h.t <= r.to)));
 }
 const fuller = (a, b) => (!!a.net - !!b.net) || ((a.raw ? a.raw.length + 1 : 0) - (b.raw ? b.raw.length + 1 : 0));
 
@@ -47,7 +56,7 @@ function loadHands(paths, opts = {}) {
   const byKey = new Map();
   const info = opts.info || {};
   info.files = 0; info.read = 0; info.dupes = 0; info.excluded = 0;
-  const drop = opts.keepExcluded ? new Set() : excluded();
+  const drop = opts.keepExcluded ? () => false : excluder();
   for (const { file, inDir } of files(paths, opts.skip)) {
     let list = null;
     try { list = listOf(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch (e) { if (!inDir) throw e; }
@@ -61,7 +70,7 @@ function loadHands(paths, opts = {}) {
       if (!h || h.t == null) continue;
       info.read++;
       const k = keyOf(h);
-      if (drop.has(k)) { info.excluded++; continue; }
+      if (drop(h)) { info.excluded++; continue; }
       const was = byKey.get(k);
       if (was) info.dupes++;
       if (!was || fuller(h, was) >= 0) byKey.set(k, h);
@@ -73,7 +82,7 @@ function loadHands(paths, opts = {}) {
 // The export format: one hand per line (extension/handlog.js toFile).
 const toFile = (hands) => '[\n' + hands.map((h) => JSON.stringify(h)).join(',\n') + '\n]\n';
 
-module.exports = { loadHands, toFile, keyOf, excluded };
+module.exports = { loadHands, toFile, keyOf, excluded, excluder };
 
 if (require.main === module) {
   const args = process.argv.slice(2);

@@ -148,6 +148,40 @@ const fs = require('fs');
     const mark = await sw.evaluate(() => new Promise((res) => chrome.storage.local.get('patioSolverLogMark', res)));
     console.log('MARK ' + JSON.stringify(mark));
   }
+  // LEAVEOUT=1: "Leave out" on the session (v1.8.47) takes its hands out of the reads; "Put back" puts them in again.
+  if (process.env.LEAVEOUT) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (sel) => page.evaluate((q) => document.getElementById('patio-solver-host').shadowRoot.querySelector(q).click(), sel);
+    let [sw] = ctx.serviceWorkers();
+    if (!sw) sw = await ctx.waitForEvent('serviceworker');
+    const reads = () => sw.evaluate(() => new Promise((res) => chrome.storage.local.get('patioSolverDb', (x) => res(x.patioSolverDb))));
+    const hands = (db) => Object.values(db.players).map((r) => r.tally.pfFold + r.tally.pfCall + r.tally.pfRaise).reduce((a, b) => a + b, 0);
+    await page.waitForTimeout(1200); // the hand's save
+    const before = await reads();
+    await click('[data-a="log"]');
+    await page.waitForFunction(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('[data-a="leaveOut"]'), null, { timeout: 10000 });
+    await click('[data-a="leaveOut"]');
+    console.log(/Sure\? Click again/.test(await text()) ? 'ASKS FIRST' : 'NO CONFIRM');
+    await click('[data-a="leaveOut"]');
+    await page.waitForFunction(() => /Left out|failed/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 30000 });
+    await page.screenshot({ path: path.join(out, 'ext_leaveout.png') });
+    const t1 = await text();
+    console.log('--- after Leave out ---');
+    console.log(t1.split('\n').filter((l) => /Left out|left out|failed/.test(l)).join('\n'));
+    await page.waitForTimeout(500);
+    const mid = await reads();
+    console.log(`LEFT OUT: ranges ${JSON.stringify((mid.leftOut || []).map((r) => [r.from, r.to]))}, hands in the reads ${hands(before).toFixed(2)} -> ${hands(mid).toFixed(2)}`);
+    await click('[data-a="putBack"]');
+    await click('[data-a="putBack"]');
+    await page.waitForFunction(() => /Put back|failed/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 30000 });
+    await page.waitForTimeout(500);
+    const back = await reads();
+    // Entry times come back a few ms off (the replay runs on the hand's recorded clock).
+    const noTimes = (x) => JSON.stringify(x, (k, v) => (k === 'at' || k === 't' ? undefined : v));
+    const same = noTimes(back.players) === noTimes(before.players);
+    if (process.env.DUMP) fs.writeFileSync(path.join(out, 'leaveout-reads.json'), JSON.stringify({ before: before.players, back: back.players }));
+    console.log(`PUT BACK: ranges ${(back.leftOut || []).length}, hands ${hands(back).toFixed(2)}, reads ${same ? 'as before (entry times aside)' : 'DIFFERENT'}`);
+  }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'ext_end.png') });
   const panel = await page.evaluate(() => { const h = document.getElementById('patio-solver-host'); return h ? h.shadowRoot.querySelector('.panel').innerText : 'NO PANEL'; });
