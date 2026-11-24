@@ -733,8 +733,21 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   joining from that hand changes 6 of 97 hero decisions with Jagger in the hand (phone budget, mix off). Records stay per id; `db.same[id] = root` puts
   ids in one group and every reader of a player (solver input, `scorePrediction`'s read, `scorer`, `rescoreStale`,
   the panels, the log's `pred`/`accuracy`) uses `readTally(id)`: the group's counts added up (`mergeTallies`,
-  oldest id first, newest 80 shows). An unlinked player's readTally is its own tally object, so nothing changes
-  for them (sim A/B against main is identical). Each id keeps counting into its own record and every id of a
+  oldest id first, newest 80 shows by time). An unlinked player's readTally is its own tally object, so nothing changes
+  for them (sim A/B against main is identical).
+  Newest by time (v1.8.46, `byTime` in tracker.js): shows, jamShows, mwFolds and vsRaise entries carry `at` (ms, when
+  recorded; tag functions use the hand's time), and a linked read keeps the newest of each by it. An entry saved before
+  sorts just before the next one of its own list that has a time, else before its id's `seen.last`. Shows and jamShows
+  saved before get their hand's time from the stored hands once (`tagShowTimes`, `db.stTagged`). Before, the lists were
+  joined in id order (first seen) and the last 80 kept, so a friend back on their oldest account lost their newest shows
+  first: at 24 Nov 15:10 #7 the rebuilt Jagger read (four accounts) held 80 shows from 1-21 Nov and none of his 19 from
+  23-24 Nov. The panel kept a different 80 (its accounts first seen in another order), so the same shows scored very
+  differently there: on 23-24 Nov his showdowns' place in the read (`fit.top`) differed by 0.19 / 0.10 on average
+  (KdKs 0.63 on the panel, 0.02 rebuilt), everyone else's by 0.01-0.04 (wineatmiapus aside, linked to another read).
+  That is how #7's river raise read +2.7 on the panel and -7.1 rebuilt. All logs, each new show scored with the read
+  from earlier hands (fitdrift / showll in scripts/2026-11-24-late/): +1.0 nats over the 491 shows of linked players,
+  nothing else moves. 32 of the 486 hero decisions since 21 Nov change pick (17 in kind), all in hands with Jagger or
+  Mark's accounts; #7's river becomes the raise the panel advised. The sim links no reads, so it is identical there. Each id keeps counting into its own record and every id of a
   player dealt in decays once a hand, so a link can be split (`unlink`) without losing hands. Links are made only
   by hand (Marwin, 3 Nov: friends change names on a whim, so he approves): at each new hand `askLinks` lists
   players dealt in whose name (now or before, `seen[id].names`) another read used (`linkMatches`; generic

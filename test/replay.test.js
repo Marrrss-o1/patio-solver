@@ -86,7 +86,8 @@ test('tracker: shown preflop all-in re-raises go in tally.jamShows at any board;
   const pl = (pos, id, preBehind) => ({ pos, id, auth: id, name: id, shown: [], seq: { pre: ['raise', '3bet'] }, preTop: 3, sizes: { pre: 25, preTo: 500, preBehind, preCover: 258 } });
   t.hand = { board: [], players: { M: pl('s1', 'M', 0), K: pl('s2', 'K', 200) } };
   for (const [pos, c] of [['s1', 'Jh'], ['s1', 'Js'], ['s2', 'Ah'], ['s2', 'Kh']]) t.onReveal(pos, c);
-  assert.deepStrictEqual(t.db.players.M.tally.jamShows, [{ cards: ['Jh', 'Js'], pre: '4bet', to: 500, cover: 258 }]);
+  assert.deepStrictEqual(t.db.players.M.tally.jamShows.map(({ at, ...x }) => x), [{ cards: ['Jh', 'Js'], pre: '4bet', to: 500, cover: 258 }]);
+  assert.ok(t.db.players.M.tally.jamShows[0].at > 0, 'time recorded (v1.8.46)');
   assert.ok(!t.db.players.K || !(t.db.players.K.tally.jamShows || []).length);
 });
 
@@ -103,7 +104,7 @@ test('tracker: tagJamShows fills in shown all-in re-raises from stored hands, on
   });
   // Jo's open isn't a re-raise; Mark's 3-bet keeping 100bb behind isn't all-in.
   assert.strictEqual(t.tagJamShows([hand(2, ['Jh', 'Js'], 0), hand(1, ['Qd', 'Qs'], 200)]), 1);
-  assert.deepStrictEqual(t.db.players.M.tally.jamShows, [{ cards: ['Jh', 'Js'], pre: '3bet', to: 300, cover: 200 }]);
+  assert.deepStrictEqual(t.db.players.M.tally.jamShows, [{ cards: ['Jh', 'Js'], pre: '3bet', to: 300, cover: 200, at: 2 }]);
   assert.ok(!(t.db.players.J.tally.jamShows || []).length);
   assert.strictEqual(t.tagJamShows([hand(2, ['Jh', 'Js'], 0)]), 0, 'already there');
 });
@@ -1538,8 +1539,8 @@ test('tracker: tagMwFolds and tagCheckBet fill in multiway answers and river che
   // Bo's show is in his read with no hck; the second hand's flop bet is under 30% of the pot.
   t.db.players.B.tally.shows = [{ cards: ['Kd', 'Qd'], board: ['Kc', '7d', '2s', '9h', '3c'], actions: { river: 'bet' } }];
   assert.strictEqual(t.tagMwFolds([hand(2, 1, 'call'), hand(1, 4, 'call')]), 2);
-  assert.deepStrictEqual(t.db.players.A.tally.mwFolds, [{ y: 1, f: 0.667, n: 3, ck: 0, ag: 0, rr: 0, k: 2 }]);
-  assert.deepStrictEqual(t.db.players.B.tally.mwFolds, [{ y: 0, f: 0.667, n: 3, ck: 0, ag: 0, rr: 0, k: 2 }]);
+  assert.deepStrictEqual(t.db.players.A.tally.mwFolds, [{ y: 1, f: 0.667, n: 3, ck: 0, ag: 0, rr: 0, k: 2, at: 1 }]);
+  assert.deepStrictEqual(t.db.players.B.tally.mwFolds, [{ y: 0, f: 0.667, n: 3, ck: 0, ag: 0, rr: 0, k: 2, at: 1 }]);
   assert.strictEqual(t.tagCheckBet([hand(1, 4, 'call')]), 1);
   assert.strictEqual(t.db.players.B.tally.shows[0].hck, true);
   assert.strictEqual(t.tagCheckBet([hand(1, 4, 'call')]), 0, 'already there');
@@ -1571,7 +1572,7 @@ test('vsRaise (v1.8.44, on): answers to raises after the flop by role, the same 
       { st: 'flop', who: 'Al', act: 'call', amt: 10, pot: 24, facing: 10 }],
   };
   assert.strictEqual(t.tagVsRaise([hand]), 1);
-  assert.deepStrictEqual(t.db.players.A.tally.vsRaise, [{ y: 'c', f: 0.714, n: 3, role: 'b', ck: 0, ag: 1, rr: 0, h: 0 }]);
+  assert.deepStrictEqual(t.db.players.A.tally.vsRaise, [{ y: 'c', f: 0.714, n: 3, role: 'b', ck: 0, ag: 1, rr: 0, h: 0, at: 1 }]);
   // Per-player reads: none read as the table; folds raise the cold odds, calls lower them; re-raises raise the bettor's mult.
   const st = E.computeStats({}, 'typical');
   const cold = (y, m) => Array.from({ length: m }, () => ({ y, f: 0.8, n: 3, role: 'u', ck: 0, ag: 0, rr: 0 }));
@@ -3254,6 +3255,56 @@ test('linked reads: merged tallies add every count and keep the newest shows', (
   assert.strictEqual(m.shows.length, 80);
   assert.strictEqual(m.shows[0].n, 10);
   assert.strictEqual(a.bet, 2, 'inputs unchanged');
+});
+
+test('linked reads (v1.8.46): the newest shows by time, whichever account they are on', () => {
+  // a was seen first but holds the newest shows (a friend back on their oldest account, Jagger on 23-24 Nov).
+  const a = T.blankTally(), b = T.blankTally();
+  a.shows = Array.from({ length: 50 }, (_, i) => ({ n: 'a' + i, at: 1000 + i }));
+  b.shows = Array.from({ length: 50 }, (_, i) => ({ n: 'b' + i, at: 10 + i }));
+  a.vsRaise = Array.from({ length: 50 }, (_, i) => ({ y: 'f', at: 1000 + i }));
+  b.vsRaise = Array.from({ length: 50 }, (_, i) => ({ y: 'c', at: 10 + i }));
+  const m = T.mergeTallies([a, b], [1049, 59]);
+  assert.strictEqual(m.shows.length, 80);
+  assert.deepStrictEqual(m.shows.slice(-50).map((x) => x.n), a.shows.map((x) => x.n), 'every one of the newest account\'s shows');
+  assert.strictEqual(m.shows[0].n, 'b20');
+  assert.strictEqual(m.vsRaise.length, 60);
+  assert.strictEqual(m.vsRaise.filter((x) => x.y === 'f').length, 50);
+  // Untagged lists (saved before v1.8.46) line up by when each account was last seen.
+  const c = T.blankTally(), d = T.blankTally();
+  c.shows = Array.from({ length: 50 }, (_, i) => ({ n: 'c' + i }));
+  d.shows = Array.from({ length: 50 }, (_, i) => ({ n: 'd' + i }));
+  const m2 = T.mergeTallies([c, d], [5000, 100]);
+  assert.deepStrictEqual(m2.shows.slice(-50).map((x) => x.n), c.shows.map((x) => x.n));
+  // An untagged show sorts just before the next tagged one of its own list.
+  c.shows[49].at = 50;
+  const m3 = T.mergeTallies([c, d], [5000, 100]);
+  assert.strictEqual(m3.shows[m3.shows.length - 1].n, 'd49', 'd last seen at 100, after c\'s newest show at 50');
+  // Through readTally: the group's seen times are passed.
+  const t = new T({ players: { A: { name: 'Jag', tally: c }, B: { name: 'Jag2', tally: d } } });
+  t.db.seen = { A: { first: 1, last: 5000, names: { Jag: 1 } }, B: { first: 2, last: 100, names: { Jag2: 1 } } };
+  delete c.shows[49].at;
+  assert.ok(t.link('B', 'A').ok);
+  assert.deepStrictEqual(t.readTally('A').shows.slice(-50).map((x) => x.n), c.shows.map((x) => x.n));
+});
+
+test('tagShowTimes (v1.8.46): shows and shown all-in re-raises get their hand\'s time from stored hands, once', () => {
+  const t = new T({ players: { M: { name: 'Mark', tally: T.blankTally() } } });
+  const tl = t.db.players.M.tally;
+  tl.shows = [{ cards: ['Kd', 'Qd'], board: ['Kc', '7d', '2s', '9h', '3c'] }, { cards: ['Ah', 'Ad'], board: ['2c', '3c', '4c'] }, { cards: ['5h', '5d'], board: ['Js', 'Td', '8h'] }];
+  tl.jamShows = [{ cards: ['Jh', 'Js'], pre: '3bet', to: 30, cover: 200 }];
+  const e = (t0, shown, board, log) => ({ t: t0, bigBlind: 2, board, players: [{ name: 'Hero', hero: true, shown: [] }, { name: 'Mark', shown }], log: log || [] });
+  const hands = [
+    e(100, ['Qd', 'Kd'], ['Kc', '7d', '2s', '9h', '3c']),
+    // AA shown on two boards starting 2c 3c 4c: not one match, left alone.
+    e(200, ['Ah', 'Ad'], ['2c', '3c', '4c', '5d', '9s']), e(210, ['Ah', 'Ad'], ['2c', '3c', '4c', '6d', '9s']),
+    e(300, ['Js', 'Jh'], [], [{ st: 'pre', who: 'Mark', act: '3bet', to: 60, amt: 60 }]),
+    e(310, ['Js', 'Jh'], [], [{ st: 'pre', who: 'Mark', act: '3bet', to: 20, amt: 20 }]),
+  ];
+  assert.strictEqual(t.tagShowTimes(hands), 2);
+  assert.deepStrictEqual(tl.shows.map((x) => x.at), [100, undefined, undefined]);
+  assert.strictEqual(tl.jamShows[0].at, 300, 'the hand re-raised to the same 30bb');
+  assert.strictEqual(t.tagShowTimes(hands), 0, 'already tagged');
 });
 
 if (failures) { console.log(`\n${failures} test(s) failed`); process.exit(1); }
