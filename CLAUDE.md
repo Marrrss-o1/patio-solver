@@ -504,6 +504,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   every action (`tracker.predictor` = `makePredictor`, tally `pred` {n, read, pop}: log-loss of the read vs an
   average player). Trust = showdown hit rate x action score; exploitWeight = clamp((0.5 + 0.4 n/120) x trust, 0.3,
   0.95). The opponent's fixed strategy in the solvers gets weight exploitWeight, an adaptive one the rest.
+  Tried and dropped (24 Nov, Marwin: does the solver over-trust thin reads, like Ploen's 5 showdowns?): trust from the
+  table's showdown hit rate instead of the player's own (`input.trustShows: false`, `TRUST_HIT` 0.9; in the engine, off).
+  On all logs to 24 Nov (993 shows, each predicted from the shows before it) a player's own hit rate predicts their next
+  show worse than the table's at every shrinkage (-17.5 nats at the read's +2/+4, -4.4 at +18/+40), players with 30+
+  shows too. Simulator, v16r regulars, live budget, reads from nothing each block (--warm 0), 600 deals each, B vs main
+  (rule set before the runs: on if pooled above -1 SE): heads-up -26.1 ± 24.1 (seed 12482), 3-handed -14.5 ± 27.1
+  (12483), 4-handed -69.0 ± 20.2 (12481), 5-handed +2.1 ± 21.8 (12484); pooled about -30 ± 11, so it stays off. The bots
+  keep one style all night, so there a bot's own hit rate does tell how good its read is, and the table's 0.9 trusts
+  reads whose shows missed. Files: /mnt/project-files/patio-solver/sims/2026-11-24-trust/.
 - `test/reads-bench.js <logs>`: sequential prediction benchmark (log-loss by seen-hands bucket, open responses,
   shown-hand likelihood). `--engine=a,b` compares engines, `--from=<ISO>` scores only later hands. v1.4.0 vs the
   rebuild on three logs: actions 0.831 -> 0.787, seen 0-9 0.958 -> 0.879, open responses 1.31 -> 1.00, shown hands
@@ -1520,6 +1529,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   n 24/50), postflop raise sizes [0.6, 1] -> [0.6, 1, 1.5] +9.5 ± 11.7 on v1.7.1 but -3.1 ± 8.6 over 4,000 deals on
   v1.7.4. Bet menus, river sizes, shove thresholds and the 0.8 raise-equity cut lost or stayed flat by 1,200 deals.
   No constants changed. Knobs: test/sim/knobs.js, tune.js.
+  Re-tried 24 Nov as a margin from read uncertainty (Marwin: fold marginal plays where the risk is much larger; no flat
+  margin, only one that comes from how thin the reads are): robustWeight 0.35 -> 0.7 with exploitWeight x0.85 (knobs
+  `robust`, `exploit`), v16r regulars, live budget, reads from nothing each block (--warm 0), 600 deals each (rule set
+  before the runs: on only if pooled above +1 SE): 3-handed +5.2 ± 18.4 (seed 12491), 4-handed +10.7 ± 19.1 (12492);
+  pooled about +8 ± 13, so not taken. The logs don't ask for it either: hero's small-edge risky river bets and raises
+  came back above their EV. Files: sims/2026-11-24-trust/ (runrob.sh).
 - Monte Carlo budgets (speed thread): against a 384,000-iteration reference on 104 logged postflop spots, 24,000
   (phone) picks the same 97% of the time (0.001 bb per decision), 48,000 97%, 96,000 100%. No build needs a bigger
   budget. The sim's --iters 3000 picks differ more often, but over 2,000 deals it plays as well (+1.4 ± 14.6).
