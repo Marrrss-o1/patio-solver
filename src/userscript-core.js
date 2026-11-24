@@ -145,6 +145,8 @@ function slim(r) {
   if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
   // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
   if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
+  // Shows saved before v1.8.46 carry no time (linked reads keep a player's newest shows by it): once.
+  if (!tracker.db.stTagged) { tracker.tagShowTimes(tracker.db.history || []); tracker.db.stTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

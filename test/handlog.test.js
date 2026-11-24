@@ -272,12 +272,20 @@ test('import: reads rebuilt from the hand log match the reads built at the table
   const r = await T.rebuildReads(hands, { setup });
   assert.strictEqual(r.replayed, 2);
   same(Object.keys(r.db.players), Object.keys(live.db.players));
-  for (const id of Object.keys(live.db.players)) same(r.db.players[id].tally, live.db.players[id].tally);
+  // Entry times (`at`, v1.8.46) come out shifted by a few seconds a hand (the rebuild's clock puts the last raw event at the
+  // hand's log time, but shows arrive after it), so they are compared by order only.
+  const noAt = (tl) => { const c = JSON.parse(JSON.stringify(tl)); for (const k of ['shows', 'jamShows', 'mwFolds', 'vsRaise']) for (const x of c[k] || []) delete x.at; return c; };
+  const order = (tl) => (tl.shows || []).map((x) => x.at).map((x, i, a) => (i ? Math.sign(x - a[i - 1]) : 0));
+  for (const id of Object.keys(live.db.players)) {
+    same(noAt(r.db.players[id].tally), noAt(live.db.players[id].tally));
+    same(order(r.db.players[id].tally), order(live.db.players[id].tally));
+    assert.ok((r.db.players[id].tally.shows || []).every((x) => x.at > 0), 'rebuilt shows carry a time');
+  }
   // Logs from before v1.8.1 have names only: the reads the page has map names to account ids.
   const old = JSON.parse(JSON.stringify(hands));
   for (const e of old) for (const x of e.raw) if (x.s) x.s = x.s.map((s) => s.slice(0, 5));
   const r2 = await T.rebuildReads(old, { setup, known: { Vic: 'V' }, heroAuth: 'H' });
-  same(r2.db.players.V.tally, live.db.players.V.tally);
+  same(noAt(r2.db.players.V.tally), noAt(live.db.players.V.tally));
   // Without that, a name from the chat lines of the same day, else "name:<name>".
   const chat = JSON.parse(JSON.stringify(old));
   chat[0].raw.push({ t: 1, ev: 'chat_message', d: { username: 'Vic', userId: 'V2' } });

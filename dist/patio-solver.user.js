@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.45
+// @version      1.8.46
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -7813,21 +7813,35 @@ ENGINE();
     return out;
   }
   // Tallies oldest id first (the order its shows are kept in); the newest MAX_SHOWS shows kept.
-  function mergeTallies(list) {
+  // A linked read's newest `max` entries of one list (shows, jamShows, mwFolds, vsRaise), in time order across the ids.
+  // Entries carry `at` (ms, when recorded) since v1.8.46; an older one sorts just before the next entry of its own list
+  // that has one, else before that id's last-seen time (`lasts`, db.seen[id].last), so untagged lists line up by when
+  // each account was last played. With neither (old data, no seen times) the lists are joined in id order as before.
+  // Before v1.8.46 they were always joined in id order (ids by first seen) and the last `max` kept, so a friend back on
+  // their oldest account lost their newest shows first: Jagger on 24 Nov had none of his 19 shows from 23-24 Nov.
+  function byTime(list, field, lasts, max) {
+    const all = [];
+    let known = !!(lasts && lasts.some((x) => x > 0));
+    list.forEach((t, li) => {
+      const arr = (t && t[field]) || [];
+      const keys = new Array(arr.length);
+      let next = lasts && lasts[li] > 0 ? lasts[li] : 0;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const e = arr[i];
+        if (e && e.at > 0) { known = true; keys[i] = e.at; next = e.at; } else { keys[i] = next - 1; next = keys[i]; }
+      }
+      for (let i = 0; i < arr.length; i++) all.push({ e: arr[i], k: keys[i], li, i });
+    });
+    if (known) all.sort((a, b) => a.k - b.k || a.li - b.li || a.i - b.i);
+    return all.slice(-max).map((x) => x.e);
+  }
+  function mergeTallies(list, lasts) {
     const out = blankTally();
     for (const t of list) addCounts(out, t);
-    const shows = [];
-    for (const t of list) for (const sh of t.shows || []) shows.push(sh);
-    out.shows = shows.slice(-MAX_SHOWS);
-    const jams = [];
-    for (const t of list) for (const sh of t.jamShows || []) jams.push(sh);
-    out.jamShows = jams.slice(-MAX_JAM_SHOWS);
-    const mw = [];
-    for (const t of list) for (const a of t.mwFolds || []) mw.push(a);
-    out.mwFolds = mw.slice(-MAX_MW_FOLDS);
-    const vr = [];
-    for (const t of list) for (const a of t.vsRaise || []) vr.push(a);
-    out.vsRaise = vr.slice(-MAX_VS_RAISE);
+    out.shows = byTime(list, 'shows', lasts, MAX_SHOWS);
+    out.jamShows = byTime(list, 'jamShows', lasts, MAX_JAM_SHOWS);
+    out.mwFolds = byTime(list, 'mwFolds', lasts, MAX_MW_FOLDS);
+    out.vsRaise = byTime(list, 'vsRaise', lasts, MAX_VS_RAISE);
     // In time order across the ids (a friend can switch back and forth between accounts); the sort is stable.
     const br = [];
     for (const t of list) for (const a of t.betRecent || []) br.push(a);
@@ -7901,7 +7915,7 @@ ENGINE();
       const seen = this.db.seen || {};
       const first = (k) => (seen[k] && seen[k].first) || 0;
       ids.sort((a, b) => first(a) - first(b));
-      return mergeTallies(ids.map((k) => upgradeTally(this.db.players[k].tally)));
+      return mergeTallies(ids.map((k) => upgradeTally(this.db.players[k].tally)), ids.map((k) => (seen[k] && seen[k].last) || 0));
     }
 
     // Every name an id has played under, newest first.
@@ -8473,7 +8487,7 @@ ENGINE();
             const t = r.tally;
             if (!t.mwFolds) t.mwFolds = [];
             const ck = p.seq[key].length >= 2 && p.seq[key][0] === 'check';
-            t.mwFolds.push({ y: kind === 'fold' ? 1 : 0, f: Math.round(f * 1000) / 1000, n: street, ck: ck ? 1 : 0, ag: p.agg.length > 0 ? 1 : 0, rr: /^\dbet$/.test(PatioTracker.preAction(p)) ? 1 : 0, k: mo.k });
+            t.mwFolds.push({ y: kind === 'fold' ? 1 : 0, f: Math.round(f * 1000) / 1000, n: street, ck: ck ? 1 : 0, ag: p.agg.length > 0 ? 1 : 0, rr: /^\dbet$/.test(PatioTracker.preAction(p)) ? 1 : 0, k: mo.k, at: this.now() });
             if (t.mwFolds.length > MAX_MW_FOLDS) t.mwFolds.splice(0, t.mwFolds.length - MAX_MW_FOLDS);
           }
           if (kind !== 'fold') mo.stayed = true;
@@ -8486,6 +8500,7 @@ ENGINE();
           a.f = Math.round((facing / Math.max(1, potBefore - facing)) * 1000) / 1000;
           a.ag = p.agg.length > 0 ? 1 : 0;
           a.rr = /^\dbet$/.test(PatioTracker.preAction(p)) ? 1 : 0;
+          a.at = this.now();
           const t = r.tally;
           if (!t.vsRaise) t.vsRaise = [];
           t.vsRaise.push(a);
@@ -8762,7 +8777,7 @@ ENGINE();
           const cards = p.shown.slice();
           const key = cards.slice().sort().join('');
           if (t.jamShows.some((s) => s && Array.isArray(s.cards) && s.cards.slice().sort().join('') === key && Math.abs((s.to || 0) - to) < 0.02)) continue;
-          t.jamShows.push({ cards, pre: top >= 4 ? '5bet' : top === 3 ? '4bet' : '3bet', to, cover: Math.round((cover / bb) * 100) / 100 });
+          t.jamShows.push(Object.assign({ cards, pre: top >= 4 ? '5bet' : top === 3 ? '4bet' : '3bet', to, cover: Math.round((cover / bb) * 100) / 100 }, e.t > 0 ? { at: e.t } : {}));
           if (t.jamShows.length > MAX_JAM_SHOWS) t.jamShows.splice(0, t.jamShows.length - MAX_JAM_SHOWS);
           n++;
         }
@@ -8869,6 +8884,45 @@ ENGINE();
       return n;
     }
 
+    // Shows and shown all-in re-raises saved before v1.8.46 carry no `at`, so a linked read can't put them in time order
+    // (byTime). Filled in from the stored hands: the hand's start time where the same two cards were shown on a board
+    // that starts with the show's (as tagHeroPot), for jamShows the hand where they were shown after a preflop re-raise
+    // to the same size. Shows older than the stored hands keep none. Returns how many were tagged.
+    tagShowTimes(entries) {
+      const key = (cards) => cards.slice().sort().join(',');
+      const byCards = new Map();
+      for (const e of entries || []) {
+        if (!e || !(e.t > 0) || !Array.isArray(e.players)) continue;
+        const bb = e.bigBlind > 0 ? e.bigBlind : 0;
+        for (const p of e.players) {
+          if (!p || p.hero || !Array.isArray(p.shown) || p.shown.length !== 2) continue;
+          const tos = bb && Array.isArray(e.log) ? e.log.filter((x) => x && x.st === 'pre' && x.who === p.name && /^(raise|\dbet)$/.test(x.act) && x.to > 0).map((x) => Math.round((x.to / bb) * 100) / 100) : [];
+          const k = key(p.shown);
+          if (!byCards.has(k)) byCards.set(k, []);
+          byCards.get(k).push({ board: Array.isArray(e.board) ? e.board : [], t: e.t, tos });
+        }
+      }
+      let n = 0;
+      for (const r of Object.values(this.db.players)) {
+        const t = r && r.tally;
+        for (const s of (t && t.shows) || []) {
+          if (!s || s.at > 0 || !Array.isArray(s.cards) || s.cards.length !== 2 || !Array.isArray(s.board)) continue;
+          const m = (byCards.get(key(s.cards)) || []).filter((c) => c.board.length >= s.board.length && s.board.every((x, i) => c.board[i] === x));
+          if (m.length !== 1) continue;
+          s.at = m[0].t;
+          n++;
+        }
+        for (const s of (t && t.jamShows) || []) {
+          if (!s || s.at > 0 || !Array.isArray(s.cards) || s.cards.length !== 2) continue;
+          const m = (byCards.get(key(s.cards)) || []).filter((c) => c.tos.some((x) => Math.abs(x - (s.to || 0)) < 0.02));
+          if (m.length !== 1) continue;
+          s.at = m[0].t;
+          n++;
+        }
+      }
+      return n;
+    }
+
     // First answers to hero's multiway bets from hands stored before v1.8.29 (MW_BET_FOLD's per-player read,
     // tally.mwFolds): found in each stored hand's action log the way the live tracker counts them (hero's opening bet
     // after the flop into 2+ opponents, each answer of 30%+ of the pot until someone stays), oldest first, added to the
@@ -8905,12 +8959,12 @@ ENGINE();
                 const t = r.tally || (r.tally = blankTally());
                 if (!t.mwFolds) t.mwFolds = [];
                 const mine = log.slice(0, i + 1).filter((y) => y.who === x.who);
-                t.mwFolds.push({
+                t.mwFolds.push(Object.assign({
                   y: x.act === 'fold' ? 1 : 0, f: Math.round(f * 1000) / 1000, n: { flop: 3, turn: 4, river: 5 }[st],
                   ck: mine.some((y) => y.st === st && y.act === 'check') ? 1 : 0,
                   ag: mine.some((y) => y.st !== 'pre' && (y.act === 'bet' || y.act === 'raise')) ? 1 : 0,
                   rr: mine.some((y) => y.st === 'pre' && /^\dbet$/.test(y.act)) ? 1 : 0, k,
-                });
+                }, e.t > 0 ? { at: e.t } : {}));
                 if (t.mwFolds.length > MAX_MW_FOLDS) t.mwFolds.splice(0, t.mwFolds.length - MAX_MW_FOLDS);
                 n++;
               }
@@ -8949,6 +9003,7 @@ ENGINE();
           a.f = Math.round((x.facing / Math.max(1, (x.pot || 0) - x.facing)) * 1000) / 1000;
           a.ag = before.some((y) => y.st !== 'pre' && (y.act === 'bet' || y.act === 'raise')) ? 1 : 0;
           a.rr = before.some((y) => y.st === 'pre' && /^\dbet$/.test(y.act)) ? 1 : 0;
+          if (e.t > 0) a.at = e.t;
           const t = r.tally || (r.tally = blankTally());
           if (!t.vsRaise) t.vsRaise = [];
           t.vsRaise.push(a);
@@ -9225,7 +9280,7 @@ ENGINE();
         const rj = this.record(p.auth, p.name);
         if (rj) {
           if (!rj.tally.jamShows) rj.tally.jamShows = [];
-          rj.tally.jamShows.push({ cards: p.shown.slice(), pre: pre0, to: p.sizes.preTo, cover: p.sizes.preCover != null ? p.sizes.preCover : null });
+          rj.tally.jamShows.push({ cards: p.shown.slice(), pre: pre0, to: p.sizes.preTo, cover: p.sizes.preCover != null ? p.sizes.preCover : null, at: this.now() });
           if (rj.tally.jamShows.length > MAX_JAM_SHOWS) rj.tally.jamShows.splice(0, rj.tally.jamShows.length - MAX_JAM_SHOWS);
           if (h.board.length < 3) this.emit('save', this.db);
         }
@@ -9238,7 +9293,7 @@ ENGINE();
       if (actions.pre === 'pending' && !p.blindAllin) actions.pre = 'call';
       const hero = Object.values(h.players).find((x) => x.id === this.heroId());
       const show = {
-        cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(),
+        cards: p.shown.slice(), board: h.board.slice(), agg: p.agg.slice(), at: this.now(),
         actions, sizes: Object.assign({}, p.sizes), ms: p.ms.slice(), pfAggressor: h.pfRaiser === p.id, position: this.posGroup(p.id),
         // Whether hero was still in the pot, and the big blinds this player put in (heroPotShows).
         hp: { in: !!(hero && !hero.folded), put: Math.round(((p.total || 0) / (h.bigBlind || 1)) * 10) / 10 },
@@ -9667,6 +9722,8 @@ function slim(r) {
   if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
   // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
   if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
+  // Shows saved before v1.8.46 carry no time (linked reads keep a player's newest shows by it): once.
+  if (!tracker.db.stTagged) { tracker.tagShowTimes(tracker.db.history || []); tracker.db.stTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;
