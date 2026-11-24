@@ -651,6 +651,9 @@
 
   // ctx.multiway: the read is for a pot with two or more opponents, so fold rates are the
   // player's multiway ones (stats.read keeps both, for predictAction).
+  // The table's showdown hit factor for read trust (input.trustShows false): shown hands sat in the likelier half of the
+  // read's range 0.447 of the time over all logs to 24 Nov (993 shows), so 0.447 / 0.5.
+  const TRUST_HIT = 0.9;
   function computeStats(tally, tableStyle, pool, ctx) {
     const mwCtx = !!(ctx && ctx.multiway);
     const t = Object.assign({}, EMPTY_TALLY, tally || {});
@@ -922,7 +925,11 @@
     const pd = t.pred && t.pred.n > 0 ? t.pred : null;
     stats.predAccuracy = pd ? { n: pd.n, gain: (pd.pop - pd.read) / pd.n } : null;
     const actTrust = pd ? clamp(1 + (3 * (pd.pop - pd.read)) / (pd.n + 30), 0.75, 1.05) : 1;
-    const trust = clamp((((hits + 2) / (fits.length + 4)) / 0.5) * actTrust, 0.5, 1.1);
+    // ctx.hitTrust (input.trustShows false, TRUST_HIT) replaces the player's own showdown hit rate with the table's: on
+    // all logs to 24 Nov (993 shows, each from the shows before it) a player's hit rate predicts their next show worse
+    // than the table's rate at every shrinkage (-17.5 nats at this +2/+4, -4.4 at +18/+40), players with 30+ shows too.
+    const hitF = ctx && ctx.hitTrust != null ? ctx.hitTrust : ((hits + 2) / (fits.length + 4)) / 0.5;
+    const trust = clamp(hitF * actTrust, 0.5, 1.1);
     const p = clamp((0.5 + (0.4 * n) / 120) * trust, 0.3, 0.95);
     stats.exploitWeight = p;
     const mix = (read, eq) => p * read + (1 - p) * eq;
@@ -6088,6 +6095,9 @@
         reraised: street > 0 && /^\dbet$/.test((o.actions && o.actions.pre) || ''),
         // Checked on this street already (hero bets into a check), or not acted on it yet.
         street, line: input.checkLine === false ? null : now === 'check' || now === 'checkcall' ? 'checked' : now === '' ? 'unacted' : null,
+        // Read trust from the table's showdown hit rate instead of the player's own (off: input.trustShows false, a number
+        // sets the hit factor; TRUST_HIT).
+        hitTrust: input.trustShows === false ? TRUST_HIT : typeof input.trustShows === 'number' ? input.trustShows : undefined,
       };
       const stats = computeStats(o.tally, tableStyle, input.pool, ctx);
       // Heads-up fold rates for the lookahead once everyone else has folded (playOut).
