@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.44
+// @version      1.8.45
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1608,6 +1608,43 @@ function ENGINE() {
     }
     if (cold && oc.length) { out.nCold = oc.length; out.odds = cold.odds * Math.exp(fitOffset(oc.slice(-(cold.max || 40)), Math.log(cold.odds), cold.tau)); }
     if (rrc && ob.length) { out.nBet = ob.length; out.mult = rrc.mult * Math.exp(fitOffset(ob.slice(-(rrc.max || 40)), Math.log(rrc.fitMult || rrc.mult), rrc.tau)); }
+    return out;
+  }
+  // Recent betting (v1.8.45, BET_RECENT; input.betRecent: false turns it off, an object replaces fields): a player's bet
+  // rate when they can open the betting after the flop (check or bet, nobody's bet in yet), moved by how their newest
+  // such decisions went against the read at the time. The read remembers about 330 hands (DECAY), and on 21-24 Nov
+  // Jagger bet 0.74 of those spots against a read of 0.57 (n 101, z 3.7) and Mark 0.51 against 0.35 (n 84, z 3.2),
+  // where both had been on target before. The tracker keeps each player's newest `max` such decisions with the read's
+  // P(bet) then (tally.betRecent { p, y, t }, out of decay, merged over linked ids by time); the offset u is the MAP
+  // log-odds shift on them with weight lam^age (newest 1) and a normal prior sd `sd`, and the engine scales the player's
+  // bet rates (all streets after the flop, c-bets too) by exp(u) in odds. All logs (3,649 decisions, each predicted from
+  // earlier ones): +26.6 nats over the read, and better in each of the five periods (31 Oct-3 Nov +5.6, 4-5 Nov +2.2,
+  // 6-7 Nov +3.5, 10-11 Nov +7.5, 21-24 Nov +7.7); Mark +8.8, Jagger +7.7, everyone else +10.1. lam 0.93-0.97 and sd
+  // 0.5-0.7 score about the same. The same offset on folds to bets loses (-7.8 nats over 2,700 answers): only betting
+  // drifts from session to session.
+  const BET_RECENT = { lam: 0.95, sd: 0.5, max: 60 };
+  // { odds, n } for a player's betRecent list (odds 1 with no list).
+  function betRecentOdds(list, cfg) {
+    const out = { odds: 1, n: 0 };
+    if (!cfg || !Array.isArray(list) || !list.length || !(cfg.sd > 0)) return out;
+    const L = list.slice(-(cfg.max || 60)).filter((a) => a && a.p > 0 && a.p < 1);
+    if (!L.length) return out;
+    const prec = 1 / (cfg.sd * cfg.sd), lam = cfg.lam != null ? cfg.lam : 0.95;
+    let u = 0;
+    for (let it = 0; it < 30; it++) {
+      let g = -u * prec, h = -prec, w = 1;
+      for (let j = L.length - 1; j >= 0; j--) {
+        const p = clamp(L[j].p, 0.005, 0.995);
+        const q = 1 / (1 + Math.exp(-(Math.log(p / (1 - p)) + u)));
+        g += w * ((L[j].y ? 1 : 0) - q); h -= w * q * (1 - q);
+        w *= lam;
+        if (w < 1e-4) break;
+      }
+      const step = g / h;
+      u = clamp(u - step, -2, 2);
+      if (Math.abs(step) < 1e-7) break;
+    }
+    out.odds = Math.exp(u); out.n = L.length;
     return out;
   }
   // Roles from the hand's action history (input.history: { st, who, act } in order): roles[name][street] = the role at
@@ -6056,6 +6093,7 @@ function ENGINE() {
     // the table's mult, an object replaces fields).
     const CR = street >= 3 && toCall > 0 && input.coldRaise !== false ? Object.assign({}, COLD_RAISE, typeof input.coldRaise === 'number' ? { odds: input.coldRaise } : input.coldRaise && typeof input.coldRaise === 'object' ? input.coldRaise : {}) : null;
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
+    const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6069,6 +6107,22 @@ function ENGINE() {
       const statsHU = ctx.multiway ? computeStats(o.tally, tableStyle, input.pool, Object.assign({}, ctx, { multiway: false })) : null;
       // input.checkLine: false drops the check-line read (#47) everywhere, the lookahead's after-check folds too (simulator).
       if (input.checkLine === false) { const L1 = { checkedFold: 1, checkedRaise: 1, unactedRaise: 1 }; stats.line = L1; if (statsHU) statsHU.line = L1; }
+      // Recent betting (BET_RECENT): their bet rates after the flop move with their newest chances to bet, before the
+      // range is built, so their past bets this hand read as wide as their betting now is.
+      if (BRC && street >= 3) {
+        const br = betRecentOdds(o.tally && o.tally.betRecent, BRC);
+        if (br.n) stats.betRecent = { odds: br.odds, n: br.n };
+        if (br.n && br.odds !== 1) {
+          for (const S of statsHU ? [stats, statsHU] : [stats]) {
+            S.betFreq = oddsScale(S.betFreq, br.odds);
+            if (S.cbet != null) S.cbet = oddsScale(S.cbet, br.odds);
+            const bs = {};
+            for (const n of [3, 4, 5]) bs[n] = Object.assign({}, S.byStreet[n], { betFreq: oddsScale(S.byStreet[n].betFreq, br.odds) });
+            S.byStreet = Object.assign({}, S.byStreet, bs);
+          }
+          if (statsHU) statsHU.betRecent = stats.betRecent;
+        }
+      }
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
       // input.reraiseLines: false reads a re-raise war after the flop as one raise again (before v1.8.10).
       if (input.reraiseLines === false) { stats.reraiseLines = false; if (statsHU) statsHU.reraiseLines = false; }
@@ -7591,7 +7645,7 @@ function ENGINE() {
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
@@ -7640,6 +7694,7 @@ ENGINE();
   const MAX_JAM_SHOWS = 20;
   const MAX_MW_FOLDS = 40;
   const MAX_VS_RAISE = 60;
+  const MAX_BET_RECENT = 60;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -7649,7 +7704,7 @@ ENGINE();
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -7714,6 +7769,9 @@ ENGINE();
       // acted, ck: first action on the street a check, ag: bet or raised earlier in the hand, rr: re-raised preflop,
       // h: the raise was hero's }. Newest MAX_VS_RAISE.
       vsRaise: [],
+      // Chances to open the betting after the flop (check or bet with nobody's bet in; v1.8.45, BET_RECENT's per-player
+      // read): { p: the read's P(bet) then, y: 1 bet, t: time }. Newest MAX_BET_RECENT.
+      betRecent: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -7743,7 +7801,7 @@ ENGINE();
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -7766,6 +7824,11 @@ ENGINE();
     const vr = [];
     for (const t of list) for (const a of t.vsRaise || []) vr.push(a);
     out.vsRaise = vr.slice(-MAX_VS_RAISE);
+    // In time order across the ids (a friend can switch back and forth between accounts); the sort is stable.
+    const br = [];
+    for (const t of list) for (const a of t.betRecent || []) br.push(a);
+    br.sort((a, b) => ((a && a.t) || 0) - ((b && b.t) || 0));
+    out.betRecent = br.slice(-MAX_BET_RECENT);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -8385,7 +8448,11 @@ ENGINE();
             // First action on this street a check (true), or none before this one (false).
             checked: p.seq[key].length >= 2 ? (p.seq[key][0] === 'check' ? true : null) : false }
           : (kind === 'check' || kind === 'bet') && { kind: 'open', n: street, out: kind, cbet: street === 3 && h.pfRaiser === p.id && !p.cbetSeen && !h.flopBet, mw: multiway };
-        if (d) this.scorePrediction(r.tally, Object.assign(d, { pos: this.posGroup(p.id) }), this.readTally(p.auth));
+        if (d) {
+          const rd = this.scorePrediction(r.tally, Object.assign(d, { pos: this.posGroup(p.id) }), this.readTally(p.auth));
+          // A chance to open the betting, with the read's P(bet) before it counts (BET_RECENT).
+          if (d.kind === 'open' && rd) PatioTracker.addBetRecent(r.tally, rd, kind === 'bet', this.now());
+        }
       }
       if (r) this.extraStats(p, r.tally, kind, facing, key);
       // Hero's opening bet into 2+ opponents after the flop, and each answer to it until someone stays (MW_BET_FOLD's
@@ -8587,15 +8654,17 @@ ENGINE();
     // average player's read did. `predictor(tally, d)` (set by the UI from the engine) returns
     // [read probabilities, average-player probabilities] for the decision d. The score is counted
     // in t (the player's own record); `read` is the tally the read comes from (linked ids added up).
+    // Returns the read's probabilities (null without a predictor).
     scorePrediction(t, d, read) {
-      if (!this.predictor || !t.pred) return;
+      if (!this.predictor || !t.pred) return null;
       try {
         const [rd, pop] = this.predictor(read || t, d);
         const pr = (x) => { let s = 0; for (const v of Object.values(x)) s += Math.max(0, v); return Math.max(1e-3, (x[d.out] || 0) / (s || 1)); };
         t.pred.n++;
         t.pred.read += -Math.log(pr(rd));
         t.pred.pop += -Math.log(pr(pop));
-      } catch (e) { /* scoring is optional */ }
+        return rd;
+      } catch (e) { return null; /* scoring is optional */ }
     }
 
     // Every known opponent's counts added up (not their shows): the engine blends this table's
@@ -8886,6 +8955,51 @@ ENGINE();
       return n;
     }
 
+    // Chances to open the betting after the flop from hands stored before v1.8.45 (tally.betRecent, BET_RECENT's
+    // per-player read), oldest first, each with the current read's P(bet) (the read at the time isn't stored; it moves
+    // little over the newest 60 chances). Needs the predictor. Meant to run once, before any hand of this version.
+    // Returns how many were added.
+    tagBetRecent(entries) {
+      if (!this.predictor) return 0;
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const ST = { flop: 3, turn: 4, river: 5 };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log)).sort((a, b) => (a.t || 0) - (b.t || 0));
+      const reads = {};
+      let n = 0;
+      for (const e of list) {
+        const log = e.log.filter((x) => x && x.act);
+        let pfRaiser = null, flopBet = false;
+        const flopActed = new Set(), ids = {};
+        log.forEach((x, i) => {
+          if (x.st === 'pre' && (x.act === 'raise' || /^\dbet$/.test(x.act))) pfRaiser = x.who;
+          const n0 = ST[x.st];
+          if (n0 && !x.hero && !(x.facing > 0) && (x.act === 'check' || x.act === 'bet')) {
+            const id = ids[x.who] !== undefined ? ids[x.who] : (ids[x.who] = idFor(x.who, e.t || 0, e.raw));
+            const r = id && this.db.players[id];
+            if (r) {
+              const d = { kind: 'open', n: n0, out: x.act, cbet: n0 === 3 && x.who === pfRaiser && !flopActed.has(x.who) && !flopBet };
+              try {
+                // The read is the same all through, so one prediction per player, street and c-bet chance.
+                const key = (this.canon ? this.canon(id) : id) + '|' + n0 + '|' + (d.cbet ? 1 : 0);
+                const rd = reads[key] || (reads[key] = this.predictor(this.readTally(id) || r.tally || blankTally(), d)[0]);
+                PatioTracker.addBetRecent(r.tally || (r.tally = blankTally()), rd, x.act === 'bet', (e.t || 0) + i);
+                n++;
+              } catch (err) { /* optional */ }
+            }
+          }
+          if (x.st === 'flop') { flopActed.add(x.who); if (x.act === 'bet') flopBet = true; }
+        });
+      }
+      return n;
+    }
+
     // More tendencies, counted before this action updates the hand state:
     // limps, fold to 3-bet, donk bets, check-raises, and how long they take for each kind of action.
     extraStats(p, t, kind, facing, key) {
@@ -9050,6 +9164,8 @@ ENGINE();
           // v1.8.44: answers to hero's raise after the flop (COLD_RAISE, RAISED_RR): cold fold odds and the bettor's
           // re-raise multiplier, with the answers each rests on.
           vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
+          // v1.8.45: the player's recent-betting odds (BET_RECENT) and how many chances to bet they rest on.
+          br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -9152,6 +9268,16 @@ ENGINE();
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind === 'allin' && kind === 'call') return !(adv.amount > (adv.toCall || 0) + 1e-9);
       return group(adv.kind) === group(kind);
+    }
+
+    // A chance to open the betting after the flop (tally.betRecent, BET_RECENT): the read's probabilities `rd`
+    // ({ check, bet }), whether they bet, and when.
+    static addBetRecent(t, rd, bet, time) {
+      const s = Math.max(0, rd.check || 0) + Math.max(0, rd.bet || 0);
+      if (!(s > 0)) return;
+      if (!t.betRecent) t.betRecent = [];
+      t.betRecent.push({ p: Math.round((Math.max(0, rd.bet || 0) / s) * 10000) / 10000, y: bet ? 1 : 0, t: time || 0 });
+      if (t.betRecent.length > MAX_BET_RECENT) t.betRecent.splice(0, t.betRecent.length - MAX_BET_RECENT);
     }
 
     // An answer to a raise after the flop (tally.vsRaise): `log` is the hand's actions before it, `me` the answer (both in
@@ -9411,7 +9537,19 @@ function slim(r) {
       return {
         name: o.name, pending: o.pending, aggressor: o.aggressor,
         type: { key: o.type.key, label: o.type.label, tip: o.type.tip },
-        stats: { hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af, foldToBet: o.stats.foldToBet, confidence: o.stats.confidence },
+        stats: {
+          hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af, foldToBet: o.stats.foldToBet, confidence: o.stats.confidence,
+          // The per-player reads the hand log keeps (tracker noteAdvice), as the extension's slim passes them (v1.8.45).
+          exploitWeight: o.stats.exploitWeight, accuracy: o.stats.accuracy, strengthBias: o.stats.strengthBias, callBig: o.stats.callBig,
+          tiltAgg: o.stats.tiltAgg, tiltPas: o.stats.tiltPas, tiltHero: o.stats.tiltHero, mwBet: o.stats.mwBet,
+          tiltCheckBet: o.stats.tiltCheckBet ? { tilt: o.stats.tiltCheckBet.tilt, n: o.stats.tiltCheckBet.n } : undefined,
+          predAccuracy: o.stats.predAccuracy || undefined, rangeNoise: o.stats.rangeNoise, certainty: o.stats.certainty,
+          heroPotOwn: o.stats.heroPotOwn ? { tilt: o.stats.heroPotOwn.tilt, n: o.stats.heroPotOwn.n } : undefined,
+          tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
+          chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
+          vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
+          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n } : undefined
+        },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
         heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
       };
@@ -9523,6 +9661,8 @@ function slim(r) {
   if (!tracker.db.sdTagged) { tracker.tagShowdown(tracker.db.history || []); tracker.db.sdTagged = 1; save(DB_KEY, tracker.db); }
   // Answers to raises after the flop (tally.vsRaise, v1.8.44) from hands stored before: once.
   if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
+  // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
+  if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

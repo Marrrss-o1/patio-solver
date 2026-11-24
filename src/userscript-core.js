@@ -19,7 +19,19 @@ function slim(r) {
       return {
         name: o.name, pending: o.pending, aggressor: o.aggressor,
         type: { key: o.type.key, label: o.type.label, tip: o.type.tip },
-        stats: { hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af, foldToBet: o.stats.foldToBet, confidence: o.stats.confidence },
+        stats: {
+          hands: o.stats.hands, vpip: o.stats.vpip, pfr: o.stats.pfr, af: o.stats.af, foldToBet: o.stats.foldToBet, confidence: o.stats.confidence,
+          // The per-player reads the hand log keeps (tracker noteAdvice), as the extension's slim passes them (v1.8.45).
+          exploitWeight: o.stats.exploitWeight, accuracy: o.stats.accuracy, strengthBias: o.stats.strengthBias, callBig: o.stats.callBig,
+          tiltAgg: o.stats.tiltAgg, tiltPas: o.stats.tiltPas, tiltHero: o.stats.tiltHero, mwBet: o.stats.mwBet,
+          tiltCheckBet: o.stats.tiltCheckBet ? { tilt: o.stats.tiltCheckBet.tilt, n: o.stats.tiltCheckBet.n } : undefined,
+          predAccuracy: o.stats.predAccuracy || undefined, rangeNoise: o.stats.rangeNoise, certainty: o.stats.certainty,
+          heroPotOwn: o.stats.heroPotOwn ? { tilt: o.stats.heroPotOwn.tilt, n: o.stats.heroPotOwn.n } : undefined,
+          tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
+          chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
+          vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
+          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n } : undefined
+        },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
         heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
       };
@@ -131,6 +143,8 @@ function slim(r) {
   if (!tracker.db.sdTagged) { tracker.tagShowdown(tracker.db.history || []); tracker.db.sdTagged = 1; save(DB_KEY, tracker.db); }
   // Answers to raises after the flop (tally.vsRaise, v1.8.44) from hands stored before: once.
   if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
+  // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
+  if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

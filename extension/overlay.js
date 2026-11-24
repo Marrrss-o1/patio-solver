@@ -742,12 +742,14 @@
     // of folds to hero's multiway bets (tally.mwFolds): filled in once from every stored hand.
     // Shows saved before v1.8.36 don't say whether they reached a showdown (show `sd`): filled in once as well.
     // Answers to raises after the flop (tally.vsRaise, v1.8.44) from hands stored before: once.
-    if (!tracker.db.cbTagged || !tracker.db.mwTagged || !tracker.db.sdTagged || !tracker.db.vrTagged) {
+    // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
+    if (!tracker.db.cbTagged || !tracker.db.mwTagged || !tracker.db.sdTagged || !tracker.db.vrTagged || !tracker.db.brTagged) {
       handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
         if (!tracker.db.cbTagged) { tracker.tagCheckBet(hands); tracker.db.cbTagged = 1; }
         if (!tracker.db.mwTagged) { tracker.tagMwFolds(hands); tracker.db.mwTagged = 1; }
         if (!tracker.db.sdTagged) { tracker.tagShowdown(hands); tracker.db.sdTagged = 1; }
         if (!tracker.db.vrTagged) { tracker.tagVsRaise(hands); tracker.db.vrTagged = 1; }
+        if (!tracker.db.brTagged) { tracker.tagBetRecent(hands); tracker.db.brTagged = 1; }
         saveDb();
       });
     }
