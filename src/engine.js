@@ -2165,6 +2165,13 @@
         cont0 = clamp(Math.max((1 - f) * fade, floor), 0.03, 0.97);
         rr0 = (ctx.pfLimpCurve.rr != null ? ctx.pfLimpCurve.rr : PF_LIMP_CURVE.rr) * cont0;
       }
+      // Already in, facing a raise-to the big-raise cliff cuts (PF_COMMIT_BIG): lifted toward the chips-in curve as far as
+      // the cliff has cut it.
+      if (ctx.pfCommitBig && opp.committed > 0 && fade < 1 && BIG_FLOOR < 1) {
+        const w = clamp((1 - fade) / (1 - BIG_FLOOR), 0, 1);
+        const p = pfCommitBigCont(ctx.pfCommitBig, opp.committed / Math.max(1e-9, kind.amount + (ctx.heroBet || 0)), opp.bigIn ? opp.bigIn.u : 0);
+        if (p > cont0) cont0 = clamp(cont0 + w * (p - cont0), 0.03, 0.97);
+      }
       if (commitW > 0) return withRead({ cont: Math.max(cont0, cont0 + commitW * (0.97 - cont0)), nut: 0.965, reraise: rr0 + commitW * (0.11 - rr0) });
       return withRead({ cont: cont0, nut: 0.965, reraise: rr0 });
     }
@@ -2518,6 +2525,40 @@
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
+  // Players already in facing a big re-raise (v1.8.48, PF_COMMIT_BIG; input.pfCommitBig: false turns it off, an object
+  // replaces fields, { sd: 0 } is the table's curve for everyone). Above a raise-to of 30bb the big-raise cliff (bigFade)
+  // cuts every player's continue floor, whatever they already have in, so a re-raiser with 43bb in facing hero's shove to
+  // 184bb was read folding two times in three (25 Nov #66: Dew345 with 86 chips in called with AdJd; K9o's 4-bet had
+  // 0.34). All logs to 25 Nov, a player who had acted preflop facing a raise to more than 30bb (84 spots, first answer to
+  // each raise): with under a twentieth of the raise-to in 5 of 46 continued, 1/20-1/10 3 of 12, 1/10-1/5 6 of 9, a fifth
+  // or more 15 of 17. The table's curve is logistic in ln(chips in / raise-to): `cont` at a share `at`, `slope` per unit
+  // of ln share (fitted on all 84: 0.71 at a fifth, slope 1.3; 0.49 at a tenth, 0.81 at 0.3). Each player's own answers
+  // with a tenth (`min`) or more in (tally.bigIn, newest `max`, out of decay, merged over linked ids) move it by a log-odds
+  // offset fitted against the curve (normal prior sd `sd`). It lifts continueRule's continue rate up to the curve as far
+  // as the cliff has cut it ((1 - fade) / (1 - the cliff's floor): nothing at 30bb, all of it from about 52bb), so it is
+  // continuous at 30bb and does nothing below or with input.bigCliff false. The older input.pfCommit (all sizes) stays as
+  // it was.
+  const PF_COMMIT_BIG = { cont: 0.71, at: 0.2, slope: 1.3, min: 0.1, sd: 0.5, max: 40 };
+  // A player's own offset on PF_COMMIT_BIG's curve from tally.bigIn ({ y: 1 continued, q: chips in / raise-to, to }).
+  // Returns { u, odds, n } (u 0 and n 0 without answers of `min`+).
+  function pfCommitBigRead(list, cfg) {
+    const out = { u: 0, odds: 1, n: 0 };
+    if (!cfg || !Array.isArray(list) || !list.length) return out;
+    const obs = [];
+    for (const a of list.slice(-(cfg.max || 40))) {
+      if (!a || !(a.q >= (cfg.min != null ? cfg.min : 0.1))) continue;
+      obs.push({ l: logit(cfg.cont) + cfg.slope * Math.log(a.q / cfg.at), y: a.y ? 1 : 0 });
+    }
+    if (!obs.length) return out;
+    out.n = obs.length;
+    out.u = cfg.sd > 0 ? fitOffset(obs, 0, cfg.sd) : 0;
+    out.odds = Math.exp(out.u);
+    return out;
+  }
+  // The continue rate PF_COMMIT_BIG's curve gives a player with share q of the raise-to in (u: their offset).
+  function pfCommitBigCont(cfg, q, u) {
+    return sigmoid(logit(cfg.cont) + cfg.slope * Math.log(Math.max(1e-6, q) / cfg.at) + (u || 0));
+  }
   // Limpers facing the first raise (v1.8.24, off since v1.8.26; input.pfLimpCurve: true turns it on, an object replaces
   // fields):
   // logit(fold) = a + b1 x min(ln(R / ref), ln(hinge / ref)) + b2 x max(0, ln(R / hinge)) + s x (logit(limpFold) -
@@ -6088,6 +6129,8 @@
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
     const BRon = input.betRecent === true || (!!input.betRecent && typeof input.betRecent === 'object');
     const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
+    // Players already in facing a big re-raise (PF_COMMIT_BIG), preflop only.
+    const PCB = street === 0 && input.pfCommitBig !== false ? Object.assign({}, PF_COMMIT_BIG, input.pfCommitBig && typeof input.pfCommitBig === 'object' ? input.pfCommitBig : {}) : null;
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6230,6 +6273,8 @@
         aggroFold: AGGRO_FOLD === 'none' ? false : street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')) && !(AGGRO_FOLD === 'unacted' && now === 'check'),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
         vsRaise: CR || RRR ? (stats.vsRaiseRead = vsRaiseReads(stats, CR, RRR, o.tally && o.tally.vsRaise)) : null,
+        // The player's own offset on PF_COMMIT_BIG's curve (reported in stats.bigIn once they have answers).
+        bigIn: PCB ? (() => { const b = pfCommitBigRead(o.tally && o.tally.bigIn, PCB); if (b.n) stats.bigIn = { odds: b.odds, n: b.n }; return b; })() : null,
       };
     });
 
@@ -6315,7 +6360,7 @@
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitBig: PCB, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -7643,7 +7688,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, PF_COMMIT_BIG, pfCommitBigRead, pfCommitBigCont, continueRule, bigFade, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),

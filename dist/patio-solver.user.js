@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.47
+// @version      1.8.48
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -2181,6 +2181,13 @@ function ENGINE() {
         cont0 = clamp(Math.max((1 - f) * fade, floor), 0.03, 0.97);
         rr0 = (ctx.pfLimpCurve.rr != null ? ctx.pfLimpCurve.rr : PF_LIMP_CURVE.rr) * cont0;
       }
+      // Already in, facing a raise-to the big-raise cliff cuts (PF_COMMIT_BIG): lifted toward the chips-in curve as far as
+      // the cliff has cut it.
+      if (ctx.pfCommitBig && opp.committed > 0 && fade < 1 && BIG_FLOOR < 1) {
+        const w = clamp((1 - fade) / (1 - BIG_FLOOR), 0, 1);
+        const p = pfCommitBigCont(ctx.pfCommitBig, opp.committed / Math.max(1e-9, kind.amount + (ctx.heroBet || 0)), opp.bigIn ? opp.bigIn.u : 0);
+        if (p > cont0) cont0 = clamp(cont0 + w * (p - cont0), 0.03, 0.97);
+      }
       if (commitW > 0) return withRead({ cont: Math.max(cont0, cont0 + commitW * (0.97 - cont0)), nut: 0.965, reraise: rr0 + commitW * (0.11 - rr0) });
       return withRead({ cont: cont0, nut: 0.965, reraise: rr0 });
     }
@@ -2534,6 +2541,40 @@ function ENGINE() {
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
   const PF_COMMIT_RAMP = [0.2, 1 / 3];
+  // Players already in facing a big re-raise (v1.8.48, PF_COMMIT_BIG; input.pfCommitBig: false turns it off, an object
+  // replaces fields, { sd: 0 } is the table's curve for everyone). Above a raise-to of 30bb the big-raise cliff (bigFade)
+  // cuts every player's continue floor, whatever they already have in, so a re-raiser with 43bb in facing hero's shove to
+  // 184bb was read folding two times in three (25 Nov #66: Dew345 with 86 chips in called with AdJd; K9o's 4-bet had
+  // 0.34). All logs to 25 Nov, a player who had acted preflop facing a raise to more than 30bb (84 spots, first answer to
+  // each raise): with under a twentieth of the raise-to in 5 of 46 continued, 1/20-1/10 3 of 12, 1/10-1/5 6 of 9, a fifth
+  // or more 15 of 17. The table's curve is logistic in ln(chips in / raise-to): `cont` at a share `at`, `slope` per unit
+  // of ln share (fitted on all 84: 0.71 at a fifth, slope 1.3; 0.49 at a tenth, 0.81 at 0.3). Each player's own answers
+  // with a tenth (`min`) or more in (tally.bigIn, newest `max`, out of decay, merged over linked ids) move it by a log-odds
+  // offset fitted against the curve (normal prior sd `sd`). It lifts continueRule's continue rate up to the curve as far
+  // as the cliff has cut it ((1 - fade) / (1 - the cliff's floor): nothing at 30bb, all of it from about 52bb), so it is
+  // continuous at 30bb and does nothing below or with input.bigCliff false. The older input.pfCommit (all sizes) stays as
+  // it was.
+  const PF_COMMIT_BIG = { cont: 0.71, at: 0.2, slope: 1.3, min: 0.1, sd: 0.5, max: 40 };
+  // A player's own offset on PF_COMMIT_BIG's curve from tally.bigIn ({ y: 1 continued, q: chips in / raise-to, to }).
+  // Returns { u, odds, n } (u 0 and n 0 without answers of `min`+).
+  function pfCommitBigRead(list, cfg) {
+    const out = { u: 0, odds: 1, n: 0 };
+    if (!cfg || !Array.isArray(list) || !list.length) return out;
+    const obs = [];
+    for (const a of list.slice(-(cfg.max || 40))) {
+      if (!a || !(a.q >= (cfg.min != null ? cfg.min : 0.1))) continue;
+      obs.push({ l: logit(cfg.cont) + cfg.slope * Math.log(a.q / cfg.at), y: a.y ? 1 : 0 });
+    }
+    if (!obs.length) return out;
+    out.n = obs.length;
+    out.u = cfg.sd > 0 ? fitOffset(obs, 0, cfg.sd) : 0;
+    out.odds = Math.exp(out.u);
+    return out;
+  }
+  // The continue rate PF_COMMIT_BIG's curve gives a player with share q of the raise-to in (u: their offset).
+  function pfCommitBigCont(cfg, q, u) {
+    return sigmoid(logit(cfg.cont) + cfg.slope * Math.log(Math.max(1e-6, q) / cfg.at) + (u || 0));
+  }
   // Limpers facing the first raise (v1.8.24, off since v1.8.26; input.pfLimpCurve: true turns it on, an object replaces
   // fields):
   // logit(fold) = a + b1 x min(ln(R / ref), ln(hinge / ref)) + b2 x max(0, ln(R / hinge)) + s x (logit(limpFold) -
@@ -6104,6 +6145,8 @@ function ENGINE() {
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
     const BRon = input.betRecent === true || (!!input.betRecent && typeof input.betRecent === 'object');
     const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
+    // Players already in facing a big re-raise (PF_COMMIT_BIG), preflop only.
+    const PCB = street === 0 && input.pfCommitBig !== false ? Object.assign({}, PF_COMMIT_BIG, input.pfCommitBig && typeof input.pfCommitBig === 'object' ? input.pfCommitBig : {}) : null;
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6246,6 +6289,8 @@ function ENGINE() {
         aggroFold: AGGRO_FOLD === 'none' ? false : street > 0 && ['flop', 'turn', 'river'].some((n) => /bet|raise/.test(actions[n] || '')) && !(AGGRO_FOLD === 'unacted' && now === 'check'),
         W, sampler: buildSampler(W), qCont, grid: rangeGrid(displayW, dead),
         vsRaise: CR || RRR ? (stats.vsRaiseRead = vsRaiseReads(stats, CR, RRR, o.tally && o.tally.vsRaise)) : null,
+        // The player's own offset on PF_COMMIT_BIG's curve (reported in stats.bigIn once they have answers).
+        bigIn: PCB ? (() => { const b = pfCommitBigRead(o.tally && o.tally.bigIn, PCB); if (b.n) stats.bigIn = { odds: b.odds, n: b.n }; return b; })() : null,
       };
     });
 
@@ -6331,7 +6376,7 @@ function ENGINE() {
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitBig: PCB, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -7659,7 +7704,7 @@ function ENGINE() {
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, PF_COMMIT_BIG, pfCommitBigRead, pfCommitBigCont, continueRule, bigFade, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
@@ -7709,6 +7754,9 @@ ENGINE();
   const MAX_MW_FOLDS = 40;
   const MAX_VS_RAISE = 60;
   const MAX_BET_RECENT = 60;
+  const MAX_BIG_IN = 40;
+  // Raise-to (in big blinds) above which a player already in has their answer kept in tally.bigIn (PF_COMMIT_BIG).
+  const BIG_IN_FROM = 30;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -7718,7 +7766,7 @@ ENGINE();
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent' || k === 'bigIn') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -7786,6 +7834,9 @@ ENGINE();
       // Chances to open the betting after the flop (check or bet with nobody's bet in; v1.8.45, BET_RECENT's per-player
       // read): { p: the read's P(bet) then, y: 1 bet, t: time }. Newest MAX_BET_RECENT.
       betRecent: [],
+      // Preflop answers to a raise to more than 30bb by a player who had acted already (v1.8.48, PF_COMMIT_BIG's
+      // per-player read): { y: 1 continued, q: chips in / raise-to, to: raise-to in bb, at }. Newest MAX_BIG_IN.
+      bigIn: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -7815,7 +7866,7 @@ ENGINE();
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent' || k === 'bigIn') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -7852,6 +7903,7 @@ ENGINE();
     out.jamShows = byTime(list, 'jamShows', lasts, MAX_JAM_SHOWS);
     out.mwFolds = byTime(list, 'mwFolds', lasts, MAX_MW_FOLDS);
     out.vsRaise = byTime(list, 'vsRaise', lasts, MAX_VS_RAISE);
+    out.bigIn = byTime(list, 'bigIn', lasts, MAX_BIG_IN);
     // In time order across the ids (a friend can switch back and forth between accounts); the sort is stable.
     const br = [];
     for (const t of list) for (const a of t.betRecent || []) br.push(a);
@@ -8535,6 +8587,11 @@ ENGINE();
           r.tally.pfBigOpp++;
           if (kind !== 'fold') r.tally.pfBigCall++;
         }
+        // Already in, facing a raise to more than 30bb (tally.bigIn, PF_COMMIT_BIG's per-player read).
+        if (r && bb > 0) {
+          const a = PatioTracker.bigInEntry(h.log.slice(0, -1), h.log[h.log.length - 1], bb);
+          if (a) PatioTracker.addBigIn(r.tally, a, this.now());
+        }
         if (kind === 'raise' || kind === '3bet') {
           h.preRaises++; h.pfRaiser = p.id;
           // Which raise this was (1 = open, 2 = 3-bet, 3 = 4-bet, ...) and how big compared with the
@@ -9024,6 +9081,38 @@ ENGINE();
       return n;
     }
 
+    // Answers to big re-raises with chips already in from hands stored before v1.8.48 (tally.bigIn, PF_COMMIT_BIG's
+    // per-player read), found in each stored hand's action log as the live tracker counts them, oldest first (the account
+    // id as tagVsRaise finds it). Meant to run once, before any hand of this version. Returns how many were added.
+    tagBigIn(entries) {
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.log) && Array.isArray(e.players)).sort((a, b) => (a.t || 0) - (b.t || 0));
+      let n = 0;
+      for (const e of list) {
+        const bb = +e.bigBlind || 0;
+        if (!(bb > 0)) continue;
+        const log = e.log.filter((x) => x && x.act);
+        log.forEach((x, i) => {
+          if (x.hero || x.st !== 'pre') return;
+          const a = PatioTracker.bigInEntry(log.slice(0, i), x, bb);
+          if (!a) return;
+          const id = idFor(x.who, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) return;
+          PatioTracker.addBigIn(r.tally || (r.tally = blankTally()), a, e.t || 0);
+          n++;
+        });
+      }
+      return n;
+    }
+
     // Chances to open the betting after the flop from hands stored before v1.8.45 (tally.betRecent, BET_RECENT's
     // per-player read), oldest first, each with the current read's P(bet) (the read at the time isn't stored; it moves
     // little over the newest 60 chances). Needs the predictor. Meant to run once, before any hand of this version.
@@ -9235,6 +9324,8 @@ ENGINE();
           vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           // v1.8.45: the player's recent-betting odds (BET_RECENT) and how many chances to bet they rest on.
           br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
+          // v1.8.48: the player's own odds on PF_COMMIT_BIG's chips-in curve and how many big re-raises they rest on.
+          bi: o.stats.bigIn ? { odds: r2(o.stats.bigIn.odds), n: o.stats.bigIn.n } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -9366,6 +9457,28 @@ ENGINE();
       const lastMine = mine.filter((x) => x.act !== 'sb' && x.act !== 'bb').pop();
       const role = !lastMine ? 'u' : lastMine.act === 'bet' ? 'b' : lastMine.act === 'raise' ? 'x' : lastMine.act === 'call' ? 'c' : 'k';
       return { y: me.act === 'fold' ? 'f' : me.act === 'call' ? 'c' : 'r', f: 0, n: { flop: 3, turn: 4, river: 5 }[me.st], role, ck: mine.length && mine[0].act === 'check' ? 1 : 0, ag: 0, rr: 0, h: last.hero ? 1 : 0 };
+    }
+
+    // A preflop answer to a raise to more than BIG_IN_FROM big blinds by a player who had acted already this hand
+    // (tally.bigIn): `log` is the hand's actions before it, `me` the answer (the hand log's form), bb the big blind.
+    static bigInEntry(log, me, bb) {
+      if (!me || me.st !== 'pre' || !(bb > 0) || !(me.facing > 0) || me.act === 'sb' || me.act === 'bb' || me.act === 'check') return null;
+      let put = 0, acted = false;
+      for (const x of log || []) {
+        if (!x || x.st !== 'pre' || x.who !== me.who) continue;
+        put += +x.amt || 0;
+        if (x.act !== 'sb' && x.act !== 'bb') acted = true;
+      }
+      const to = put + +me.facing;
+      if (!acted || !(put > 0) || !(to > BIG_IN_FROM * bb + 1e-9)) return null;
+      return { y: me.act === 'fold' ? 0 : 1, q: Math.round((put / to) * 1000) / 1000, to: Math.round((to / bb) * 10) / 10 };
+    }
+
+    static addBigIn(t, a, at) {
+      if (!t.bigIn) t.bigIn = [];
+      if (at > 0) a.at = at;
+      t.bigIn.push(a);
+      if (t.bigIn.length > MAX_BIG_IN) t.bigIn.splice(0, t.bigIn.length - MAX_BIG_IN);
     }
 
     static preAction(p) {
@@ -9551,7 +9664,7 @@ ENGINE();
   // hand from the first one that differs on goes back to where it stood before it, and the hands from there that stay
   // in are replayed. Every count shrinks by the same factor each hand (DECAY) and what a hand adds to it depends only on
   // its events, so a count then = (count now - what those hands added, replayed from zero) / the shrink they applied,
-  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent; newest kept) lose the entries those hands added at
+  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent, bigIn; newest kept) lose the entries those hands added at
   // their end, and get back the older ones they pushed out of a full list from the stored hands before. The read's own
   // accuracy (pred.read / pred.pop) is what the read predicted at the time, so it is matched by replaying the same hands
   // from the state then with the reads as they were, until the replay ends where the reads are now.
@@ -9566,7 +9679,7 @@ ENGINE();
     const o = opts || {};
     const was = o.was || (() => false);
     const copy = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
-    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent'];
+    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent', 'bigIn'];
     const list = (entries || []).filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
     const i0 = list.findIndex((e) => !was(e) !== !isOut(e));
     if (i0 < 0) return null;
@@ -9625,7 +9738,7 @@ ENGINE();
     // Entries those hands pushed out of a full list are found again in the hands before (up to 400 of them), replayed
     // with the reads then: a regained entry's read-dependent part (a show's fit, a betting chance's P(bet)) is as the
     // reads then see it, not as it was when first kept.
-    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT };
+    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT, bigIn: MAX_BIG_IN };
     const short = [];
     for (const id of ids) for (const k of LISTS) if (((tz.db.players[id].tally[k] || []).length) && (now[id][k] || []).length >= MAXL[k]) short.push([id, k]);
     let regained = 0;
@@ -9784,7 +9897,8 @@ function slim(r) {
           tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
           chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
           vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
-          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined
+          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
+          bigIn: o.stats.bigIn ? { odds: o.stats.bigIn.odds, n: o.stats.bigIn.n } : undefined
         },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
         heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
@@ -9901,6 +10015,8 @@ function slim(r) {
   if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
   // Shows saved before v1.8.46 carry no time (linked reads keep a player's newest shows by it): once.
   if (!tracker.db.stTagged) { tracker.tagShowTimes(tracker.db.history || []); tracker.db.stTagged = 1; save(DB_KEY, tracker.db); }
+  // Answers to big preflop re-raises with chips already in (tally.bigIn, v1.8.48) from hands stored before: once.
+  if (!tracker.db.biTagged) { tracker.tagBigIn(tracker.db.history || []); tracker.db.biTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
   var status = 'Connecting to the table…';
   var advice = null, thinking = false, blocked = false, reqId = 0;

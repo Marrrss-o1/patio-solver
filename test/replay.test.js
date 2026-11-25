@@ -692,6 +692,7 @@ test('preflop: a player with a quarter of the raise-to in is not faded by the bi
     opponents: [{ name: 'V', tally, actions: { pre: '3bet' }, committed: 80, stack: 220, bet: 80, position: 'late' }],
     heroActions: { pre: 'raise' }, heroBet: 20, heroCommitted: 20, iterations: 4000, preflopSolver: false, mix: false, seed: 1,
     pfCommitRamp: false, // a quarter of their stack in: the ramp (v1.8.18) would already move "off" halfway
+    pfCommitBig: false, // the v1.8.48 curve lifts both sides above 30bb
   }, extra || {});
   const shove = (r) => r.ranked.find((s) => s.kind === 'allin');
   const on = E.analyzeSync(input({ pfCommit: true })), off = E.analyzeSync(input());
@@ -2636,12 +2637,84 @@ const fourBetSpot = (extra) => E.analyzeSync(Object.assign({
 
 test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old size-blind floor without it', () => {
   // pfCommit off: the 3-bettor has 12bb in, a quarter of a 4-bet to 51bb, which lifts the cliff (tested below).
-  const on = fourBetSpot({ pfRaisedRead: false, pfCommit: false }), off = fourBetSpot({ bigCliff: false, pfRaisedRead: false, pfCommit: false });
+  const on = fourBetSpot({ pfRaisedRead: false, pfCommit: false, pfCommitBig: false }), off = fourBetSpot({ bigCliff: false, pfRaisedRead: false, pfCommit: false, pfCommitBig: false });
   assert.ok(on.length >= 3, 'three 4-bet sizes');
   near(on[0].cont, off[0].cont); // to 26.5bb: no change
   assert.ok(off[2].cont > 0.7 && Math.abs(off[2].cont - off[0].cont) < 1e-9, 'without the cliff a 51bb 4-bet is called like a 26.5bb one');
   assert.ok(on[1].cont < off[1].cont - 0.1 && on[2].cont < on[1].cont, `${on.map((o) => o.cont.toFixed(2))}`);
   assert.ok(on[2].cont >= 0.25 * off[2].cont - 1e-9, 'the fade stops at a quarter of the floor');
+});
+
+test('bigIn (v1.8.48, PF_COMMIT_BIG): big re-raises faced with chips in, kept per player, the same from stored hands; the read', () => {
+  // Entries: a player who acted already, facing a raise to more than 30bb; not the big blind's first action, not 30bb.
+  const L = [{ st: 'pre', who: 'S', act: 'sb', amt: 1 }, { st: 'pre', who: 'B', act: 'bb', amt: 2 }, { st: 'pre', who: 'A', act: 'raise', amt: 8 },
+    { st: 'pre', who: 'S', act: 'call', amt: 7 }, { st: 'pre', who: 'H', act: '3bet', amt: 80, hero: true }];
+  assert.deepStrictEqual(T.bigInEntry(L, { st: 'pre', who: 'A', act: 'call', facing: 72 }, 2), { y: 1, q: 0.1, to: 40 });
+  assert.deepStrictEqual(T.bigInEntry(L, { st: 'pre', who: 'S', act: 'fold', facing: 72 }, 2), { y: 0, q: 0.1, to: 40 });
+  assert.strictEqual(T.bigInEntry(L, { st: 'pre', who: 'B', act: 'fold', facing: 78 }, 2), null, 'the big blind had not acted');
+  assert.strictEqual(T.bigInEntry(L, { st: 'pre', who: 'A', act: 'call', facing: 52 }, 2), null, 'a raise to 30bb');
+  assert.strictEqual(T.bigInEntry(L, { st: 'flop', who: 'A', act: 'call', facing: 72 }, 2), null, 'preflop only');
+  // Live: Ann opens to 30, Bob calls from the small blind, Hero re-raises to 400 (40bb); Ann calls, Bob folds.
+  const msgs = [];
+  const add = (ev, data, snap) => msgs.push({ ev, data, snap });
+  let h = 1000, a = 1000, b = 1000;
+  const S = () => snap3(h, a, b);
+  add('game:stage_began', { stageType: 'set_blinds' }, S());
+  add('game:dealer_updated', { dealerSeatPos: 's3', smallBlindSeatPos: 's7', bigBlindSeatPos: 's1', underTheGunSeatPos: 's3' }, S());
+  add('game:small_blind_paid', { amount: 5, playerId: 7 }, S()); b -= 5;
+  add('game:big_blind_paid', { amount: 10, playerId: 1 }, S()); h -= 10;
+  add('game:stage_began', { stageType: 'pre_flop' }, S());
+  add('game:player_turn_started', { playerID: 3 }, S());
+  add('player:game:action_taken', { playerID: 3, actionType: 'raise', makeBetValue: 30, wasServerAutoAction: false }, S()); a -= 30;
+  add('game:player_turn_started', { playerID: 7 }, S());
+  add('player:game:action_taken', { playerID: 7, actionType: 'call', makeBetValue: 25, wasServerAutoAction: false }, S()); b -= 25;
+  add('game:player_turn_started', { playerID: 1 }, S());
+  add('player:game:action_taken', { playerID: 1, actionType: 'raise', makeBetValue: 390, wasServerAutoAction: false }, S()); h -= 390;
+  add('game:player_turn_started', { playerID: 3 }, S());
+  add('player:game:action_taken', { playerID: 3, actionType: 'call', makeBetValue: 370, wasServerAutoAction: false }, S()); a -= 370;
+  add('game:player_turn_started', { playerID: 7 }, S());
+  add('player:game:action_taken', { playerID: 7, actionType: 'fold', makeBetValue: 0, wasServerAutoAction: false }, S());
+  const { t } = replay(msgs);
+  const strip = (l) => (l || []).map((x) => ({ y: x.y, q: x.q, to: x.to }));
+  assert.deepStrictEqual(strip(t.db.players.A.tally.bigIn), [{ y: 1, q: 0.075, to: 40 }]);
+  assert.deepStrictEqual(strip(t.db.players.B.tally.bigIn), [{ y: 0, q: 0.075, to: 40 }]);
+  assert.ok(t.db.players.A.tally.bigIn[0].at > 0, 'timed');
+  // Stored hands give the same (tagBigIn), at the hand's time.
+  const t2 = new T({ players: { A: { name: 'Ann', tally: T.blankTally() }, B: { name: 'Bob', tally: T.blankTally() } } });
+  const entry = { t: 5, bigBlind: 10, players: [{ name: 'Hero', hero: true }, { name: 'Ann' }, { name: 'Bob' }], log: t.hand.log };
+  assert.strictEqual(t2.tagBigIn([entry]), 2);
+  assert.deepStrictEqual(t2.db.players.A.tally.bigIn, [{ y: 1, q: 0.075, to: 40, at: 5 }]);
+  // Out of decay; a linked read keeps the newest by time.
+  const tl = T.blankTally();
+  const db = { players: { a: { name: 'X', tally: Object.assign({}, tl, { bigIn: [{ y: 1, q: 0.3, to: 50, at: 1 }, { y: 0, q: 0.3, to: 50, at: 5 }] }) },
+    b: { name: 'X2', tally: Object.assign({}, tl, { bigIn: [{ y: 1, q: 0.2, to: 40, at: 3 }] }) } } };
+  const t3 = new T(db);
+  t3.link('b', 'a');
+  assert.deepStrictEqual(t3.readTally('a').bigIn.map((x) => x.at), [1, 3, 5]);
+  // The read: no answers is the table's curve; continues raise it, folds lower it; answers under a tenth in don't count.
+  const C0 = E.PF_COMMIT_BIG;
+  const R = (list) => E.pfCommitBigRead(list, C0);
+  const many = (y, q, m) => Array.from({ length: m }, () => ({ y, q, to: 60 }));
+  assert.deepStrictEqual(R([]), { u: 0, odds: 1, n: 0 });
+  assert.strictEqual(R(many(1, 0.05, 10)).n, 0);
+  assert.ok(R(many(1, 0.3, 10)).odds > 1.3 && R(many(0, 0.3, 10)).odds < 0.5, `${R(many(1, 0.3, 10)).odds} ${R(many(0, 0.3, 10)).odds}`);
+  near(E.pfCommitBigCont(C0, 0.2, 0), 0.71);
+  // Through the engine (the 3-bettor has 24 of hero's 4-bet in): raises to 30bb or less are unchanged, bigger ones are
+  // called more; the player's folds take it back down; { sd: 0 } is the table's curve; false is the old rule.
+  const off = fourBetSpot({ pfCommitBig: false }), on = fourBetSpot();
+  near(on[0].cont, off[0].cont);
+  assert.ok(on[2].cont > off[2].cont + 0.2, `51bb 4-bet: ${off[2].cont} -> ${on[2].cont}`);
+  const withList = (list, x) => fourBetSpot(Object.assign({}, x)).length && E.analyzeSync(Object.assign({
+    hero: [48, 49], board: [], pot: 31, toCall: 18, stack: 294, bigBlind: 2, inPosition: true, tableStyle: 'typical',
+    heroActions: { pre: 'raise' }, heroSizes: {}, heroPfAggressor: false, heroPosition: 'late', heroCommitted: 6, heroBet: 6,
+    opponents: [{ name: 'V', tally: Object.assign(T.blankTally(), { bigIn: list }), actions: { pre: '3bet' }, sizes: {}, pfAggressor: true, position: 'blinds', committed: 24, stack: 276, bet: 24, heroIP: true }],
+    iterations: 2000, mix: false, seed: 1,
+  }, x)).scenarios.filter((s) => s.kind === 'raise').sort((a, b) => a.amount - b.amount).map((s) => s.opp[0]);
+  const folder = withList(many(0, 0.25, 12));
+  assert.ok(folder[2].cont < on[2].cont - 0.1, `a player who folds them: ${on[2].cont} -> ${folder[2].cont}`);
+  near(withList(many(0, 0.25, 12), { pfCommitBig: { sd: 0 } })[2].cont, on[2].cont);
+  const r1 = fourBetSpot({ pfCommitBig: false }), r2 = fourBetSpot({ pfCommitBig: false });
+  assert.strictEqual(JSON.stringify(r1), JSON.stringify(r2));
 });
 
 test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead false: old rule)', () => {
@@ -2960,7 +3033,7 @@ test('pfCommitCall: a preflop raiser or caller with a third of their stack in ca
     hero: C('Ah 9h'), board: [], pot: committed + 3, toCall: committed - 2, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
     heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, sizes: { pre: committed / 2 - 1 }, pfAggressor: true, position: 'early', committed, stack, bet: committed, heroIP: true }],
-    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false, pfCommitBig: false,
   }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[0].cont;
   assert.ok(spot(262, 248) >= 0.95, 'half the stack in: calls');
   assert.ok(spot(262, 248, { pfCommitCall: false }) < 0.9, 'old rule folds some');
@@ -2972,7 +3045,7 @@ test('pfCommitCall: a preflop raiser or caller with a third of their stack in ca
     opponents: [
       { name: 'R', tally: {}, actions: { pre: 'raise' }, sizes: { pre: 31 }, pfAggressor: true, position: 'late', committed: 64, stack: 998, bet: 64, heroIP: true },
       { name: 'K', tally: {}, actions: { pre: 'call' }, sizes: {}, position: 'late', committed, stack, bet: committed, heroIP: true }],
-    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false, pfCommitBig: false,
   }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[1].cont;
   assert.ok(caller(64, 120) >= 0.95, 'a caller with a third of the stack in calls');
   assert.ok(caller(64, 120, { pfCommitCall: false }) < 0.9);
@@ -2984,7 +3057,7 @@ test('pfCommitRamp: between a fifth and a third of the stack in, the call rate r
     hero: C('Ah 9h'), board: [], pot: committed + 3, toCall: committed - 2, stack: 493, bigBlind: 2, inPosition: true, tableStyle: 'typical',
     heroActions: { pre: 'pending' }, heroSizes: {}, heroPosition: 'blinds', heroPfAggressor: false, heroCommitted: 2, heroBet: 2,
     opponents: [{ name: 'V', tally: {}, actions: { pre: 'raise' }, sizes: { pre: committed / 2 - 1 }, pfAggressor: true, position: 'early', committed, stack, bet: committed, heroIP: true }],
-    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false,
+    iterations: 1000, mix: false, seed: 1, bigRaiseRange: false, pfCommitBig: false,
   }, extra)).scenarios.filter((s) => s.kind === 'allin' || s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0].opp[0].cont;
   // A quarter in: above the old rule, below a committed player's call.
   const q = spot(120, 360), qOld = spot(120, 360, { pfCommitRamp: false });

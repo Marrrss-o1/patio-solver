@@ -358,7 +358,7 @@ test('leave out (v1.8.47): the reads come back as if the hands were never played
   for (const id of ['A', 'V', 'W']) near(res.db.players[id].tally, truth.db.players[id].tally, id + '.');
   // From the reads built at the table (entry times a few seconds off a rebuild's): the counts and the read's accuracy.
   const res2 = await T.dropHands(JSON.parse(JSON.stringify(live.db)), hands, isOut, { setup });
-  const counts = (tl) => { const c = JSON.parse(JSON.stringify(tl)); for (const k of ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent']) c[k] = (c[k] || []).length; return c; };
+  const counts = (tl) => { const c = JSON.parse(JSON.stringify(tl)); for (const k of ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent', 'bigIn']) c[k] = (c[k] || []).length; return c; };
   for (const id of ['A', 'V', 'W']) near(counts(res2.db.players[id].tally), counts(truth.db.players[id].tally), id + '.');
   assert.ok(res2.check < 1e-9, String(res2.check));
   // Reads that saw a hand the log doesn't have (it started and was never played, but shrank the counts): `check` says so.
