@@ -1616,6 +1616,18 @@
   // drifts from session to session. Off since its simulator runs (24 Nov): no loss against the v16r regulars (+0.4 ±
   // 10.7 bb/100 over five runs), but -27.2 ± 14.9 over three runs against xp:switch, the style switcher it was built for.
   const BET_RECENT = { lam: 0.95, sd: 0.5, max: 60 };
+  // Short raises in the Monte Carlo (v1.8.48; input.shortRaise: false is the v1.8.47 rule, a number sets frac): a player
+  // whose cost of answering hero's raise (all they have left, or hero's all-in a few chips over the call) is under frac
+  // of the pot folds no more than to a bet of that price after the flop, as in the river, turn and flop solvers'
+  // raisePrice (v1.8.13), and preflop no more than price / (pot + price). Before, a bettor facing any raise kept at most
+  // their read's value share + 0.1 (continueRule's raiseOverAggressor cap), whatever it cost them, so on 26 Nov #145
+  // Mark, all in but 2 chips after betting 223 into 24 on As Ks 7s, folded 18% to hero's 2-chip all-in: all-in +48.4
+  // against the call's +31.4 (fair about +31). With 0.36-0.47 equity that turned folds into all-ins (Kd2c there: all-in
+  // -54, call -72). Preflop #140 (his raise to 204 of 206): all-in +28.8 against the call's +23.9 (fair +24.3), from a
+  // continue of 0.97.
+  // Under `call` of the pot they always call (cont 1: the robust versions' stress shift doesn't make them fold a few
+  // chips either).
+  const SHORT_RAISE = { frac: 0.25, call: 0.02 };
   // { odds, n } for a player's betRecent list (odds 1 with no list).
   function betRecentOdds(list, cfg) {
     const out = { odds: 1, n: 0 };
@@ -6335,6 +6347,20 @@
     };
     // The street already has a raise (an opponent raised it): when hero only calls, the players still to act are cold too.
     const coldCall = !!CR && CR.call !== false && opps.some((o) => o.raiser);
+    // Short raises (SHORT_RAISE; input.shortRaise: false is the v1.8.47 rule, a number sets frac): when hero's raise costs
+    // a player under frac of the pot (all they have left, or hero's all-in a few chips over the call), they fold no more
+    // than to a bet of that price after the flop (the solvers' raisePrice), and preflop no more than the price over the
+    // pot they play for; under SR.call of the pot they always call.
+    const SR = input.shortRaise === false ? null : Object.assign({}, SHORT_RAISE, typeof input.shortRaise === 'number' ? { frac: input.shortRaise } : {});
+    const shortRaise = (st, i, sc, rule) => {
+      const c = Math.min(rule.add, oppLeft[i]);
+      if (!(c >= 0) || !st) return;
+      const fr = c / Math.max(1e-9, pot + (unmatched(i) ? 0 : toCall));
+      if (!(fr < SR.frac)) return;
+      const fold = fr < SR.call ? 0 : street >= 3 ? foldAtSize(st, fr, street) : fr / (1 + fr);
+      if (1 - fold > rule.cont) rule.cont = 1 - fold;
+      rule.reraise = c >= oppLeft[i] - 1e-9 ? 0 : Math.min(rule.reraise || 0, rule.cont);
+    };
     for (const sc of scenarios) {
       sc.opp = opps.map((o, i) => {
         const stay = { cont: 1, nut: 0, add: 0 };
@@ -6374,6 +6400,7 @@
         if (sc.amount >= stack) rule.reraise = 0;
         // Chips they already have in on this street (blinds, an earlier call) count.
         rule.add = oweOr(i, sc.amount, rule.add);
+        if (SR) shortRaise(o.stats, i, sc, rule);
         return rule;
       });
       Object.assign(sc, {
@@ -6407,6 +6434,7 @@
           const hu = vsRaiseAdjust(o, continueRule(Object.assign({}, o, { stats: o.statsHU }), rrCtx(o), mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser }));
           hu.reraise = sc.amount >= stack ? 0 : Math.min(hu.reraise, hu.cont);
           hu.add = r.add;
+          if (SR) shortRaise(o.statsHU, i, sc, hu);
           return hu;
         });
       }
@@ -7643,7 +7671,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, SHORT_RAISE, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),

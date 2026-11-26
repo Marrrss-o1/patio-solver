@@ -1670,6 +1670,33 @@ test('betRecent (v1.8.45): chances to bet after the flop kept per player, the sa
   assert.strictEqual(JSON.stringify(pf(L('1'.repeat(20))).ranked.map((x) => x.ev)), JSON.stringify(pf([]).ranked.map((x) => x.ev)));
 });
 
+test('short raises (v1.8.48): an all-in a few chips over the call is worth the call plus those chips', () => {
+  // 26 Nov #145: Mark bet 223 into 24 with 2 behind; hero's all-in (2 over the call) read +48.4 against the call's +31.4,
+  // because a bettor facing any raise kept at most value share + 0.1 of the range. Now the 2 chips are always called.
+  const T2 = { bet: 10, check: 20, call: 14, raise: 4, fold: 6 };
+  const spot = (hero, left, extra) => E.analyzeSync(Object.assign({ hero: C(hero), board: C('As Ks 7s'), pot: 247, toCall: 223, stack: 225, heroCommitted: 12,
+    bigBlind: 2, inPosition: true, mix: false, seed: 7, iterations: 8000, lookahead: false, turnSolver: false,
+    opponents: [{ name: 'A', tally: T2, actions: { pre: 'call', flop: 'bet' }, committed: 235, bet: 223, stack: left }] }, extra));
+  const ev = (r, k) => r.ranked.find((x) => x.kind === k).ev;
+  for (const h of ['Ad 2s', 'Qs Jd', '7h 7d']) {
+    const on = spot(h, 2), off = spot(h, 2, { shortRaise: false });
+    const fair = ev(on, 'call') + 2 * (2 * on.equity.share - 1);
+    assert.ok(Math.abs(ev(on, 'allin') - fair) < 0.5, `${h}: all-in ${ev(on, 'allin')} vs call + 2 chips ${fair}`);
+    assert.ok(ev(off, 'allin') - fair > 3, `${h}: the old rule overvalued it (${ev(off, 'allin')} vs ${fair})`);
+    assert.strictEqual(ev(off, 'call'), ev(on, 'call'));
+  }
+  // Under half the equity the 2 chips lose: the old rule shoved Ad2s there, now it calls.
+  assert.strictEqual(spot('Ad 2s', 2, { shortRaise: false }).best.kind, 'allin');
+  assert.strictEqual(spot('Ad 2s', 2).best.kind, 'call');
+  // A real raise (the opponent has chips behind) is untouched, after the flop and preflop.
+  const deep = spot('Qs Jd', 200, { stack: 400 }), deepOff = spot('Qs Jd', 200, { stack: 400, shortRaise: false });
+  assert.strictEqual(JSON.stringify(deep.ranked.map((x) => x.ev)), JSON.stringify(deepOff.ranked.map((x) => x.ev)), 'deep flop');
+  const pf = (extra) => E.analyzeSync(Object.assign({ hero: C('Ah Qd'), board: [], pot: 9, toCall: 4, stack: 300, bigBlind: 2, inPosition: true,
+    mix: false, seed: 7, iterations: 3000, opponents: [{ name: 'A', tally: T2, actions: { pre: 'raise' }, committed: 6, stack: 294 }] }, extra));
+  assert.strictEqual(JSON.stringify(pf().ranked.map((x) => x.ev)), JSON.stringify(pf({ shortRaise: false }).ranked.map((x) => x.ev)), 'deep preflop');
+  assert.ok(E.SHORT_RAISE.frac === 0.25 && E.SHORT_RAISE.call === 0.02);
+});
+
 test('hand log: the per-player read fields survive both panels\' slim (v1.8.45)', () => {
   const fs = require('fs'), vm = require('vm');
   const extSlim = vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../extension/slim.js'), 'utf8') + '\nslim', {});
