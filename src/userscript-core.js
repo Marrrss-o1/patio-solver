@@ -30,7 +30,8 @@ function slim(r) {
           tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
           chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
           vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
-          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined
+          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
+          pfRecent: o.stats.pfRecent ? { raise: o.stats.pfRecent.raise, fold: o.stats.pfRecent.fold, n: o.stats.pfRecent.n, on: !!o.stats.pfRecent.on } : undefined
         },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
         heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
@@ -145,6 +146,7 @@ function slim(r) {
   if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
   // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
   if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
+  if (!tracker.db.prTagged) { tracker.tagPfRecent(tracker.db.history || []); tracker.db.prTagged = 1; save(DB_KEY, tracker.db); }
   // Shows saved before v1.8.46 carry no time (linked reads keep a player's newest shows by it): once.
   if (!tracker.db.stTagged) { tracker.tagShowTimes(tracker.db.history || []); tracker.db.stTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';

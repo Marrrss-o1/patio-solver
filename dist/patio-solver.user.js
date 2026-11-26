@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.47
+// @version      1.8.48
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -1632,6 +1632,94 @@ function ENGINE() {
   // drifts from session to session. Off since its simulator runs (24 Nov): no loss against the v16r regulars (+0.4 ±
   // 10.7 bb/100 over five runs), but -27.2 ± 14.9 over three runs against xp:switch, the style switcher it was built for.
   const BET_RECENT = { lam: 0.95, sd: 0.5, max: 60 };
+  // Short raises in the Monte Carlo (v1.8.48; input.shortRaise: false is the v1.8.47 rule, a number sets frac): a player
+  // whose cost of answering hero's raise (all they have left, or hero's all-in a few chips over the call) is under frac
+  // of the pot folds no more than to a bet of that price after the flop, as in the river, turn and flop solvers'
+  // raisePrice (v1.8.13), and preflop no more than price / (pot + price). Before, a bettor facing any raise kept at most
+  // their read's value share + 0.1 (continueRule's raiseOverAggressor cap), whatever it cost them, so on 26 Nov #145
+  // Mark, all in but 2 chips after betting 223 into 24 on As Ks 7s, folded 18% to hero's 2-chip all-in: all-in +48.4
+  // against the call's +31.4 (fair about +31). With 0.36-0.47 equity that turned folds into all-ins (Kd2c there: all-in
+  // -54, call -72). Preflop #140 (his raise to 204 of 206): all-in +28.8 against the call's +23.9 (fair +24.3), from a
+  // continue of 0.97.
+  // Under `call` of the pot they always call (cont 1: the robust versions' stress shift doesn't make them fold a few
+  // chips either).
+  const SHORT_RAISE = { frac: 0.25, call: 0.02 };
+  // Recent preflop (v1.8.48, PF_RECENT; off: input.pfRecent true turns it on, an object turns it on and replaces fields;
+  // the offsets are still computed and reported in stats.pfRecent { raise, fold, n, on } for the hand log): a player's
+  // preflop raise and fold rates move with how their newest hands went against the read at the time, as BET_RECENT does
+  // for betting after the flop. The tracker keeps each player's newest `max` hands with the read's P(fold) and P(raise)
+  // then and what they did (tally.pfRecent { f, r, y, t }, out of decay, merged over linked ids by time). Two MAP
+  // log-odds offsets, one on P(raise) (prior sd `sd`) and one on P(fold) (prior sd `sdFold`), weight lam^age (newest 1);
+  // a player with few hands keeps about the plain read (the prior pulls the offsets to 0). The engine scales the
+  // player's PFR (overall and by position) and 3-bet rates (threeBet, vsOpen's threeBet) by the raise odds, and their
+  // folds (1 - VPIP, 1 - vsOpen's cont) by the fold odds, on every street (their range after the flop comes from them).
+  // All logs to 26 Nov (5,281 hands, each predicted from earlier hands, 15:19-15:42 on 26 Nov left out): +31.1 nats over
+  // the read (raise offset alone +27.2, fold alone +12.9); by period 31 Oct-3 Nov +0.5, 4-5 Nov -0.1, 6-7 Nov +3.9,
+  // 10-11 Nov +7.2, 21-24 Nov +5.3, 25 Nov +4.6, 26 Nov +9.8; Mark +15.9. On 26 Nov Mark raised 0.36 of his hands
+  // against a read of 0.20 (0.27 with the offsets) and folded 0.16 against 0.32 (0.28). Off since its simulator runs
+  // (26 Nov, 19 chunks, 4,600 deals): v16r regulars -3.1 ± 13.8 bb/100, preflop switchers (xp:switchpf) -7.5 ± 18.5,
+  // all -4.7 ± 11.0, under the +1 SE it needed.
+  const PF_RECENT = { lam: 0.95, sd: 0.5, sdFold: 0.3, max: 60 };
+  // MAP log-odds offset u on a list of { p, y } (p the read's probability then, y 0/1), weight lam^age, normal prior sd.
+  function recentOffset(L, sd, lam) {
+    if (!L.length || !(sd > 0)) return 0;
+    const prec = 1 / (sd * sd);
+    let u = 0;
+    for (let it = 0; it < 30; it++) {
+      let g = -u * prec, h = -prec, w = 1;
+      for (let j = L.length - 1; j >= 0; j--) {
+        const p = clamp(L[j].p, 0.005, 0.995);
+        const q = 1 / (1 + Math.exp(-(Math.log(p / (1 - p)) + u)));
+        g += w * ((L[j].y ? 1 : 0) - q); h -= w * q * (1 - q);
+        w *= lam;
+        if (w < 1e-4) break;
+      }
+      const step = g / h;
+      u = clamp(u - step, -2, 2);
+      if (Math.abs(step) < 1e-7) break;
+    }
+    return u;
+  }
+  // { raise, fold, n } (odds) for a player's pfRecent list (odds 1 with no list).
+  function pfRecentOdds(list, cfg) {
+    const out = { raise: 1, fold: 1, n: 0 };
+    if (!cfg || !Array.isArray(list) || !list.length) return out;
+    const L = list.slice(-(cfg.max || 60)).filter((a) => a && a.f >= 0 && a.r >= 0 && a.f + a.r <= 1 + 1e-9);
+    if (!L.length) return out;
+    const lam = cfg.lam != null ? cfg.lam : 0.95;
+    out.raise = Math.exp(recentOffset(L.map((a) => ({ p: a.r, y: a.y === 2 })), cfg.sd, lam));
+    out.fold = Math.exp(recentOffset(L.map((a) => ({ p: a.f, y: a.y === 0 })), cfg.sdFold != null ? cfg.sdFold : cfg.sd, lam));
+    out.n = L.length;
+    return out;
+  }
+  // A read's preflop rates moved by PF_RECENT's odds (new objects; the rest of stats as it was).
+  function pfRecentApply(S, pr) {
+    const fold = (v) => 1 - oddsScale(1 - v, pr.fold);
+    const raise = (x) => oddsScale(x, pr.raise);
+    if (S.vpip != null && S.pfr != null) {
+      const v = fold(S.vpip);
+      S.pfr = Math.min(raise(S.pfr), v * 0.99); S.vpip = v;
+    }
+    if (S.byPos) {
+      const bp = {};
+      for (const [g, x] of Object.entries(S.byPos)) {
+        if (!x || x.vpip == null) { bp[g] = x; continue; }
+        const v = fold(x.vpip);
+        bp[g] = Object.assign({}, x, { vpip: v, pfr: Math.min(raise(x.pfr), v * 0.99) });
+      }
+      S.byPos = bp;
+    }
+    if (S.threeBet != null) S.threeBet = raise(S.threeBet);
+    if (S.vsOpen) {
+      const vo = {};
+      for (const [k, x] of Object.entries(S.vsOpen)) {
+        if (!x || x.cont == null) { vo[k] = x; continue; }
+        const c = fold(x.cont);
+        vo[k] = Object.assign({}, x, { cont: c, threeBet: Math.min(c, raise(x.threeBet)) });
+      }
+      S.vsOpen = vo;
+    }
+  }
   // { odds, n } for a player's betRecent list (odds 1 with no list).
   function betRecentOdds(list, cfg) {
     const out = { odds: 1, n: 0 };
@@ -6104,6 +6192,8 @@ function ENGINE() {
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
     const BRon = input.betRecent === true || (!!input.betRecent && typeof input.betRecent === 'object');
     const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
+    const PRon = input.pfRecent === true || (!!input.pfRecent && typeof input.pfRecent === 'object');
+    const PRC = input.pfRecent === false ? null : Object.assign({}, PF_RECENT, input.pfRecent && typeof input.pfRecent === 'object' ? input.pfRecent : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6135,6 +6225,16 @@ function ENGINE() {
             S.byStreet = Object.assign({}, S.byStreet, bs);
           }
           if (statsHU) statsHU.betRecent = stats.betRecent;
+        }
+      }
+      // Recent preflop (PF_RECENT): their preflop raise and fold rates move with their newest hands, on every street.
+      // Off by default: the offsets are still worked out and reported (stats.pfRecent.on false).
+      if (PRC) {
+        const pr = pfRecentOdds(o.tally && o.tally.pfRecent, PRC);
+        if (pr.n) {
+          stats.pfRecent = { raise: pr.raise, fold: pr.fold, n: pr.n, on: PRon };
+          if (statsHU) statsHU.pfRecent = stats.pfRecent;
+          if (PRon && (pr.raise !== 1 || pr.fold !== 1)) for (const S of statsHU ? [stats, statsHU] : [stats]) pfRecentApply(S, pr);
         }
       }
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
@@ -6351,6 +6451,20 @@ function ENGINE() {
     };
     // The street already has a raise (an opponent raised it): when hero only calls, the players still to act are cold too.
     const coldCall = !!CR && CR.call !== false && opps.some((o) => o.raiser);
+    // Short raises (SHORT_RAISE; input.shortRaise: false is the v1.8.47 rule, a number sets frac): when hero's raise costs
+    // a player under frac of the pot (all they have left, or hero's all-in a few chips over the call), they fold no more
+    // than to a bet of that price after the flop (the solvers' raisePrice), and preflop no more than the price over the
+    // pot they play for; under SR.call of the pot they always call.
+    const SR = input.shortRaise === false ? null : Object.assign({}, SHORT_RAISE, typeof input.shortRaise === 'number' ? { frac: input.shortRaise } : {});
+    const shortRaise = (st, i, sc, rule) => {
+      const c = Math.min(rule.add, oppLeft[i]);
+      if (!(c >= 0) || !st) return;
+      const fr = c / Math.max(1e-9, pot + (unmatched(i) ? 0 : toCall));
+      if (!(fr < SR.frac)) return;
+      const fold = fr < SR.call ? 0 : street >= 3 ? foldAtSize(st, fr, street) : fr / (1 + fr);
+      if (1 - fold > rule.cont) rule.cont = 1 - fold;
+      rule.reraise = c >= oppLeft[i] - 1e-9 ? 0 : Math.min(rule.reraise || 0, rule.cont);
+    };
     for (const sc of scenarios) {
       sc.opp = opps.map((o, i) => {
         const stay = { cont: 1, nut: 0, add: 0 };
@@ -6390,6 +6504,7 @@ function ENGINE() {
         if (sc.amount >= stack) rule.reraise = 0;
         // Chips they already have in on this street (blinds, an earlier call) count.
         rule.add = oweOr(i, sc.amount, rule.add);
+        if (SR) shortRaise(o.stats, i, sc, rule);
         return rule;
       });
       Object.assign(sc, {
@@ -6423,6 +6538,7 @@ function ENGINE() {
           const hu = vsRaiseAdjust(o, continueRule(Object.assign({}, o, { stats: o.statsHU }), rrCtx(o), mdf, { amount: sc.amount, raiseOverAggressor: toCall > 0 && o.aggressor, raiseOverRaiser: street > 0 && toCall > 0 && o.raiser }));
           hu.reraise = sc.amount >= stack ? 0 : Math.min(hu.reraise, hu.cont);
           hu.add = r.add;
+          if (SR) shortRaise(o.statsHU, i, sc, hu);
           return hu;
         });
       }
@@ -7659,7 +7775,7 @@ function ENGINE() {
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, PF_RECENT, pfRecentOdds, SHORT_RAISE, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
@@ -7709,6 +7825,7 @@ ENGINE();
   const MAX_MW_FOLDS = 40;
   const MAX_VS_RAISE = 60;
   const MAX_BET_RECENT = 60;
+  const MAX_PF_RECENT = 60;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -7718,7 +7835,7 @@ ENGINE();
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent' || k === 'pfRecent') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -7786,6 +7903,9 @@ ENGINE();
       // Chances to open the betting after the flop (check or bet with nobody's bet in; v1.8.45, BET_RECENT's per-player
       // read): { p: the read's P(bet) then, y: 1 bet, t: time }. Newest MAX_BET_RECENT.
       betRecent: [],
+      // Each hand's preflop (v1.8.48, PF_RECENT's per-player read): { f, r: the read's P(fold) and P(raise) then, y: 0
+      // fold, 1 call, 2 raise, t: time }. Newest MAX_PF_RECENT.
+      pfRecent: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -7815,7 +7935,7 @@ ENGINE();
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent' || k === 'pfRecent') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -7857,6 +7977,10 @@ ENGINE();
     for (const t of list) for (const a of t.betRecent || []) br.push(a);
     br.sort((a, b) => ((a && a.t) || 0) - ((b && b.t) || 0));
     out.betRecent = br.slice(-MAX_BET_RECENT);
+    const pr = [];
+    for (const t of list) for (const a of t.pfRecent || []) pr.push(a);
+    pr.sort((a, b) => ((a && a.t) || 0) - ((b && b.t) || 0));
+    out.pfRecent = pr.slice(-MAX_PF_RECENT);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -8603,7 +8727,10 @@ ENGINE();
           const r = this.record(p.auth, p.name);
           if (!r) continue;
           const g = this.posGroup(p.id);
-          this.scorePrediction(r.tally, { kind: 'pf', out: { pfFold: 'fold', pfCall: 'call', pfRaise: 'raise' }[p.pfCat || 'pfFold'], pos: g }, this.readTally(p.auth));
+          const out = { pfFold: 'fold', pfCall: 'call', pfRaise: 'raise' }[p.pfCat || 'pfFold'];
+          const rd = this.scorePrediction(r.tally, { kind: 'pf', out, pos: g }, this.readTally(p.auth));
+          // The hand's preflop, with the read's P(fold) and P(raise) before it counts (PF_RECENT).
+          if (rd) PatioTracker.addPfRecent(r.tally, rd, out, this.now());
           r.tally[p.pfCat || 'pfFold']++;
           if (g) {
             const pt = r.tally.pos[g];
@@ -9235,6 +9362,8 @@ ENGINE();
           vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           // v1.8.45: the player's recent-betting odds (BET_RECENT) and how many chances to bet they rest on.
           br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
+          // v1.8.48: the player's recent preflop odds (PF_RECENT: raise and fold) and how many hands they rest on.
+          pr: o.stats.pfRecent ? { raise: r2(o.stats.pfRecent.raise), fold: r2(o.stats.pfRecent.fold), n: o.stats.pfRecent.n, on: !!o.stats.pfRecent.on } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -9333,6 +9462,45 @@ ENGINE();
     // had two raises is a '4bet', and three or more a '5bet'.
     // Whether hero's action kind matches the advice: any bet or raise for an aggressive advice, and a call for
     // "Call all-in" (an all-in advice that only matches the bet). A call against an all-in raise is not following.
+    // Each hand's preflop from hands stored before v1.8.48 (tally.pfRecent, PF_RECENT's per-player read), oldest first,
+    // with the current read's P(fold) and P(raise) for the position group the hand log kept (the read at the time isn't
+    // stored; it moves little over the newest 60 hands). Needs the predictor. Meant to run once, before any hand of this
+    // version. Returns how many were added.
+    tagPfRecent(entries) {
+      if (!this.predictor) return 0;
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const RANK = { call: 1, raise: 2, '3bet': 2 };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.players)).sort((a, b) => (a.t || 0) - (b.t || 0));
+      const reads = {};
+      let n = 0;
+      for (const e of list) {
+        for (const p of e.players) {
+          if (!p || p.hero) continue;
+          const id = idFor(p.name, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) continue;
+          let top = 0;
+          for (const k of (p.actions && p.actions.pre) || []) top = Math.max(top, RANK[k] || 0);
+          const out = top === 2 ? 'raise' : top === 1 ? 'call' : 'fold';
+          const d = { kind: 'pf', out, pos: p.position || null };
+          try {
+            const key = (this.canon ? this.canon(id) : id) + '|' + d.pos;
+            const rd = reads[key] || (reads[key] = this.predictor(this.readTally(id) || r.tally || blankTally(), d)[0]);
+            PatioTracker.addPfRecent(r.tally || (r.tally = blankTally()), rd, out, e.t || 0);
+            n++;
+          } catch (err) { /* optional */ }
+        }
+      }
+      return n;
+    }
+
     static followedAdvice(adv, kind) {
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind === 'allin' && kind === 'call') return !(adv.amount > (adv.toCall || 0) + 1e-9);
@@ -9341,6 +9509,17 @@ ENGINE();
 
     // A chance to open the betting after the flop (tally.betRecent, BET_RECENT): the read's probabilities `rd`
     // ({ check, bet }), whether they bet, and when.
+    // A hand's preflop (tally.pfRecent, PF_RECENT): the read's probabilities `rd` ({ fold, call, raise }), what they did
+    // ('fold', 'call' or 'raise'), and when.
+    static addPfRecent(t, rd, out, time) {
+      const f = Math.max(0, rd.fold || 0), c = Math.max(0, rd.call || 0), r = Math.max(0, rd.raise || 0), s = f + c + r;
+      if (!(s > 0)) return;
+      if (!t.pfRecent) t.pfRecent = [];
+      const R = (x) => Math.round((x / s) * 10000) / 10000;
+      t.pfRecent.push({ f: R(f), r: R(r), y: out === 'raise' ? 2 : out === 'call' ? 1 : 0, t: time || 0 });
+      if (t.pfRecent.length > MAX_PF_RECENT) t.pfRecent.splice(0, t.pfRecent.length - MAX_PF_RECENT);
+    }
+
     static addBetRecent(t, rd, bet, time) {
       const s = Math.max(0, rd.check || 0) + Math.max(0, rd.bet || 0);
       if (!(s > 0)) return;
@@ -9551,7 +9730,7 @@ ENGINE();
   // hand from the first one that differs on goes back to where it stood before it, and the hands from there that stay
   // in are replayed. Every count shrinks by the same factor each hand (DECAY) and what a hand adds to it depends only on
   // its events, so a count then = (count now - what those hands added, replayed from zero) / the shrink they applied,
-  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent; newest kept) lose the entries those hands added at
+  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent, pfRecent; newest kept) lose the entries those hands added at
   // their end, and get back the older ones they pushed out of a full list from the stored hands before. The read's own
   // accuracy (pred.read / pred.pop) is what the read predicted at the time, so it is matched by replaying the same hands
   // from the state then with the reads as they were, until the replay ends where the reads are now.
@@ -9566,7 +9745,7 @@ ENGINE();
     const o = opts || {};
     const was = o.was || (() => false);
     const copy = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
-    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent'];
+    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent', 'pfRecent'];
     const list = (entries || []).filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
     const i0 = list.findIndex((e) => !was(e) !== !isOut(e));
     if (i0 < 0) return null;
@@ -9625,7 +9804,7 @@ ENGINE();
     // Entries those hands pushed out of a full list are found again in the hands before (up to 400 of them), replayed
     // with the reads then: a regained entry's read-dependent part (a show's fit, a betting chance's P(bet)) is as the
     // reads then see it, not as it was when first kept.
-    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT };
+    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT, pfRecent: MAX_PF_RECENT };
     const short = [];
     for (const id of ids) for (const k of LISTS) if (((tz.db.players[id].tally[k] || []).length) && (now[id][k] || []).length >= MAXL[k]) short.push([id, k]);
     let regained = 0;
@@ -9784,7 +9963,8 @@ function slim(r) {
           tiltRaise: o.stats.tiltRaise ? { tilt: o.stats.tiltRaise.tilt, n: o.stats.tiltRaise.n } : undefined,
           chipTilt: o.stats.chipTilt ? { tilt: o.stats.chipTilt.tilt, slope: o.stats.chipTilt.slope, n: o.stats.chipTilt.n } : undefined,
           vsRaiseRead: o.stats.vsRaiseRead ? { odds: o.stats.vsRaiseRead.odds, nCold: o.stats.vsRaiseRead.nCold, mult: o.stats.vsRaiseRead.mult, nBet: o.stats.vsRaiseRead.nBet } : undefined,
-          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined
+          betRecent: o.stats.betRecent ? { odds: o.stats.betRecent.odds, n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
+          pfRecent: o.stats.pfRecent ? { raise: o.stats.pfRecent.raise, fold: o.stats.pfRecent.fold, n: o.stats.pfRecent.n, on: !!o.stats.pfRecent.on } : undefined
         },
         topClasses: o.grid.topClasses.slice(0, 8).map(function (c) { return c.name; }),
         heroVs: o.heroVs, foldToBest: o.foldToBest, summary: o.summary || '', bluffChance: o.bluffChance
@@ -9899,6 +10079,7 @@ function slim(r) {
   if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
   // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
   if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
+  if (!tracker.db.prTagged) { tracker.tagPfRecent(tracker.db.history || []); tracker.db.prTagged = 1; save(DB_KEY, tracker.db); }
   // Shows saved before v1.8.46 carry no time (linked reads keep a player's newest shows by it): once.
   if (!tracker.db.stTagged) { tracker.tagShowTimes(tracker.db.history || []); tracker.db.stTagged = 1; save(DB_KEY, tracker.db); }
   var linkNote = '';
