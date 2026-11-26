@@ -810,7 +810,8 @@
     // Answers to raises after the flop (tally.vsRaise, v1.8.44) from hands stored before: once.
     // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
     // Shows saved before v1.8.46 carry no time, which linked reads need to keep a player's newest shows: once.
-    if (!tracker.db.cbTagged || !tracker.db.mwTagged || !tracker.db.sdTagged || !tracker.db.vrTagged || !tracker.db.brTagged || !tracker.db.stTagged) {
+    // Each hand's preflop (tally.pfRecent, v1.8.48) from hands stored before: once.
+    if (!tracker.db.cbTagged || !tracker.db.mwTagged || !tracker.db.sdTagged || !tracker.db.vrTagged || !tracker.db.brTagged || !tracker.db.stTagged || !tracker.db.prTagged) {
       handLog.exportAll(tracker.db).catch(() => tracker.db.history || []).then((hands) => {
         if (!tracker.db.cbTagged) { tracker.tagCheckBet(hands); tracker.db.cbTagged = 1; }
         if (!tracker.db.mwTagged) { tracker.tagMwFolds(hands); tracker.db.mwTagged = 1; }
@@ -818,6 +819,7 @@
         if (!tracker.db.vrTagged) { tracker.tagVsRaise(hands); tracker.db.vrTagged = 1; }
         if (!tracker.db.brTagged) { tracker.tagBetRecent(hands); tracker.db.brTagged = 1; }
         if (!tracker.db.stTagged) { tracker.tagShowTimes(hands); tracker.db.stTagged = 1; }
+        if (!tracker.db.prTagged) { tracker.tagPfRecent(hands); tracker.db.prTagged = 1; }
         saveDb();
       });
     }

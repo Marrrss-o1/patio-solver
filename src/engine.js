@@ -1628,6 +1628,79 @@
   // Under `call` of the pot they always call (cont 1: the robust versions' stress shift doesn't make them fold a few
   // chips either).
   const SHORT_RAISE = { frac: 0.25, call: 0.02 };
+  // Recent preflop (v1.8.48, PF_RECENT; off: input.pfRecent true turns it on, an object turns it on and replaces fields;
+  // the offsets are still computed and reported in stats.pfRecent { raise, fold, n, on } for the hand log): a player's
+  // preflop raise and fold rates move with how their newest hands went against the read at the time, as BET_RECENT does
+  // for betting after the flop. The tracker keeps each player's newest `max` hands with the read's P(fold) and P(raise)
+  // then and what they did (tally.pfRecent { f, r, y, t }, out of decay, merged over linked ids by time). Two MAP
+  // log-odds offsets, one on P(raise) (prior sd `sd`) and one on P(fold) (prior sd `sdFold`), weight lam^age (newest 1);
+  // a player with few hands keeps about the plain read (the prior pulls the offsets to 0). The engine scales the
+  // player's PFR (overall and by position) and 3-bet rates (threeBet, vsOpen's threeBet) by the raise odds, and their
+  // folds (1 - VPIP, 1 - vsOpen's cont) by the fold odds, on every street (their range after the flop comes from them).
+  // All logs to 26 Nov (5,281 hands, each predicted from earlier hands, 15:19-15:42 on 26 Nov left out): +31.1 nats over
+  // the read (raise offset alone +27.2, fold alone +12.9); by period 31 Oct-3 Nov +0.5, 4-5 Nov -0.1, 6-7 Nov +3.9,
+  // 10-11 Nov +7.2, 21-24 Nov +5.3, 25 Nov +4.6, 26 Nov +9.8; Mark +15.5 (his PFR went 0.20 read to 0.34 done on 26 Nov).
+  const PF_RECENT = { lam: 0.95, sd: 0.5, sdFold: 0.3, max: 60 };
+  // MAP log-odds offset u on a list of { p, y } (p the read's probability then, y 0/1), weight lam^age, normal prior sd.
+  function recentOffset(L, sd, lam) {
+    if (!L.length || !(sd > 0)) return 0;
+    const prec = 1 / (sd * sd);
+    let u = 0;
+    for (let it = 0; it < 30; it++) {
+      let g = -u * prec, h = -prec, w = 1;
+      for (let j = L.length - 1; j >= 0; j--) {
+        const p = clamp(L[j].p, 0.005, 0.995);
+        const q = 1 / (1 + Math.exp(-(Math.log(p / (1 - p)) + u)));
+        g += w * ((L[j].y ? 1 : 0) - q); h -= w * q * (1 - q);
+        w *= lam;
+        if (w < 1e-4) break;
+      }
+      const step = g / h;
+      u = clamp(u - step, -2, 2);
+      if (Math.abs(step) < 1e-7) break;
+    }
+    return u;
+  }
+  // { raise, fold, n } (odds) for a player's pfRecent list (odds 1 with no list).
+  function pfRecentOdds(list, cfg) {
+    const out = { raise: 1, fold: 1, n: 0 };
+    if (!cfg || !Array.isArray(list) || !list.length) return out;
+    const L = list.slice(-(cfg.max || 60)).filter((a) => a && a.f >= 0 && a.r >= 0 && a.f + a.r <= 1 + 1e-9);
+    if (!L.length) return out;
+    const lam = cfg.lam != null ? cfg.lam : 0.95;
+    out.raise = Math.exp(recentOffset(L.map((a) => ({ p: a.r, y: a.y === 2 })), cfg.sd, lam));
+    out.fold = Math.exp(recentOffset(L.map((a) => ({ p: a.f, y: a.y === 0 })), cfg.sdFold != null ? cfg.sdFold : cfg.sd, lam));
+    out.n = L.length;
+    return out;
+  }
+  // A read's preflop rates moved by PF_RECENT's odds (new objects; the rest of stats as it was).
+  function pfRecentApply(S, pr) {
+    const fold = (v) => 1 - oddsScale(1 - v, pr.fold);
+    const raise = (x) => oddsScale(x, pr.raise);
+    if (S.vpip != null && S.pfr != null) {
+      const v = fold(S.vpip);
+      S.pfr = Math.min(raise(S.pfr), v * 0.99); S.vpip = v;
+    }
+    if (S.byPos) {
+      const bp = {};
+      for (const [g, x] of Object.entries(S.byPos)) {
+        if (!x || x.vpip == null) { bp[g] = x; continue; }
+        const v = fold(x.vpip);
+        bp[g] = Object.assign({}, x, { vpip: v, pfr: Math.min(raise(x.pfr), v * 0.99) });
+      }
+      S.byPos = bp;
+    }
+    if (S.threeBet != null) S.threeBet = raise(S.threeBet);
+    if (S.vsOpen) {
+      const vo = {};
+      for (const [k, x] of Object.entries(S.vsOpen)) {
+        if (!x || x.cont == null) { vo[k] = x; continue; }
+        const c = fold(x.cont);
+        vo[k] = Object.assign({}, x, { cont: c, threeBet: Math.min(c, raise(x.threeBet)) });
+      }
+      S.vsOpen = vo;
+    }
+  }
   // { odds, n } for a player's betRecent list (odds 1 with no list).
   function betRecentOdds(list, cfg) {
     const out = { odds: 1, n: 0 };
@@ -6100,6 +6173,8 @@
     const RRR = street >= 3 && toCall > 0 && input.raisedRR !== false ? Object.assign({}, RAISED_RR, typeof input.raisedRR === 'number' ? { mult: input.raisedRR } : input.raisedRR && typeof input.raisedRR === 'object' ? input.raisedRR : {}) : null;
     const BRon = input.betRecent === true || (!!input.betRecent && typeof input.betRecent === 'object');
     const BRC = input.betRecent === false ? null : Object.assign({}, BET_RECENT, input.betRecent && typeof input.betRecent === 'object' ? input.betRecent : {});
+    const PRon = input.pfRecent === true || (!!input.pfRecent && typeof input.pfRecent === 'object');
+    const PRC = input.pfRecent === false ? null : Object.assign({}, PF_RECENT, input.pfRecent && typeof input.pfRecent === 'object' ? input.pfRecent : {});
     const opps = input.opponents.map((o) => {
       const now = street > 0 ? (o.actions && o.actions[STREET_KEYS[street]]) || '' : null;
       const ctx = {
@@ -6131,6 +6206,16 @@
             S.byStreet = Object.assign({}, S.byStreet, bs);
           }
           if (statsHU) statsHU.betRecent = stats.betRecent;
+        }
+      }
+      // Recent preflop (PF_RECENT): their preflop raise and fold rates move with their newest hands, on every street.
+      // Off by default: the offsets are still worked out and reported (stats.pfRecent.on false).
+      if (PRC) {
+        const pr = pfRecentOdds(o.tally && o.tally.pfRecent, PRC);
+        if (pr.n) {
+          stats.pfRecent = { raise: pr.raise, fold: pr.fold, n: pr.n, on: PRon };
+          if (statsHU) statsHU.pfRecent = stats.pfRecent;
+          if (PRon && (pr.raise !== 1 || pr.fold !== 1)) for (const S of statsHU ? [stats, statsHU] : [stats]) pfRecentApply(S, pr);
         }
       }
       if (input.flopBigRaise) { stats.flopBigRaise = true; if (statsHU) statsHU.flopBigRaise = true; }
@@ -7671,7 +7756,7 @@
     computeStats, classifyPlayer, preflopRange, boardStrength, buildRange, applyAction, rangeGrid,
     foldAtSize, valueShare, classifyShows, handPercentile, readSummary, scoreShow,
     READ_PRIORS, readPrior, FIT_VERSION, NOISES, TILTS, tallyCells, fitFamily, poolTally, predictAction, makePredictor, modelFold,
-    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, SHORT_RAISE, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
+    INITIATIVE, initiativeRoles, MW_BET_FOLD, COLD_RAISE, RAISED_RR, vsRaiseReads, BET_RECENT, betRecentOdds, PF_RECENT, pfRecentOdds, SHORT_RAISE, CHECK_BET_TILT, mwBetOdds, checkBetLearned, RIVER_RAISE_TILT, riverRaiseLearned, CHIP_TILT, chipSlope, checkBetBluffs, SHOVE_RANGE, DEEP_SHOVE, deepShoveTrust,
     createAnalysis, analyzeSync, solvableSpot, setBlueprint, comboIndex: (a, b) => COMBO_INDEX[a * 52 + b],
     // WebAssembly kernels: useKernels(false) forces the JS loops (same results); kernelsActive() tells which run.
     useKernels: (on) => { wkEnabled = on !== false; }, kernelsActive: () => !!kernels(),
