@@ -1639,7 +1639,10 @@
   // folds (1 - VPIP, 1 - vsOpen's cont) by the fold odds, on every street (their range after the flop comes from them).
   // All logs to 26 Nov (5,281 hands, each predicted from earlier hands, 15:19-15:42 on 26 Nov left out): +31.1 nats over
   // the read (raise offset alone +27.2, fold alone +12.9); by period 31 Oct-3 Nov +0.5, 4-5 Nov -0.1, 6-7 Nov +3.9,
-  // 10-11 Nov +7.2, 21-24 Nov +5.3, 25 Nov +4.6, 26 Nov +9.8; Mark +15.5 (his PFR went 0.20 read to 0.34 done on 26 Nov).
+  // 10-11 Nov +7.2, 21-24 Nov +5.3, 25 Nov +4.6, 26 Nov +9.8; Mark +15.9. On 26 Nov Mark raised 0.36 of his hands
+  // against a read of 0.20 (0.27 with the offsets) and folded 0.16 against 0.32 (0.28). Off since its simulator runs
+  // (26 Nov, 19 chunks, 4,600 deals): v16r regulars -3.1 ± 13.8 bb/100, preflop switchers (xp:switchpf) -7.5 ± 18.5,
+  // all -4.7 ± 11.0, under the +1 SE it needed.
   const PF_RECENT = { lam: 0.95, sd: 0.5, sdFold: 0.3, max: 60 };
   // MAP log-odds offset u on a list of { p, y } (p the read's probability then, y 0/1), weight lam^age, normal prior sd.
   function recentOffset(L, sd, lam) {

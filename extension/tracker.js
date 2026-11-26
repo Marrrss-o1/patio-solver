@@ -33,6 +33,7 @@
   const MAX_MW_FOLDS = 40;
   const MAX_VS_RAISE = 60;
   const MAX_BET_RECENT = 60;
+  const MAX_PF_RECENT = 60;
   const MAX_HISTORY = 150;
   // Raw events: kept for the newest RAW_KEEP hands only (about 17 KB a hand in Marwin's logs).
   const RAW_KEEP = 100, RAW_MAX_EVENTS = 400, RAW_MAX_EVENT = 4000;
@@ -42,7 +43,7 @@
   function decayTally(t, f) {
     const d = f != null ? f : DECAY;
     for (const k of Object.keys(t)) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent' || k === 'pfRecent') continue;
       if (typeof t[k] === 'number') t[k] *= d;
       else if (t[k] && typeof t[k] === 'object') decayTally(t[k], d);
     }
@@ -110,6 +111,9 @@
       // Chances to open the betting after the flop (check or bet with nobody's bet in; v1.8.45, BET_RECENT's per-player
       // read): { p: the read's P(bet) then, y: 1 bet, t: time }. Newest MAX_BET_RECENT.
       betRecent: [],
+      // Each hand's preflop (v1.8.48, PF_RECENT's per-player read): { f, r: the read's P(fold) and P(raise) then, y: 0
+      // fold, 1 call, 2 raise, t: time }. Newest MAX_PF_RECENT.
+      pfRecent: [],
     };
   }
   // Fills in fields added after a read was first saved.
@@ -139,7 +143,7 @@
   // Linked reads: one friend's counts kept under more than one account id, added up.
   function addCounts(out, t) {
     for (const k of Object.keys(t || {})) {
-      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent') continue;
+      if (k === 'shows' || k === 'jamShows' || k === 'mwFolds' || k === 'vsRaise' || k === 'betRecent' || k === 'pfRecent') continue;
       const v = t[k];
       if (typeof v === 'number') out[k] = (out[k] || 0) + v;
       else if (v && typeof v === 'object' && !Array.isArray(v)) addCounts(out[k] || (out[k] = {}), v);
@@ -181,6 +185,10 @@
     for (const t of list) for (const a of t.betRecent || []) br.push(a);
     br.sort((a, b) => ((a && a.t) || 0) - ((b && b.t) || 0));
     out.betRecent = br.slice(-MAX_BET_RECENT);
+    const pr = [];
+    for (const t of list) for (const a of t.pfRecent || []) pr.push(a);
+    pr.sort((a, b) => ((a && a.t) || 0) - ((b && b.t) || 0));
+    out.pfRecent = pr.slice(-MAX_PF_RECENT);
     return out;
   }
   const normName = (s) => String(s == null ? '' : s).trim().toLowerCase();
@@ -927,7 +935,10 @@
           const r = this.record(p.auth, p.name);
           if (!r) continue;
           const g = this.posGroup(p.id);
-          this.scorePrediction(r.tally, { kind: 'pf', out: { pfFold: 'fold', pfCall: 'call', pfRaise: 'raise' }[p.pfCat || 'pfFold'], pos: g }, this.readTally(p.auth));
+          const out = { pfFold: 'fold', pfCall: 'call', pfRaise: 'raise' }[p.pfCat || 'pfFold'];
+          const rd = this.scorePrediction(r.tally, { kind: 'pf', out, pos: g }, this.readTally(p.auth));
+          // The hand's preflop, with the read's P(fold) and P(raise) before it counts (PF_RECENT).
+          if (rd) PatioTracker.addPfRecent(r.tally, rd, out, this.now());
           r.tally[p.pfCat || 'pfFold']++;
           if (g) {
             const pt = r.tally.pos[g];
@@ -1559,6 +1570,8 @@
           vr: o.stats.vsRaiseRead ? { cold: r2(o.stats.vsRaiseRead.odds), nCold: o.stats.vsRaiseRead.nCold, rr: o.stats.vsRaiseRead.mult != null ? r2(o.stats.vsRaiseRead.mult) : undefined, nBet: o.stats.vsRaiseRead.nBet } : undefined,
           // v1.8.45: the player's recent-betting odds (BET_RECENT) and how many chances to bet they rest on.
           br: o.stats.betRecent ? { odds: r2(o.stats.betRecent.odds), n: o.stats.betRecent.n, on: !!o.stats.betRecent.on } : undefined,
+          // v1.8.48: the player's recent preflop odds (PF_RECENT: raise and fold) and how many hands they rest on.
+          pr: o.stats.pfRecent ? { raise: r2(o.stats.pfRecent.raise), fold: r2(o.stats.pfRecent.fold), n: o.stats.pfRecent.n, on: !!o.stats.pfRecent.on } : undefined,
           certainty: o.stats.certainty != null ? r2(o.stats.certainty) : undefined,
         }));
       }
@@ -1657,6 +1670,45 @@
     // had two raises is a '4bet', and three or more a '5bet'.
     // Whether hero's action kind matches the advice: any bet or raise for an aggressive advice, and a call for
     // "Call all-in" (an all-in advice that only matches the bet). A call against an all-in raise is not following.
+    // Each hand's preflop from hands stored before v1.8.48 (tally.pfRecent, PF_RECENT's per-player read), oldest first,
+    // with the current read's P(fold) and P(raise) for the position group the hand log kept (the read at the time isn't
+    // stored; it moves little over the newest 60 hands). Needs the predictor. Meant to run once, before any hand of this
+    // version. Returns how many were added.
+    tagPfRecent(entries) {
+      if (!this.predictor) return 0;
+      const seen = this.db.seen || {};
+      const idFor = (name, t, raw) => {
+        for (const r of raw || []) for (const x of (r && r.s) || []) if (x && x[1] === name && x[5] && this.db.players[x[5]]) return x[5];
+        const ids = Object.keys(this.db.players).filter((id) => (seen[id] && seen[id].names && seen[id].names[name] != null) || this.db.players[id].name === name);
+        if (ids.length === 1) return ids[0];
+        const at = ids.filter((id) => seen[id] && seen[id].first <= t + 6e5 && seen[id].last >= t - 6e5);
+        return at.length === 1 ? at[0] : null;
+      };
+      const RANK = { call: 1, raise: 2, '3bet': 2 };
+      const list = (entries || []).filter((e) => e && Array.isArray(e.players)).sort((a, b) => (a.t || 0) - (b.t || 0));
+      const reads = {};
+      let n = 0;
+      for (const e of list) {
+        for (const p of e.players) {
+          if (!p || p.hero) continue;
+          const id = idFor(p.name, e.t || 0, e.raw);
+          const r = id && this.db.players[id];
+          if (!r) continue;
+          let top = 0;
+          for (const k of (p.actions && p.actions.pre) || []) top = Math.max(top, RANK[k] || 0);
+          const out = top === 2 ? 'raise' : top === 1 ? 'call' : 'fold';
+          const d = { kind: 'pf', out, pos: p.position || null };
+          try {
+            const key = (this.canon ? this.canon(id) : id) + '|' + d.pos;
+            const rd = reads[key] || (reads[key] = this.predictor(this.readTally(id) || r.tally || blankTally(), d)[0]);
+            PatioTracker.addPfRecent(r.tally || (r.tally = blankTally()), rd, out, e.t || 0);
+            n++;
+          } catch (err) { /* optional */ }
+        }
+      }
+      return n;
+    }
+
     static followedAdvice(adv, kind) {
       const group = (k) => (k === 'bet' || k === 'raise' || k === '3bet' || k === 'allin' ? 'aggr' : k);
       if (adv.kind === 'allin' && kind === 'call') return !(adv.amount > (adv.toCall || 0) + 1e-9);
@@ -1665,6 +1717,17 @@
 
     // A chance to open the betting after the flop (tally.betRecent, BET_RECENT): the read's probabilities `rd`
     // ({ check, bet }), whether they bet, and when.
+    // A hand's preflop (tally.pfRecent, PF_RECENT): the read's probabilities `rd` ({ fold, call, raise }), what they did
+    // ('fold', 'call' or 'raise'), and when.
+    static addPfRecent(t, rd, out, time) {
+      const f = Math.max(0, rd.fold || 0), c = Math.max(0, rd.call || 0), r = Math.max(0, rd.raise || 0), s = f + c + r;
+      if (!(s > 0)) return;
+      if (!t.pfRecent) t.pfRecent = [];
+      const R = (x) => Math.round((x / s) * 10000) / 10000;
+      t.pfRecent.push({ f: R(f), r: R(r), y: out === 'raise' ? 2 : out === 'call' ? 1 : 0, t: time || 0 });
+      if (t.pfRecent.length > MAX_PF_RECENT) t.pfRecent.splice(0, t.pfRecent.length - MAX_PF_RECENT);
+    }
+
     static addBetRecent(t, rd, bet, time) {
       const s = Math.max(0, rd.check || 0) + Math.max(0, rd.bet || 0);
       if (!(s > 0)) return;
@@ -1875,7 +1938,7 @@
   // hand from the first one that differs on goes back to where it stood before it, and the hands from there that stay
   // in are replayed. Every count shrinks by the same factor each hand (DECAY) and what a hand adds to it depends only on
   // its events, so a count then = (count now - what those hands added, replayed from zero) / the shrink they applied,
-  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent; newest kept) lose the entries those hands added at
+  // exactly. Lists (shows, jamShows, mwFolds, vsRaise, betRecent, pfRecent; newest kept) lose the entries those hands added at
   // their end, and get back the older ones they pushed out of a full list from the stored hands before. The read's own
   // accuracy (pred.read / pred.pop) is what the read predicted at the time, so it is matched by replaying the same hands
   // from the state then with the reads as they were, until the replay ends where the reads are now.
@@ -1890,7 +1953,7 @@
     const o = opts || {};
     const was = o.was || (() => false);
     const copy = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
-    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent'];
+    const LISTS = ['shows', 'jamShows', 'mwFolds', 'vsRaise', 'betRecent', 'pfRecent'];
     const list = (entries || []).filter((e) => e && Array.isArray(e.raw) && e.raw.length).sort((a, b) => (a.t || 0) - (b.t || 0));
     const i0 = list.findIndex((e) => !was(e) !== !isOut(e));
     if (i0 < 0) return null;
@@ -1949,7 +2012,7 @@
     // Entries those hands pushed out of a full list are found again in the hands before (up to 400 of them), replayed
     // with the reads then: a regained entry's read-dependent part (a show's fit, a betting chance's P(bet)) is as the
     // reads then see it, not as it was when first kept.
-    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT };
+    const MAXL = { shows: MAX_SHOWS, jamShows: MAX_JAM_SHOWS, mwFolds: MAX_MW_FOLDS, vsRaise: MAX_VS_RAISE, betRecent: MAX_BET_RECENT, pfRecent: MAX_PF_RECENT };
     const short = [];
     for (const id of ids) for (const k of LISTS) if (((tz.db.players[id].tally[k] || []).length) && (now[id][k] || []).length >= MAXL[k]) short.push([id, k]);
     let regained = 0;

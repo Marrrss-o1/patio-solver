@@ -903,6 +903,27 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
     become bets -13.3 ± 6.0 (101 hands). The friends' drift on the logs lasted sessions (Jagger and Mark, 21-24 Nov),
     not 100 hands, so a switcher on a longer period is the open question. Files: sims/2026-11-24-betrecent/ (runsb.sh,
     firstdiff.js, phase.js).
+- Recent preflop (v1.8.48, `PF_RECENT` {lam 0.95, sd 0.5, sdFold 0.3, max 60}; off: `input.pfRecent: true` turns it on,
+  an object turns it on and replaces fields, `false` doesn't compute it): BET_RECENT's idea for preflop. The tracker
+  keeps each player's newest 60 hands with the read's P(fold) and P(raise) for that hand and what they did
+  (`tally.pfRecent` { f, r, y 0 fold / 1 call / 2 raise, t }, out of decay, merged over linked ids by time; stored hands
+  fill it in once with the current read, `tagPfRecent`, `db.prTagged`). `pfRecentOdds` fits two log-odds offsets (raise,
+  prior sd 0.5; fold, sd 0.3; weight 0.95^age), so a player with few hands keeps about the plain read, and on, the engine
+  scales the player's PFR (overall and by position), threeBet and vsOpen's threeBet by the raise odds and their folds
+  (1 - VPIP, 1 - vsOpen's cont) by the fold odds, on every street. Advice reads carry `pr` {raise, fold, n, on} either way.
+  - Why (26 Nov review, analysis/2026-11-26-session.md): Mark raised 0.36 of his hands against a read of 0.20 and
+    folded 0.16 against 0.32; the read remembers about 330 hands.
+  - All logs to 26 Nov (5,281 hands, each predicted from earlier ones, 26 Nov 15:19-15:42 left out): +31.1 nats over the
+    read (raise alone +27.2, fold alone +12.9; priors picked on the same logs); by period +0.5 / -0.1 / +3.9 / +7.2 /
+    +5.3 / +4.6 / +9.8 (31 Oct-3 Nov ... 26 Nov); Mark +15.9, Dew +12.1, mkorn +5.7, Jagger -3.6. The read beats an
+    average player's by 253.4 nats there. Log replay 21-26 Nov (live budget, mix off): 92 of 1,410 picks change (preflop
+    41 of 633, flop 44 of 376), nearly all near ties.
+  - Simulator (v16r regulars, live budget, 19 cloud chunks, 4,600 deals; rule set before the runs: on only if everything
+    pooled is above +1 SE and the regulars not below -1 SE): regulars heads-up +19.7 ± 22.5, 3-handed +6.6 ± 33.2,
+    4-handed +2.3 ± 28.8, 5-handed -54.2 ± 29.1 (pooled -3.1 ± 13.8); `xp:switchpf300` (a friend whose preflop alone
+    switches looser / tighter every 300 hands) heads-up -9.2 ± 24.8, 4-handed +18.9 ± 35.6, `xp:switchpf` (every 100)
+    4-handed -42.8 ± 44.2 (pooled -7.5 ± 18.5); all -4.7 ± 11.0. So it is off. Files:
+    /mnt/project-files/patio-solver/sims/2026-11-26-pfrecent/ (RESULTS.md, logs/).
 - Raised bettors fold less (v1.7.4): continueRule scales a raised bettor's fold-to-bet by 0.55 (was 0.75;
   `input.raiseAggFold`). Logs: a bettor who got raised folded 6 of 19 times (32%), called 9, re-raised 3; x0.75 gave
   about 45-50% at the usual raise sizes, so hero's raises (weak ones most) looked better than they are. Simulator
@@ -1659,6 +1680,19 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   behind: the 1-chip all-in was folded to like a full raise, so it read +1.7 against -25.4 for the call and advised the
   shove (now: fold). 2 of 1,017 logged decisions change. A first version without the size limit broke the "calls a known
   bluffer more often" river test (polarized betting ranges over-continued against full raises).
+  The Monte Carlo too since v1.8.48 (`SHORT_RAISE` {frac 0.25, call 0.02}; `input.shortRaise: false` is the v1.8.47 rule,
+  a number sets frac): a player whose cost of answering hero's raise (all they have left, or hero's all-in a few chips
+  over the call) is under a quarter of the pot folds no more than to a bet of that price after the flop (foldAtSize),
+  preflop no more than price / (pot + price), and under 2% of the pot always calls (the robust versions' stress shift
+  doesn't make them fold a few chips either); an all-in player can't re-raise. Before, a bettor facing any raise kept at
+  most their read's value share + 0.1 (continueRule's raiseOverAggressor cap) whatever it cost them, so on 26 Nov #145
+  Mark, all in but 2 chips after betting 223 into 24 on As Ks 7s, folded 18% to hero's 2-chip all-in: all-in +48.4
+  against the call's +31.4 (now the call plus the 2 chips). Logs (every decision with someone under a quarter of the pot
+  left, 52 of 4,558, frozen captures, live budget, mix off): 35 identical, 17 EVs move, 3 picks change, all 26 Nov (#145
+  and #140 all-in -> call, #38's near tie raise -> all-in against Jagger's 35 behind). Simulator (v16r regulars, live
+  budget, 19 cloud chunks; rule set before the runs: in unless below -1 SE): every one of 3,400 deals at 150bb identical,
+  4-handed with two bot seats at 25bb and 40bb +2.7 ± 2.6 (24 of 800 deals differ); pooled +0.5 ± 0.5 over 4,200 deals.
+  Files: /mnt/project-files/patio-solver/sims/2026-11-26-shortraise/ (RESULTS.md, replay/).
 - Audit findings not fixed (4 Nov, NOTES.md): (1) fold predictions are too extreme against the friends: logistic
   calibration slope 0.57 ± 0.16 on hero's postflop bets (n 213), preflop 0.58 ± 0.20; heads-up flop and turn fine
   (0.96 ± 0.37), heads-up river 0.08 ± 0.48 (n 29), multiway 0.33 ± 0.32; on the bots 1.33 ± 0.14 (the other way), so
