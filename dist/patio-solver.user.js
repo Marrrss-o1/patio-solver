@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.49
+// @version      1.8.50
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -5790,8 +5790,10 @@ function ENGINE() {
         const [h3, o3] = put(amt);
         const kind = amt >= maxAdd - 1e-9 ? 'allin' : 'raise';
         const [l3, hi3] = childRange('raise');
-        // The villain's raise level: 're' once they raise over a raise (facing one), else 'raise' (over a limp or check).
-        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, player === 1 ? (facing > 0 || vRaised === 're' ? 're' : 'raise') : vRaised, depth + 1));
+        // The villain's raise level: 'raise' for a raise made in the tree, 're' only for a re-raise made at the table
+        // (cfg.villainRaised), so a villain who re-raises inside the tree answers hero's next raise as an opener (v1.8.50).
+        // input.pfReraiserTree true is the v1.8.49 rule: any raise over a raise in the tree reads as a re-raiser's.
+        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, player === 1 ? ((facing > 0 && cfg.reraiserTree === true) || vRaised === 're' ? 're' : 'raise') : vRaised, depth + 1));
       }
       if (isRoot && cfg.noLimp) {
         const j = acts.findIndex((a) => a.kind === 'call');
@@ -7369,7 +7371,7 @@ function ENGINE() {
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised ? (reraised ? 're' : 'raise') : false,
-        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, reraiserRead: input.pfReraiserRead !== false,
+        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, reraiserRead: input.pfReraiserRead !== false, reraiserTree: input.pfReraiserTree === true,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
         implied: +input.pfImplied || 0, flopEdge: pfFlopEdgeFor(input, field), flopEdgeAggr: pfFlopEdgeAggrFor(input, field),
