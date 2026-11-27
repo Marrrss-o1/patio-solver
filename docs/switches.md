@@ -2,7 +2,7 @@
 
 One line per behavioural switch in `createAnalysis`'s input (src/engine.js), so a review can see what is on, what each
 was decided on, and what would change the decision. Budget and size knobs (iterations, samples, time limits, bet menus)
-are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44; betRecent in v1.8.45; shortRaise and pfRecent in v1.8.48). Update a row
+are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44; betRecent in v1.8.45; shortRaise and pfRecent in v1.8.48; pfReraiserRead and allinTieLeft in v1.8.49). Update a row
 when its switch changes.
 
 Columns:
@@ -30,11 +30,13 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `pfShoveBB` | 25 | | 40 lost: -41.8 ± 6.0 (whole table at 30bb) | |
 | `bigCliff` (`bigCliffFloor` 0.25) | on | v1.8.3 | logs (96 spots: continues 67-72% to 35bb, 9% above); sim about +22 ± 10 | |
 | `pfRaisedRead` | on (to 30bb, `pfRaisedReadBB`) | v1.8.4 | logs (raisers facing a re-raise fold 16%, n 45); sim with the cliff about +39 ± 8 | `pfRaisedReadBB` 45: neutral (+8.1 ± 9.6), off |
+| `pfReraiserRead` (a raiser whose own raise was a re-raise keeps the read above 30bb too) | on | v1.8.49 | logs to 27 Nov: re-raisers facing 30bb+ fold 1 of 9 (openers 45bb+ 8 of 11), at hero's 12 big re-raises predicted folds 4.4 -> 1.0 (1 done); sim: pending (sims/2026-11-27-rrread) | |
 | `bigRaiseRange` | on | v1.8.15 | logs: 5 shown 30bb+ raises with chips behind; sim can't judge | more shown huge raises |
 | `pfCommitCall`, `pfCommitRamp` | on | v1.8.15-18 | logs: players a third in called 3 of 3 | |
 | `shoveRange` | on | v1.8.17 | logs: 5 shown all-in re-raises, +1.8 nats | |
 | `deepShove` (`low` 20) | on, per player | v1.8.27 (low v1.8.30) | logs: Mark's 7 shown deep jams all top 14%; sim with a tight shover about +28 ± 6, plain regulars -3.3 ± 2.3 | |
 | `allinTie` | 1bb | v1.8.25 | Marwin's ask; sim +11.7 ± 3.0 | |
+| `allinTieLeft` (for `allinTie`, a call or raise leaving under a quarter of the pot behind counts as all-in) | 0.25 | v1.8.49 | logs: 27 Nov #66 (a 4-bet leaving 28 into 302) and #68 (a call leaving 4 into 72); 3 of 2,095 preflop and 8 of 2,575 postflop picks change, all toward the all-in; sim: pending (sims/2026-11-27-rrread) | |
 | `pfCommit` | off | v1.8.10 | sim -24.5 ± 14.2 and -18.8 ± 18.0 | |
 | `pfImplied` | unset | sim only | 0.5: -55.3 ± 18.0 | |
 

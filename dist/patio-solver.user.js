@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Patio Solver
 // @description  Solver advice for your Poker Patio private lobbies. Reads the table automatically.
-// @version      1.8.48
+// @version      1.8.49
 // @match        https://pokerpatio.com/mp*
 // @match        https://www.pokerpatio.com/mp*
 // @run-at       document-end
@@ -2233,6 +2233,12 @@ function ENGINE() {
       let readR = null, wRead = 0;
       const raiseToBB = (kind.amount + (ctx.heroBet || 0)) / ctx.bigBlind;
       const readHi = ctx.raisedReadBB != null ? Math.max(30, +ctx.raisedReadBB) : PF_RAISED_READ_BB;
+      // Re-raisers (their own raise was a re-raise: '3bet', '4bet', '5bet') facing a re-raise above the step keep the
+      // read too (input.pfReraiserRead, v1.8.49; false is the v1.8.48 rule): the 30bb cliff is the logs' answer of
+      // players who opened, not of players who 3-bet. All logs to 27 Nov, the first time a preflop raiser faces a
+      // re-raise: openers facing 45bb+ fold 8 of 11, re-raisers facing 30bb+ fold 1 of 9 (Mark 0 of 4: 35, 40, 78 and
+      // 75.5bb; Dew345 0 of 2 at 131 and 184bb; Jagger 0 of 1 at 117bb), where the rule below had them folding about 60%.
+      const reraiserBig = !!ctx.reraiserRead && raised && /^\dbet$/.test(opp.actions.pre || '') && ctx.raisedRead && s.foldTo3bet != null && !(raiseToBB < readHi + 1e-9);
       if (raised && ctx.raisedRead && s.foldTo3bet != null && raiseToBB < readHi + 1e-9) {
         const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97);
         readR = { cont, nut: 0.965, reraise: Math.min(cont, s.fourBet != null ? s.fourBet : 0.45) };
@@ -2254,6 +2260,10 @@ function ENGINE() {
         const c = opp.committed / (opp.committed + opp.behind);
         const lo = ctx.pfCommitRamp === false ? 1 / 3 : PF_COMMIT_RAMP[0], hi = PF_COMMIT_RAMP[1];
         commitW = c >= hi - 1e-12 ? 1 : lo < hi && c > lo ? (c - lo) / (hi - lo) : 0;
+      }
+      if (reraiserBig) {
+        const cont = clamp(1 - s.foldTo3bet, 0.03, 0.97), c = cont + commitW * Math.max(0, 0.97 - cont);
+        return { cont: c, nut: 0.965, reraise: Math.min(c, s.fourBet != null ? s.fourBet : 0.45) };
       }
       if (commitW >= 1) return withRead({ cont: 0.97, nut: 0.965, reraise: 0.11 });
       // Callers (mostly limpers) continue at their learned rate against a raise.
@@ -2618,6 +2628,11 @@ function ENGINE() {
   // 1,000 deals each, on vs off: 4-handed 25bb +8.7 ± 5.0 and +21.8 ± 5.3, heads-up 25bb +10.6 ± 7.8, heads-up 150bb
   // +7.0 ± 9.2, 4-handed 150bb -10.7 ± 11.5 (pooled +11.7 ± 3.0; 25bb +14.1 ± 3.3, 150bb +0.1 ± 7.2).
   const ALLIN_TIE_BB = 1;
+  // ... and a call, bet or raise that leaves less than this share of the pot it makes behind (once called by the deepest
+  // player still in) counts as all-in there too (v1.8.49, input.allinTieLeft; false is the v1.8.48 rule, a number sets
+  // the share): 27 Nov #66 swapped K9o's shove (+5.5) for a 4-bet leaving 28 chips behind into 302 (+5.4), and #68's
+  // flop shove (+8.2) for a call leaving 4 chips into 72 (+7.5); both stack off just the same.
+  const ALLIN_TIE_LEFT = 0.25;
   // Raise-to (bb) where a raiser's own read of re-raises has faded into continueRule's old rule (see continueRule).
   const PF_RAISED_READ_BB = 30;
   // continueRule's committed-player rule (pfCommitCall) ramps in between these shares of the stack already in.
@@ -5735,7 +5750,7 @@ function ENGINE() {
           cont = r.cont; raise = r.raise;
         } else {
           const mdf = (potNow - facing) / potNow;
-          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead, raisedReadBB: cfg.raisedReadBB }, mdf, { amount: hIn });
+          const rule = continueRule({ stats: cfg.deepStats, pending: false, actions: { pre: vRaised === 're' ? '3bet' : vRaised ? 'raise' : 'call' } }, { street: 0, bigBlind, heroBet: cfg.heroBet || 0, raisedRead: !!cfg.raisedRead, raisedReadBB: cfg.raisedReadBB, reraiserRead: !!cfg.reraiserRead }, mdf, { amount: hIn });
           cont = rule.cont; raise = Math.min(rule.reraise, rule.cont);
         }
       }
@@ -5775,7 +5790,8 @@ function ENGINE() {
         const [h3, o3] = put(amt);
         const kind = amt >= maxAdd - 1e-9 ? 'allin' : 'raise';
         const [l3, hi3] = childRange('raise');
-        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, vRaised || player === 1, depth + 1));
+        // The villain's raise level: 're' once they raise over a raise (facing one), else 'raise' (over a limp or check).
+        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, player === 1 ? (facing > 0 || vRaised === 're' ? 're' : 'raise') : vRaised, depth + 1));
       }
       if (isRoot && cfg.noLimp) {
         const j = acts.findIndex((a) => a.kind === 'call');
@@ -6431,7 +6447,7 @@ function ENGINE() {
     // is fixed, so that is one choice). The old rule folded everything below 0.8 strength and
     // played the rest as if just called, so re-raises only ever cost hero chips.
     const rrModel = street >= 3 && input.reraiseModel !== false && (!hasSidePots(input, stack) || multiwayStack(input, stack, street) != null);
-    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
+    const ctx = { street, bigBlind, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, reraiserRead: input.pfReraiserRead !== false, raiseAggFold: input.raiseAggFold, reraiseRaiserFold: input.reraiseRaiserFold, pfCommit: input.pfCommit, pfCommitCall: input.pfCommitCall, pfCommitRamp: input.pfCommitRamp, vsOpenSplit: input.vsOpenSplit, pfLimpCurve: pfLimpCurveIn === true ? PF_LIMP_CURVE : pfLimpCurveIn && typeof pfLimpCurveIn === 'object' ? pfLimpCurveIn : null, rrAgg: rrModel ? (input.reraiseAgg != null ? +input.reraiseAgg : 2) : 1 };
     let bigBlindSeat = -1;
     if (street === 0 && toCall > 0 && toCall <= bigBlind) {
       for (let i = opps.length - 1; i >= 0; i--) if (opps[i].pending) { bigBlindSeat = i; break; }
@@ -7352,8 +7368,8 @@ function ENGINE() {
         rootActs: raisesSc.map((s) => ({ amount: capE(s.amount) })),
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
-        rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised,
-        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB,
+        rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised ? (reraised ? 're' : 'raise') : false,
+        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, reraiserRead: input.pfReraiserRead !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
         implied: +input.pfImplied || 0, flopEdge: pfFlopEdgeFor(input, field), flopEdgeAggr: pfFlopEdgeAggrFor(input, field),
@@ -7540,6 +7556,20 @@ function ENGINE() {
       return input.opponents.length > 0 && input.opponents.every((x) => x.stack != null && isFinite(+x.stack) && hb + o.amount - (+x.bet || 0) >= +x.stack - 1e-9);
     }
 
+    // A call, bet or raise that leaves under `share` of the pot it makes behind, once the deepest player still in calls it.
+    function leavesLittle(o, share) {
+      if (!o || (o.kind !== 'bet' && o.kind !== 'raise' && o.kind !== 'call')) return false;
+      const hb = +input.heroBet || 0, to = hb + o.amount;
+      let cover = 0, called = 0;
+      for (const x of input.opponents) {
+        if (x.stack == null || !isFinite(+x.stack)) return false;
+        const tot = (+x.bet || 0) + +x.stack;
+        if (tot > cover) { cover = tot; called = o.kind === 'call' ? 0 : Math.max(0, Math.min(to, tot) - (+x.bet || 0)); }
+      }
+      const left = Math.min(hb + stack, cover) - to;
+      return left < share * ((+input.pot || 0) + o.amount + called);
+    }
+
     let raiseGated = false;
     function mwRaiseGate() {
       if (input.mwRaiseEq == null || street < 3 || toCall <= 0 || opps.length < 2) return false;
@@ -7596,15 +7626,17 @@ function ENGINE() {
       if (bpOut && bpOut.used) ({ ranked, best, runnerUp, margin, close, mix } = bpOut);
       // Near-tie all-ins (input.allinTie, on since v1.8.25: ALLIN_TIE_BB; false turns it off, a number = that many big
       // blinds): when the pick is all-in and an option that isn't comes within the margin, play that one.
-      let allinTie = null;
+      let allinTie = null, allinTieKept = null;
       const tieBB = input.allinTie === false ? 0 : typeof input.allinTie === 'number' ? input.allinTie : ALLIN_TIE_BB;
+      const tieLeft = input.allinTieLeft === false ? 0 : typeof input.allinTieLeft === 'number' ? +input.allinTieLeft : ALLIN_TIE_LEFT;
       if (tieBB > 0 && best && isAllInOption(best)) {
-        const safe = ranked.filter((o) => o && o !== best && o.ev != null && isFinite(o.ev) && !isAllInOption(o) && o.ev >= best.ev - tieBB * bigBlind)
-          .sort((a, b) => b.ev - a.ev)[0];
+        const near = ranked.filter((o) => o && o !== best && o.ev != null && isFinite(o.ev) && !isAllInOption(o) && o.ev >= best.ev - tieBB * bigBlind)
+          .sort((a, b) => b.ev - a.ev);
+        const safe = near.find((o) => !(tieLeft > 0 && leavesLittle(o, tieLeft)));
         if (safe) {
           allinTie = { kind: best.kind, amount: best.amount, label: best.label, ev: best.ev, by: best.ev - safe.ev };
           runnerUp = best; best = safe; margin = best.ev - runnerUp.ev; close = true; mix = null;
-        }
+        } else if (near.length) allinTieKept = { kind: near[0].kind, amount: near[0].amount, label: near[0].label, ev: near[0].ev };
       }
       const passive = scenarios.find((s) => s.kind === 'check' || s.kind === 'call');
       const base = scenarios.find((s) => s.kind !== 'fold');
@@ -7624,7 +7656,7 @@ function ENGINE() {
 
       return {
         street, streetName, pot, potWin, toCall, stack, bigBlind, realize, inPosition, lookahead,
-        scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight, allinTie,
+        scenarios, ranked, best, runnerUp, margin, close, mix, robustWeight, allinTie, allinTieKept,
         credibility, blueprint: bpOut ? bpOut.info : null,
         heroPot: hpt ? { tilt: hpt.tilt, n: hpLearned ? hpLearned.n : 0, ramp: Math.round(heroPotRamp * 100) / 100, own: opps.map((o) => o.stats.heroPotOwn || null) } : null,
         solver: solved ? { kind: solved.kind || 'river', iterations: solved.iterations, runs: solved.runs || 1, exploitWeight: opps[0].stats.exploitWeight, field: solved.field || solved.multiway || 0 } : null,
