@@ -692,6 +692,7 @@ test('preflop: a player with a quarter of the raise-to in is not faded by the bi
     opponents: [{ name: 'V', tally, actions: { pre: '3bet' }, committed: 80, stack: 220, bet: 80, position: 'late' }],
     heroActions: { pre: 'raise' }, heroBet: 20, heroCommitted: 20, iterations: 4000, preflopSolver: false, mix: false, seed: 1,
     pfCommitRamp: false, // a quarter of their stack in: the ramp (v1.8.18) would already move "off" halfway
+    pfReraiserRead: false, // a 3-bettor: since v1.8.49 it keeps its read above 30bb, before pfCommit's cliff lift
   }, extra || {});
   const shove = (r) => r.ranked.find((s) => s.kind === 'allin');
   const on = E.analyzeSync(input({ pfCommit: true })), off = E.analyzeSync(input());
@@ -2729,16 +2730,50 @@ test('big preflop re-raises: friends fold to raises above 30bb (bigCliff), old s
 });
 
 test('raisers facing a re-raise to 30bb or less answer with their foldTo3bet / fourBet reads (pfRaisedRead false: old rule)', () => {
-  const on = fourBetSpot({ pfCommit: false }), off = fourBetSpot({ pfRaisedRead: false, pfCommit: false });
+  // pfReraiserRead false: the opener's rule (the step at 30bb). V here 3-bet, so by default it keeps the read at every
+  // size (next test).
+  const R = { pfCommit: false, pfReraiserRead: false };
+  const on = fourBetSpot(R), off = fourBetSpot(Object.assign({ pfRaisedRead: false }, R));
   assert.ok(on[0].cont > 0.8 && on[0].reraise > 0.4, `cont ${on[0].cont} reraise ${on[0].reraise}`); // home prior: fold 13%, re-raise 50%
   assert.ok(off[0].reraise < 0.2);
   near(on[1].cont, off[1].cont); near(on[2].cont, off[2].cont); // bigger re-raises keep the old rule
   // pfRaisedReadBB 45 (v1.8.17, off by default): from 30bb the read fades into the old rule by 45bb, so 36.5bb is in
   // between and 51bb keeps the old rule.
-  const fade = fourBetSpot({ pfCommit: false, pfRaisedReadBB: 45 }), w = (45 - 36.5) / 15;
+  const fade = fourBetSpot(Object.assign({ pfRaisedReadBB: 45 }, R)), w = (45 - 36.5) / 15;
   near(fade[0].cont, on[0].cont);
   near(fade[1].cont, w * on[0].cont + (1 - w) * off[1].cont); near(fade[1].reraise, w * on[0].reraise + (1 - w) * off[1].reraise);
   near(fade[2].cont, off[2].cont);
+});
+
+test('re-raisers facing a re-raise above 30bb keep their foldTo3bet / fourBet read; openers keep the step (v1.8.49)', () => {
+  // 27 Nov: friends who had 3-bet folded 1 of 9 times to re-raises above 30bb, openers 8 of 11 above 45bb. V 3-bet here;
+  // hero's 4-bets go to 26.5, 36.5 and 51bb.
+  const on = fourBetSpot({ pfCommit: false }), off = fourBetSpot({ pfCommit: false, pfReraiserRead: false });
+  near(on[0].cont, off[0].cont); near(on[0].reraise, off[0].reraise); // up to 30bb: the same read either way
+  near(on[1].cont, on[0].cont); near(on[2].cont, on[0].cont); near(on[2].reraise, on[0].reraise);
+  assert.ok(off[2].cont < on[2].cont - 0.3, `51bb: ${off[2].cont.toFixed(2)} (old rule) vs ${on[2].cont.toFixed(2)}`);
+  // The same spot with V as the opener ('raise'): the switch changes nothing.
+  const V = { name: 'V', tally: {}, actions: { pre: 'raise' }, sizes: {}, pfAggressor: true, position: 'blinds', committed: 24, stack: 276, bet: 24, heroIP: true };
+  const oOn = fourBetSpot({ pfCommit: false, opponents: [V] }), oOff = fourBetSpot({ pfCommit: false, pfReraiserRead: false, opponents: [V] });
+  for (let i = 0; i < 3; i++) { near(oOn[i].cont, oOff[i].cont); near(oOn[i].reraise, oOff[i].reraise); }
+  assert.ok(oOn[2].cont < oOn[0].cont - 0.3, 'an opener facing 51bb keeps the cliff');
+});
+
+test('27 Nov #66: K9o no longer 4-bets 75.5bb into a 3-bettor; near-tie all-ins skip raises that leave little behind (v1.8.49)', () => {
+  // V (a friend who calls nearly every 4-bet after 3-betting) 3-bet hero's 6bb open to 18bb, effective 89.5bb.
+  const { input } = require('./fixtures/real-4bet-reraiser.json');
+  const run = (x) => E.analyzeSync(Object.assign({}, input, { mix: false, seed: 1, iterations: 4000 }, x));
+  const big = (r) => r.scenarios.filter((s) => s.kind === 'raise').sort((a, b) => b.amount - a.amount)[0];
+  const old = run({ pfReraiserRead: false, allinTieLeft: false });
+  // The old rule: V folds 57% to the 4-bet to 75.5bb, the shove is the pick, and allinTie plays the 4-bet that leaves
+  // 28 chips behind into a 302-chip pot instead.
+  assert.ok(old.best.kind === 'raise' && old.best.amount === 139 && old.allinTie, `${old.best.kind} ${old.best.amount}`);
+  assert.ok(big(old).opp[0].cont < 0.5);
+  const tie = run({ pfReraiserRead: false });
+  assert.ok(tie.best.kind === 'call' && tie.allinTie, 'with allinTieLeft the 4-bet counts as all-in: the call is played');
+  const now = run({});
+  assert.ok(now.best.kind === 'call' && !now.allinTie, now.best.kind);
+  assert.ok(big(now).opp[0].cont > 0.8, 'V keeps the read: ' + big(now).opp[0].cont);
 });
 
 test('pfRaisedReadBB 45: no step in the raiser\'s answer either side of a re-raise to 30bb (default 30: the step)', () => {

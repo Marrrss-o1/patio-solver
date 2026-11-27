@@ -295,6 +295,8 @@ const HOME_DEFAULT = {
                               // scale by exp(commitCut x share in). `commit` scales each hand's odds, which moves the fold
                               // share only for hands near the cut (about a third of the read's change at the fitted width).
   pfCommit: 0,                // 1: preflop, chips in of a quarter of a big raise-to or more lift the cliff (see above)
+  rrStick: 0,                 // > 0: preflop, a bot whose own raise was a re-raise continues at least this often facing a further
+                              // raise, whatever its hand and the size (logs to 27 Nov: such players folded 3 of 42, 1 of 9 above 30bb)
   // Hero's big pots after a passive flop (v7 bots; all off by default). In the logs a friend who checked or called the
   // flop against hero and then put 15bb+ in shows a hand at 0.74 of the read's range (n 23), against 0.51 in pots
   // without hero and about 0.61 for the v6 bots. When hero is still in the hand, the bot did not bet or raise the flop
@@ -428,7 +430,11 @@ function homeBot(params) {
         // re-raises show at a median 0.06; J = jam x (40bb / their chips)^jamK, at most jamMax, fitted by allin-test.js).
         const J = P.jam > 0 && v.raises === 1 && allinTo > v.cur ? Math.min(P.jamMax, P.jam * Math.pow(40 / Math.max(5, (v.stack + v.put) / bb), P.jamK)) : 0;
         const tbN = J > 0 ? Math.max(0.003, tb - J) : tb;
-        const pCont = sig((cont - pct) / w), pRR = Math.min(pCont, sig((tbN - pct) / (w * 0.7)));
+        let pCont = sig((cont - pct) / w);
+        // rrStick (off by default): re-raisers keep calling bigger raises (the cliff above would have them folding about
+        // 60% to a 4-bet to 60bb; the friends who had re-raised folded 1 of 9 above 30bb).
+        if (P.rrStick > 0 && v.seq.pre.includes('3bet')) pCont = Math.max(pCont, P.rrStick);
+        const pRR = Math.min(pCont, sig((tbN - pct) / (w * 0.7)));
         if (BOT_DUMP && v.real && v.raises === 1) dump({ pf: 1, hero: vsHero ? 1 : 0, toBB: raiseBB, pb, limpers: v.limpers, pct, w, pCont, tb0: P.threeBet * hrr, cont, J, n: v.n });
         const out = [];
         if (v.raises < 8) {
