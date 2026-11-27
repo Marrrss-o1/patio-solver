@@ -2776,23 +2776,25 @@ test('27 Nov #66: K9o no longer 4-bets 75.5bb into a 3-bettor; near-tie all-ins 
   assert.ok(big(now).opp[0].cont > 0.8, 'V keeps the read: ' + big(now).opp[0].cont);
 });
 
-test('pfReraiserTree false: only a re-raise made at the table keeps the re-raiser read; in-tree re-raises read as opens', () => {
-  // 27 Nov #66: V really 3-bet, so the narrower rule plays it exactly as v1.8.49 (the call).
+test('the re-raiser read is for re-raises made at the table; in-tree re-raises read as opens (pfReraiserTree true: v1.8.49)', () => {
+  // 27 Nov #66: V really 3-bet, so v1.8.50 plays it exactly as v1.8.49 (the call).
   const { input } = require('./fixtures/real-4bet-reraiser.json');
   const run = (inp, x) => E.analyzeSync(Object.assign({}, inp, { mix: false, seed: 1, iterations: 4000 }, x));
   const evs = (r) => r.ranked.map((s) => s.kind + ' ' + s.amount + ' ' + s.ev);
-  const real = run(input, {}), realOff = run(input, { pfReraiserTree: false });
-  assert.deepStrictEqual(evs(realOff), evs(real));
-  assert.strictEqual(realOff.best.kind, 'call');
-  // A heads-up open: V's 3-bet happens only inside the preflop solver's tree. With the switch off V answers hero's 4-bet
-  // there as an opener (v1.8.48), so AA's open is worth less (its 4-bets get folded to more).
+  const real = run(input, {}), realTree = run(input, { pfReraiserTree: true });
+  assert.deepStrictEqual(evs(real), evs(realTree));
+  assert.strictEqual(real.best.kind, 'call');
+  // A heads-up open: V's 3-bet happens only inside the preflop solver's tree. By default V answers hero's 4-bet there
+  // as an opener (v1.8.48); with pfReraiserTree true as a re-raiser, so AA's open is worth more (its 4-bets get called).
   const open = { hero: [48, 49], board: [], pot: 3, toCall: 1, stack: 299, bigBlind: 2, inPosition: true, tableStyle: 'typical', seats: 2,
     heroActions: {}, heroSizes: {}, heroPosition: 'late', heroCommitted: 1, heroBet: 1,
     opponents: [{ name: 'V', tally: {}, actions: {}, sizes: {}, position: 'blinds', committed: 2, stack: 298, bet: 2, pending: true }] };
-  const on = run(open, {}), off = run(open, { pfReraiserTree: false }), old = run(open, { pfReraiserRead: false });
-  assert.ok(on.best.ev > off.best.ev + 0.5, `AA open ${on.best.ev.toFixed(2)} vs ${off.best.ev.toFixed(2)}`);
-  // With the re-raiser read off the switch changes nothing.
-  assert.deepStrictEqual(evs(run(open, { pfReraiserRead: false, pfReraiserTree: false })), evs(old));
+  const now = run(open, {}), tree = run(open, { pfReraiserTree: true }), old = run(open, { pfReraiserRead: false });
+  assert.ok(tree.best.ev > now.best.ev + 0.5, `AA open ${tree.best.ev.toFixed(2)} vs ${now.best.ev.toFixed(2)}`);
+  // Nobody re-raised at the table, so the default plays the open as v1.8.48 did; with the re-raiser read off the
+  // switch changes nothing.
+  assert.deepStrictEqual(evs(now), evs(old));
+  assert.deepStrictEqual(evs(run(open, { pfReraiserRead: false, pfReraiserTree: true })), evs(old));
 });
 
 test('pfRaisedReadBB 45: no step in the raiser\'s answer either side of a re-raise to 30bb (default 30: the step)', () => {

@@ -2,7 +2,7 @@
 
 One line per behavioural switch in `createAnalysis`'s input (src/engine.js), so a review can see what is on, what each
 was decided on, and what would change the decision. Budget and size knobs (iterations, samples, time limits, bet menus)
-are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44; betRecent in v1.8.45; shortRaise and pfRecent in v1.8.48; pfReraiserRead and allinTieLeft in v1.8.49). Update a row
+are left out. CLAUDE.md has the full story for each (search its name). Written 11 Nov 2026 (v1.8.41; mwBetFold off in v1.8.42; coldRaise and raisedRR in v1.8.44; betRecent in v1.8.45; shortRaise and pfRecent in v1.8.48; pfReraiserRead and allinTieLeft in v1.8.49; pfReraiserTree off in v1.8.50). Update a row
 when its switch changes.
 
 Columns:
@@ -30,8 +30,8 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `pfShoveBB` | 25 | | 40 lost: -41.8 ± 6.0 (whole table at 30bb) | |
 | `bigCliff` (`bigCliffFloor` 0.25) | on | v1.8.3 | logs (96 spots: continues 67-72% to 35bb, 9% above); sim about +22 ± 10 | |
 | `pfRaisedRead` | on (to 30bb, `pfRaisedReadBB`) | v1.8.4 | logs (raisers facing a re-raise fold 16%, n 45); sim with the cliff about +39 ± 8 | `pfRaisedReadBB` 45: neutral (+8.1 ± 9.6), off |
-| `pfReraiserRead` (a raiser whose own raise was a re-raise keeps the read above 30bb too) | on | v1.8.49 | logs to 27 Nov: re-raisers facing 30bb+ fold 1 of 10 (openers 45bb+ 8 of 12), at hero's 13 big re-raises predicted folds 4.7 -> 1.1 (1 done); sim (no-loss rule): rrStick bots -17.1 ± 19.4, plain v16r +23.1 ± 26.2 (sims/2026-11-27-rrread) | the knock-on preflop changes (-27.1 ± 14.4 on the rrStick bots, picked after the runs) holding up: try the read for real re-raisers only, not inside the tree |
-| `pfReraiserTree` (with pfReraiserRead: in-tree re-raises read as re-raisers too; false: only a re-raise made at the table) | on (v1.8.49 rule) | v1.8.49 | being tested (27 Nov): false vs on, sims/2026-11-27-rrtree | that test |
+| `pfReraiserRead` (a raiser whose own raise was a re-raise keeps the read above 30bb too) | on | v1.8.49 | logs to 27 Nov: re-raisers facing 30bb+ fold 1 of 10 (openers 45bb+ 8 of 12), at hero's 13 big re-raises predicted folds 4.7 -> 1.1 (1 done); sim (no-loss rule): rrStick bots -17.1 ± 19.4, plain v16r +23.1 ± 26.2 (sims/2026-11-27-rrread) | tried: the read for real re-raisers only, not inside the tree, in since v1.8.50 (`pfReraiserTree`) |
+| `pfReraiserTree` (true: in-tree re-raises read as re-raisers too, the v1.8.49 rule; off: only a re-raise made at the table) | off | v1.8.50 | sim (rule set before the runs: rrStick tables above +1 SE, plain not below -1 SE): rrStick +15.9 ± 15.6 (1.02 SE), plain v16r +61.5 ± 24.5 (sims/2026-11-27-rrtree); logs: every real re-raiser spot keeps v1.8.49's pick, 47 near-tie picks go back to v1.8.48's | more rrStick runs pooling under +1 SE (the gain sat in turn and flop drift, not the preflop spots it was aimed at) |
 | `bigRaiseRange` | on | v1.8.15 | logs: 5 shown 30bb+ raises with chips behind; sim can't judge | more shown huge raises |
 | `pfCommitCall`, `pfCommitRamp` | on | v1.8.15-18 | logs: players a third in called 3 of 3 | |
 | `shoveRange` | on | v1.8.17 | logs: 5 shown all-in re-raises, +1.8 nats | |

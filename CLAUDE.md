@@ -608,7 +608,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   raise was a re-raise ('3bet', '4bet', '5bet') answers a further re-raise of any size with foldTo3bet / fourBet (plus
   the PF_COMMIT_RAMP lift toward 0.97 with a fifth of their stack in), where the rule above gave them the opener's 30bb
   step and bigFade. The preflop solver's tree passes the level down (`villainRaised` 're'), so a villain who 3-bets
-  inside the tree answers hero's 4-bet the same way. All logs to 27 Nov 10:52, the first time a friend who had raised faces
+  at the table answers hero's 4-bet the same way there (in v1.8.49 also one who 3-bets inside the tree; not since
+  v1.8.50, below). All logs to 27 Nov 10:52, the first time a friend who had raised faces
   a re-raise: openers fold 10 of 115 up to 30bb, 1 of 6 at 30-45bb and 8 of 12 above 45bb (the step fits them);
   re-raisers fold 2 of 35 up to 30bb and 1 of 10 above (Mark 0 of 4 at 35, 40, 78 and 75.5bb; Dew345 0 of 2 at 131 and
   184bb; Jagger 0 of 1 at 117bb; mewbw 0 of 1, 5-bet all-in with AA over a 100bb 4-bet; the one fold Dew666 at 64bb with
@@ -632,10 +633,21 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   -3.3 ± 20.8, +13.4 ± 24.8. The middle one was picked after the runs, so it is a watch item: the old read's phantom
   4-bet folds may have stood in for raise EV the flop leaves miss (PF_FLOP_EDGE), and a version that keeps the read for
   real re-raisers but not inside the tree is the thing to try if it holds up. Files: sims/2026-11-27-rrread/ (RESULTS.md).
-  Narrower version under test (`input.pfReraiserTree: false`, a simulator option; default true is the rule above): a
+  Only for re-raises made at the table since v1.8.50 (`input.pfReraiserTree`, default off; true is the v1.8.49 rule): a
   villain's raise inside the preflop solver's tree passes 're' down only when they re-raised at the table
   (cfg.villainRaised), so in-tree 3-bets answer hero's 4-bets as openers (v1.8.48) and real re-raisers keep the read.
-  27 Nov #66 is identical either way. Files: sims/2026-11-27-rrtree/.
+  27 Nov #66 is identical either way. Log replay (frozen captures, 2,095 preflop decisions, live budget, mix off): against
+  v1.8.49 47 picks change in kind and 205 in size (187 bigger), all near ties but #1594 (JcQc, call -> raise 14, 1.7
+  chips); against v1.8.48 10 in kind and 9 in size, with every real re-raiser spot on v1.8.49's pick (#1242, #1595,
+  #1672, #1781, #2033, #2142, #166, #259) plus allinTieLeft's two. Simulator (v16r regulars, live budget, 15 cloud chunks
+  on fresh seeds, B v1.8.50 vs A v1.8.49; rule set before the runs: in only if the rrStick tables pool above +1 SE and the
+  plain ones not below -1 SE): rrStick bots (heads-up, 3-, 4-handed, 150 and 300bb, 2,800 deals) +15.9 ± 15.6 (1.02 SE;
+  every deal flat the same), plain v16r (1,200 deals) +61.5 ± 24.5; all tables +29.1 ± 13.1. It passed by a hair, and not
+  where it was aimed: on the rrStick bots, split by the first decision where A and B differ, the other preflop spots add
+  +1.7 ± 11.8 (rrread's -27.1 there did not come back, so that was likely noise), the spot itself +1.5 ± 1.5, the turn
+  +14.1 ± 6.4 and the flop -3.5 ± 11.8 (reads drifted). The plain numbers don't fit rrread's: v1.8.50 and v1.8.48 differ at
+  19 of 2,095 logged preflop decisions, yet the two runs together put v1.8.50 +84.6 ± 35.9 over v1.8.48 on the plain bots
+  (rrStick -1.2 ± 24.9), so read the plain tables as no loss, not a win. Files: sims/2026-11-27-rrtree/ (RESULTS.md).
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the
