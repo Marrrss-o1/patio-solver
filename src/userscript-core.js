@@ -46,14 +46,26 @@ function slim(r) {
   if (W.__patioSolverUS) return;
   W.__patioSolverUS = true;
 
+  var VERSION = typeof PATIO_VERSION !== 'undefined' ? PATIO_VERSION : '';
+
   // ---------- storage ----------
-  var DB_KEY = 'patioSolverDb', UI_KEY = 'patioSolverUi';
+  // The reads and the hand log live in the site's IndexedDB (database "patio-solver-phone"): one record for the reads
+  // and one per hand, kept by PatioHandLog (extension/handlog.js) as the computer keeps them in chrome.storage: the
+  // newest 1,000 hands, each with its raw events. Until v1.8.50 everything sat under one localStorage key, which the
+  // game shares and Safari caps at about 5 MB, so the phone kept raw events for only 60 hands and a copy of the
+  // computer's reads would not have fitted. Reads saved there move over on the first start (and the key is freed for
+  // the game). Without IndexedDB the old localStorage way is used (legacy).
+  var DB_KEY = 'patioSolverDb', UI_KEY = 'patioSolverUi', MARK_KEY = 'patioSolverLogMark', IDB_NAME = 'patio-solver-phone';
   function load(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
-  // The page's localStorage is shared with the game, so if it fills up, raw hand events are
-  // dropped (oldest first) before the reads are ever lost. If the reads still can't be saved,
-  // the panel says so until a save works again.
-  var saveError = null;
-  function save(k, v) {
+  var saveError = null, legacy = false, handLog = null, area = null;
+  function noteSaved(r) {
+    var err = r && !r.ok && !r.skipped ? r.error || 'unknown error' : null;
+    if (err !== saveError) { saveError = err; if (tracker && body) render(); }
+    return r;
+  }
+  // localStorage, for the panel's settings and (legacy) the reads. If it fills up, raw hand events are dropped
+  // (oldest first) before the reads are ever lost.
+  function saveLocal(k, v) {
     var err = null;
     for (var tries = 0; tries < 6; tries++) {
       try { localStorage.setItem(k, JSON.stringify(v)); err = null; break; } catch (e) {
@@ -65,100 +77,273 @@ function slim(r) {
         withRaw.slice(0, Math.ceil(withRaw.length / 2)).forEach(function (x) { delete x.raw; });
       }
     }
-    if (k === DB_KEY && err !== saveError) { saveError = err; if (tracker && body) render(); }
+    if (k === DB_KEY) noteSaved(err ? { ok: false, error: err + '. The page\'s storage may be full; export the hand log' } : { ok: true });
   }
-  // Hands logged since the last "Hand log" export. This phone keeps 150 hands, raw events for 60,
-  // so from LOG_REMIND on the panel asks for an export.
-  var LOG_REMIND = 50;
+  function saveUi() { saveLocal(UI_KEY, ui); }
+  // IndexedDB as the storage area PatioHandLog takes: get(keys | null) -> items (null if reading failed),
+  // set(items) / remove(keys) -> { ok, error }, keys() -> every key (null if reading failed).
+  function idbArea(name, storeName) {
+    var dbp = null;
+    function open() {
+      if (!dbp) {
+        dbp = new Promise(function (res) {
+          try {
+            var req = W.indexedDB.open(name, 1);
+            req.onupgradeneeded = function () { try { req.result.createObjectStore(storeName); } catch (e) { /* exists */ } };
+            req.onsuccess = function () { res(req.result); };
+            req.onerror = function () { res(null); };
+            req.onblocked = function () { res(null); };
+          } catch (e) { res(null); }
+        });
+      }
+      return dbp;
+    }
+    function tx(mode, fn) {
+      return open().then(function (db) {
+        return new Promise(function (res) {
+          if (!db) { res({ failed: true, error: 'the site storage could not be opened' }); return; }
+          try {
+            var t = db.transaction(storeName, mode), out = fn(t.objectStore(storeName));
+            t.oncomplete = function () { res({ value: typeof out === 'function' ? out() : out }); };
+            t.onerror = function () { res({ failed: true, error: (t.error && t.error.message) || 'site storage error' }); };
+            t.onabort = function () { res({ failed: true, error: (t.error && (t.error.name === 'QuotaExceededError' ? 'the phone is out of storage for this site' : t.error.message)) || 'site storage write aborted' }); };
+          } catch (e) { res({ failed: true, error: (e && e.message) || String(e) }); }
+        });
+      });
+    }
+    var done = function (r) { return r.failed ? { ok: false, error: r.error } : { ok: true }; };
+    return {
+      ok: function () { return open().then(function (db) { return !!db; }); },
+      get: function (keys) {
+        return tx('readonly', function (s) {
+          var out = {};
+          if (keys == null) {
+            var kr = s.getAllKeys(), vr = s.getAll();
+            return function () { var ks = kr.result || [], vs = vr.result || []; for (var i = 0; i < ks.length; i++) out[ks[i]] = vs[i]; return out; };
+          }
+          [].concat(keys).forEach(function (k) { var r = s.get(k); r.onsuccess = function () { if (r.result !== undefined) out[k] = r.result; }; });
+          return function () { return out; };
+        }).then(function (r) { return r.failed ? null : r.value; });
+      },
+      set: function (items) { return tx('readwrite', function (s) { Object.keys(items).forEach(function (k) { s.put(items[k], k); }); }).then(done); },
+      remove: function (keys) { return tx('readwrite', function (s) { [].concat(keys).forEach(function (k) { s.delete(k); }); }).then(done); },
+      keys: function () {
+        return tx('readonly', function (s) { var r = s.getAllKeys(); return function () { return (r.result || []).map(String); }; })
+          .then(function (r) { return r.failed ? null : r.value; });
+      }
+    };
+  }
+  function storeGet(k) { return area ? area.get([k]).then(function (v) { return (v || {})[k]; }) : Promise.resolve(load(k)); }
+  function storeSet(k, v) { if (!area) { saveLocal(k, v); return Promise.resolve({ ok: true }); } var o = {}; o[k] = v; return area.set(o).then(noteSaved); }
+  // Saves come several times a hand; the reads (a few MB once the computer's are copied in) are written at most every
+  // 1.5 s, and at once when the page is hidden or closed.
+  var saveTimer = null, saving = null;
+  function saveDb(now) {
+    if (!tracker) return Promise.resolve(null);
+    if (legacy) { saveLocal(DB_KEY, tracker.db); return Promise.resolve({ ok: !saveError }); }
+    if (!now) { if (!saveTimer) saveTimer = setTimeout(function () { saveTimer = null; saveDb(true); }, 1500); return Promise.resolve({ ok: true, queued: true }); }
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    var p = (saving || Promise.resolve()).then(function () { return handLog.save(tracker.db); }).then(noteSaved, function (e) { return noteSaved({ ok: false, error: String(e && e.message || e) }); });
+    saving = p;
+    return p;
+  }
+  function flush() { if (saveTimer) saveDb(true); }
+  W.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flush(); });
+  // Hands logged since the last "Hand log" export (the export mark). From LOG_REMIND on (50 with page storage, which
+  // keeps raw events for 60 hands) the panel asks for an export. The page holds the newest 150, so that is the most
+  // this counts.
+  var LOG_REMIND = 120;
   function unexported() {
-    var list = (tracker && tracker.db.history) || [], since = ui.loggedAt || 0, c = 0;
+    var list = (tracker && tracker.db.history) || [], since = logMark != null ? logMark : 0, c = 0;
     for (var i = list.length - 1; i >= 0 && (list[i].t || 0) > since; i--) c++;
     return c;
   }
 
-  // ---------- solver in a background worker ----------
-  // A worker that fails (it can't start, e.g. a page that blocks workers, or it dies) never
-  // answers again, so from then on the solver runs on the page. A crash usually comes while the
-  // newest decision is still open, so that one is solved on the page; older ones only get an
-  // error. A job unanswered for 30 s counts as a hung worker (its decision is long over).
-  var worker = null, pending = {}, nextId = 1, JOB_LIMIT_MS = 30000;
-  function onPage(input, res) {
-    setTimeout(function () {
-      try { res({ ok: true, result: slim(PokerEngine.analyzeSync(input)) }); }
-      catch (err) { res({ ok: false, error: String(err && err.message || err) }); }
-    }, 30);
+  // ---------- solver: the computer's full solve, on the phone's cores ----------
+  // As the computer's offscreen pool (extension/offscreen.js), with what a phone has: WORKERS Web Workers (iOS Safari
+  // reports 2 cores, so 2; up to 3 elsewhere), each running a share of the Monte Carlo (`partial`), and on turns the
+  // first TURN_SOLVERS of them the turn solve; then one final pass on the first worker adds the shares up, takes the
+  // turn solve and runs the preflop and river solvers. Budgets are the computer's (POWER x the old phone budget: 24x
+  // Monte Carlo, 8x plan samples, 16x river and 4x preflop iterations), with time limits for a slower machine: the
+  // Monte Carlo stops at mcMs (never below the old phone budget), the turn solve gets turnMs (the computer's is 1-1.5 s
+  // on each of its workers; 100 iterations pick the 1,600-iteration action 97% of the time), and the preflop solve
+  // PREFLOP_MS for the computer's 1,200 iterations. Marwin (27 Nov): up to about 10 s a decision is fine.
+  // One turn solve, not one per worker: a turn solve takes about 250-300 MB, and the page with its workers shares
+  // Safari's limit of about 1.5 GB (over it, iOS reloads the page). Logged turn spots, one 5 s solve (median 480
+  // iterations in the cloud sandbox) against the computer's 8 x 1.5 s: 30 of 30 picks the same; two solves 68 of 70.
+  var POWER = { mc: 24, plan: 8, river: 16, preflop: 4 };
+  var WORKERS = Math.max(2, Math.min(3, ((W.navigator && W.navigator.hardwareConcurrency) || 2) - 1));
+  var MC_MS = 7000, PREFLOP_MS = 3000, TURN_SOLVERS = 1;
+  function turnMs(input) { return input.timeLeftMs > 0 ? Math.max(2000, Math.min(5000, 0.25 * input.timeLeftMs)) : 5000; }
+  function mcMs(input) { return input.timeLeftMs > 0 ? Math.max(2500, Math.min(MC_MS, 0.35 * input.timeLeftMs)) : MC_MS; }
+  // A job unanswered for 30 s counts as a hung worker (its decision is long over): the worker is replaced.
+  var JOB_LIMIT_MS = 30000;
+  var SUPERSEDED = { ok: false, superseded: true, error: 'A newer decision replaced this one.' };
+  // The worker's side: a Monte Carlo share stops at its time limit once it has its floor; the final pass is analyzeSync.
+  function workerMain() {
+    self.onmessage = function (e) {
+      var d = e.data, t0 = Date.now();
+      try {
+        if (d.mode === 'partial') {
+          var a = PokerEngine.createAnalysis(d.input), stop = d.mcMs > 0 ? t0 + d.mcMs : Infinity, floor = d.floor || 0, f = 0;
+          while (a.target > 0) {
+            f = a.step(5000);
+            if (f >= 1 || (Date.now() > stop && f * a.target >= floor)) break;
+          }
+          self.postMessage({ id: d.id, ok: true, partial: a.partial(), solved: a.solvedOut(), n: Math.round(Math.min(1, f || 0) * a.target), ms: Date.now() - t0, kernels: PokerEngine.kernelsActive() });
+        } else {
+          var r = PokerEngine.analyzeSync(d.input);
+          self.postMessage({ id: d.id, ok: true, result: slim(r), ms: Date.now() - t0, kernels: PokerEngine.kernelsActive() });
+        }
+      } catch (err) {
+        self.postMessage({ id: d.id, ok: false, error: String((err && err.message) || err) });
+      }
+    };
   }
-  function workerFailed(hung) {
-    if (worker) { try { worker.terminate(); } catch (e) { /* gone */ } }
-    worker = null;
-    var owed = pending; pending = {};
-    var ids = Object.keys(owed).map(Number).sort(function (a, b) { return a - b; });
-    ids.forEach(function (id, i) {
-      clearTimeout(owed[id].timer);
-      if (!hung && i === ids.length - 1) onPage(owed[id].input, owed[id].res);
-      else owed[id].res({ ok: false, error: 'The solver stopped answering. It runs on the page from now on.' });
+  var blobUrl = null, slots = [], nextId = 1, crashes = [];
+  function startWorker(slot) {
+    var w = new Worker(blobUrl);
+    slot.w = w; slot.jobs = {};
+    w.onmessage = function (e) {
+      if (slot.w !== w) return;
+      var job = slot.jobs[e.data.id];
+      if (!job) return;
+      delete slot.jobs[e.data.id];
+      clearTimeout(job.timer);
+      job.res(e.data);
+    };
+    w.onerror = function (e) {
+      if (e && e.preventDefault) e.preventDefault();
+      if (slot.w !== w) return;
+      // Workers that keep dying (a page that blocks them, or the phone out of memory): from the third crash in a minute
+      // the solver runs on the page, at the old phone budget.
+      var now = Date.now();
+      crashes = crashes.filter(function (t) { return now - t < 60000; }).concat(now);
+      if (crashes.length >= 3) { dropPool('The solver workers kept stopping, so the solver runs on the page (smaller budget) from now on.'); return; }
+      restart(slot, { ok: false, error: 'A solver worker stopped. It has been restarted.' });
+    };
+  }
+  // Replace a slot's worker; its unanswered jobs get `answer`.
+  function restart(slot, answer) {
+    try { slot.w.terminate(); } catch (e) { /* gone */ }
+    var jobs = slot.jobs;
+    slot.jobs = {};
+    try { startWorker(slot); } catch (e) { dropPool('The solver workers could not be restarted, so the solver runs on the page (smaller budget) from now on.'); }
+    Object.keys(jobs).forEach(function (k) { clearTimeout(jobs[k].timer); jobs[k].res(Object.assign({}, answer)); });
+  }
+  var poolNote = '';
+  function dropPool(why) {
+    var old = slots;
+    slots = [];
+    poolNote = why;
+    old.forEach(function (slot) {
+      try { slot.w.terminate(); } catch (e) { /* gone */ }
+      Object.keys(slot.jobs || {}).forEach(function (k) { clearTimeout(slot.jobs[k].timer); slot.jobs[k].res({ ok: false, error: why }); });
+    });
+  }
+  function run(slot, payload, owner) {
+    return new Promise(function (res) {
+      if (!slot.w) { res({ ok: false, error: 'No solver worker.' }); return; }
+      var id = nextId++;
+      var timer = setTimeout(function () { if (slot.jobs[id]) restart(slot, { ok: false, error: 'The solver took too long and was restarted.' }); }, JOB_LIMIT_MS);
+      slot.jobs[id] = { res: res, timer: timer, owner: owner };
+      slot.w.postMessage(Object.assign({ id: id }, payload));
     });
   }
   try {
-    var src = '(' + ENGINE.toString() + ')();\n' + slim.toString() +
-      '\nself.onmessage=function(e){try{var t0=Date.now();var r=PokerEngine.analyzeSync(e.data.input);' +
-      'self.postMessage({id:e.data.id,ok:true,result:slim(r),ms:Date.now()-t0})}catch(err){' +
-      'self.postMessage({id:e.data.id,ok:false,error:String(err&&err.message||err)})}};';
-    worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-    worker.onmessage = function (e) { var job = pending[e.data.id]; delete pending[e.data.id]; if (job) { clearTimeout(job.timer); job.res(e.data); } };
-    worker.onerror = function (e) { if (e && e.preventDefault) e.preventDefault(); workerFailed(false); };
-  } catch (e) { worker = null; }
+    var src = '(' + ENGINE.toString() + ')();\n' + slim.toString() + '\n(' + workerMain.toString() + ')();';
+    blobUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    for (var wi = 0; wi < WORKERS; wi++) { var slot = {}; startWorker(slot); slots.push(slot); }
+  } catch (e) { slots = []; poolNote = 'Solver workers are blocked here, so the solver runs on the page (smaller budget).'; }
 
-  function analyze(input) {
+  // The decision still being solved. A new one replaces it (hero acted, or the spot changed), and so do the end of
+  // hero's turn and of the hand: a solve can't be interrupted, so the workers still busy with it are replaced and
+  // the next decision starts at once instead of waiting behind it.
+  var running = null;
+  function cancelRunning() {
+    var req = running;
+    if (!req) return;
+    running = null;
+    req.cancelled = true;
+    slots.forEach(function (slot) {
+      var ks = Object.keys(slot.jobs);
+      if (ks.length && ks.every(function (k) { return slot.jobs[k].owner === req; })) restart(slot, SUPERSEDED);
+    });
+  }
+  // Last resort without workers: the old phone budget on the page (the table stutters while it runs).
+  function onPage(input) {
     return new Promise(function (res) {
-      if (worker) {
-        var id = nextId++;
-        pending[id] = { res: res, input: input, timer: setTimeout(function () { if (pending[id]) workerFailed(true); }, JOB_LIMIT_MS) };
-        worker.postMessage({ id: id, input: input });
-        return;
-      }
-      onPage(input, res);
+      setTimeout(function () {
+        var t0 = Date.now();
+        try { res({ ok: true, result: slim(PokerEngine.analyzeSync(input)), ms: Date.now() - t0, workers: 0 }); }
+        catch (err) { res({ ok: false, error: String((err && err.message) || err) }); }
+      }, 30);
+    });
+  }
+  function analyze(input) {
+    cancelRunning();
+    if (!slots.length) return onPage(input);
+    var req = { cancelled: false }, t0 = Date.now(), pool = slots.slice(), K = pool.length;
+    running = req;
+    var solver = null;
+    try { solver = PokerEngine.solvableSpot(Object.assign({ flopSolver: false }, input)); } catch (e) { solver = null; }
+    // When a solver decides, the Monte Carlo only feeds the equity readout, so a small share does.
+    var base = input.iterations || 24000, total = base * POWER.mc;
+    var per = solver ? 3000 : Math.ceil(total / K), floor = solver ? 3000 : Math.ceil(base / K);
+    var planSamples = 500 * POWER.plan, turn = solver === 'turn';
+    var shareMs = mcMs(input), tMs = turnMs(input);
+    var finish = function (r) { if (running === req) running = null; return r; };
+    return Promise.all(pool.map(function (slot, i) {
+      return run(slot, {
+        mode: 'partial', mcMs: shareMs, floor: floor,
+        input: Object.assign({}, input, {
+          partial: true, iterations: per, planSamples: planSamples, riverSolver: false, preflopSolver: false,
+          turnSolver: turn && i < TURN_SOLVERS, turnTimeMs: tMs, turnIterations: 20000, flopSolver: false,
+          seed: ((input.seed >>> 0) + i * 2654435761) >>> 0
+        })
+      }, req);
+    })).then(function (parts) {
+      if (req.cancelled) return Object.assign({}, SUPERSEDED);
+      var bad = parts.filter(function (p) { return !p || !p.ok; })[0];
+      if (bad) return finish(bad);
+      var solvedMerge = parts.map(function (p) { return p.solved; }).filter(Boolean);
+      return run(pool[0], {
+        mode: 'final',
+        input: Object.assign({}, input, {
+          merge: parts.map(function (p) { return p.partial; }), planSamples: planSamples, solvedMerge: solvedMerge.length ? solvedMerge : undefined,
+          riverIterations: (input.riverIterations || 250) * POWER.river,
+          preflopIterations: 300 * POWER.preflop, preflopTimeMs: PREFLOP_MS, power: true
+        })
+      }, req).then(function (fin) {
+        if (req.cancelled) return Object.assign({}, SUPERSEDED);
+        if (fin && fin.ok) {
+          fin.ms = Date.now() - t0; fin.workers = K;
+          fin.iterationsTotal = parts.reduce(function (s, p) { return s + (p.n || 0); }, 0);
+          fin.kernels = !!fin.kernels && parts.every(function (p) { return p.kernels; });
+        }
+        return finish(fin);
+      });
     });
   }
 
   // ---------- state ----------
   var narrow = Math.min(W.innerWidth, W.screen ? W.screen.width : 9999) < 640;
   var ui = Object.assign({ tableStyle: 'typical', x: null, y: null, expanded: !narrow, showOptions: !narrow }, load(UI_KEY) || {});
-  var tracker = new PatioTracker(load(DB_KEY) || { players: {} });
-  tracker.rawKeep = 60; // phone storage is shared with the game; export the hand log after each session
-  tracker.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle, tracker.poolTally()); };
-  tracker.predictor = PokerEngine.makePredictor(function () { return ui.tableStyle; }, function () { return tracker.poolTally(); });
-  tracker.fitVersion = PokerEngine.FIT_VERSION;
-  // Reads saved before v1.8.8 don't know who played together: learned from the stored hands.
-  tracker.learnSeats(tracker.db.history || []);
-  // Shows saved before v1.8.9 don't say whether hero was in the pot (the learned hero-pot tilt): filled in from the
-  // stored hands.
-  if (tracker.tagHeroPot(tracker.db.history || [])) save(DB_KEY, tracker.db);
-  // Shown all-in re-raises from hands stored before v1.8.27 (the per-player deep-shove read): filled in once.
-  if (!tracker.db.jamTagged) { tracker.tagJamShows(tracker.db.history || []); tracker.db.jamTagged = 1; save(DB_KEY, tracker.db); }
-  // Hands stored before v1.8.29 (the per-player reads of river bets after hero's check and of folds to hero's multiway
-  // bets): filled in once.
-  if (!tracker.db.cbTagged) { tracker.tagCheckBet(tracker.db.history || []); tracker.db.cbTagged = 1; save(DB_KEY, tracker.db); }
-  if (!tracker.db.mwTagged) { tracker.tagMwFolds(tracker.db.history || []); tracker.db.mwTagged = 1; save(DB_KEY, tracker.db); }
-  // Shows saved before v1.8.36 (whether they reached a showdown, for the read of river bets after hero's check): once.
-  if (!tracker.db.sdTagged) { tracker.tagShowdown(tracker.db.history || []); tracker.db.sdTagged = 1; save(DB_KEY, tracker.db); }
-  // Answers to raises after the flop (tally.vsRaise, v1.8.44) from hands stored before: once.
-  if (!tracker.db.vrTagged) { tracker.tagVsRaise(tracker.db.history || []); tracker.db.vrTagged = 1; save(DB_KEY, tracker.db); }
-  // Chances to bet after the flop (tally.betRecent, v1.8.45) from hands stored before: once.
-  if (!tracker.db.brTagged) { tracker.tagBetRecent(tracker.db.history || []); tracker.db.brTagged = 1; save(DB_KEY, tracker.db); }
-  if (!tracker.db.prTagged) { tracker.tagPfRecent(tracker.db.history || []); tracker.db.prTagged = 1; save(DB_KEY, tracker.db); }
-  // Shows saved before v1.8.46 carry no time (linked reads keep a player's newest shows by it): once.
-  if (!tracker.db.stTagged) { tracker.tagShowTimes(tracker.db.history || []); tracker.db.stTagged = 1; save(DB_KEY, tracker.db); }
-  var linkNote = '';
+  ui.showLog = false; ui.showReads = false;
+  var tracker = null;
+  var linkNote = '', readsNote = '', logNote = '', busy = '';
+  var pendingReads = null; // a reads file picked in Import, waiting for "Replace reads"
+  var ready = null; // a file made by Hand log or Export reads, waiting for a tap on Save (iOS wants a tap for a download)
+  var logView = null; // { times, mark } while the Hand log list is open
   var status = 'Connecting to the table…';
-  var advice = null, thinking = false, blocked = false, reqId = 0;
+  var advice = null, thinking = false, thinkStart = 0, blocked = false, reqId = 0;
   // Socket watchdog (see the hook below): 'nosocket' | 'silent' | null.
   var hookProblem = null;
   var HOOK_MSG = {
     nosocket: 'Can’t find the game’s connection, so there is no advice. Poker Patio may have changed: Patio Solver needs an update.',
     silent: 'The table is moving but no game events arrive, so there is no advice. Poker Patio may have changed: Patio Solver needs an update.'
   };
-
   // ---------- formatting ----------
   function money(x) { return '$' + Math.round(x).toLocaleString('en-US'); }
   function pct(x) { return x == null ? '–' : Math.round(x * 100) + '%'; }
@@ -222,11 +407,16 @@ function slim(r) {
     '.ask{border-radius:10px;padding:8px 10px;background:rgba(255,204,51,.12);border:1px solid rgba(255,204,51,.35);font-size:13px}.ask .row{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}' +
     '.lk{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0;border-top:1px solid rgba(255,255,255,.06);font-size:13px}.lk select{max-width:200px}' +
     '.btn,select{background:rgba(255,255,255,.1);color:inherit;border:0;border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}select option{color:#111}' +
+    '.row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.file{border-radius:10px;padding:8px 10px;background:rgba(108,184,255,.1);border:1px solid rgba(108,184,255,.3);font-size:13px;word-break:break-all}' +
+    '.btn{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;text-decoration:none;cursor:pointer}.btn,select{min-height:34px}' +
     '.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;margin-right:6px;vertical-align:-1px}@keyframes s{to{transform:rotate(360deg)}}' +
     '</style>' +
-    '<div class="panel"><div class="bar"><span class="dot"></span><div class="main"></div><button class="chev" data-a="toggle">▾</button></div><div class="bd"></div></div>';
+    '<div class="panel"><div class="bar"><span class="dot"></span><div class="main"></div><button class="chev" data-a="toggle">▾</button></div><div class="bd"></div>' +
+    // One file input for Import, outside the part that re-renders, so a pick still arrives if the panel redraws while
+    // the picker is open; the Import button is a <label> for it (no script click, which iOS can refuse).
+    '<input type="file" id="ps-file" multiple tabindex="-1" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0"></div>';
   var panel = root.querySelector('.panel'), bar = root.querySelector('.bar'), mainEl = root.querySelector('.main'),
-    body = root.querySelector('.bd'), dot = root.querySelector('.dot'), chev = root.querySelector('.chev');
+    body = root.querySelector('.bd'), dot = root.querySelector('.dot'), chev = root.querySelector('.chev'), fileIn = root.querySelector('#ps-file');
 
   function place() {
     var w = panel.offsetWidth || 340;
@@ -255,7 +445,7 @@ function slim(r) {
     });
     bar.addEventListener('pointerup', function () {
       if (!down) return; down = false;
-      if (moved) save(UI_KEY, ui); else { ui.expanded = !ui.expanded; save(UI_KEY, ui); render(); }
+      if (moved) saveUi(); else { ui.expanded = !ui.expanded; saveUi(); render(); }
     });
   })();
 
@@ -263,18 +453,30 @@ function slim(r) {
     var a = e.target.closest('[data-a]');
     if (!a) return;
     var what = a.getAttribute('data-a');
-    if (what === 'toggle') { ui.expanded = !ui.expanded; save(UI_KEY, ui); render(); }
-    else if (what === 'opts') { ui.showOptions = !ui.showOptions; save(UI_KEY, ui); render(); }
+    if (what === 'toggle') { ui.expanded = !ui.expanded; saveUi(); render(); }
+    else if (what === 'opts') { ui.showOptions = !ui.showOptions; saveUi(); render(); }
     else if (what === 'log') {
-      var hands = tracker.db.history || [];
-      // One hand per line (as the computer's export): about 40% smaller than indenting every field.
-      var text = '[\n' + hands.map(function (h) { return JSON.stringify(h); }).join(',\n') + '\n]\n';
-      var url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-      if (hands.length) { ui.loggedAt = hands[hands.length - 1].t || Date.now(); save(UI_KEY, ui); render(); }
-      var link = document.createElement('a');
-      link.href = url; link.download = 'patio-hand-log.json';
-      root.appendChild(link); link.click(); link.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+      ui.showLog = !ui.showLog; ui.showReads = false; logNote = ''; setReady(null);
+      if (ui.showLog) refreshLog(); else render();
+    }
+    else if (what === 'logNew' || what === 'logAll') exportLog(what);
+    else if (what === 'logSession') exportLog(what, +a.getAttribute('data-from'), +a.getAttribute('data-to'));
+    else if (what === 'reads') { ui.showReads = !ui.showReads; ui.showLog = false; readsNote = ''; setReady(null); render(); }
+    else if (what === 'exportReads') exportReads();
+    else if (what === 'replaceReads') replaceReads();
+    else if (what === 'cancelReads') { pendingReads = null; readsNote = 'Kept the reads on this phone as they were.'; render(); }
+    else if (what === 'saveFile') {
+      // The <a download> link does the saving; this only notes it (and moves the hand log's export mark).
+      if (ready) setTimeout(fileSaved, 0);
+    }
+    else if (what === 'shareFile') {
+      e.preventDefault();
+      if (!ready) return;
+      var f = ready;
+      try {
+        W.navigator.share({ files: [new File([f.blob], f.name, { type: 'application/json' })], title: f.name })
+          .then(fileSaved, function (err) { if (err && err.name !== 'AbortError') { f.note = 'Sharing failed (' + (err.message || err.name) + '). Use Save to Files.'; render(); } });
+      } catch (err) { f.note = 'Sharing isn\'t available here. Use Save to Files.'; render(); }
     }
     else if (what === 'reset') {
       if (a.getAttribute('data-c') !== '1') {
@@ -284,9 +486,10 @@ function slim(r) {
       }
       // The reads start over; the hand log stays.
       tracker.db = { players: {}, history: tracker.db.history || [] }; tracker.linkAsks = null; tracker.whoAsks = null; tracker.learnSeats(tracker.db.history);
-      save(DB_KEY, tracker.db); render();
+      readsNote = 'Reads reset. The hand log stays.';
+      saveDb(true); render();
     }
-    else if (what === 'links') { ui.showLinks = !ui.showLinks; linkNote = ''; save(UI_KEY, ui); render(); }
+    else if (what === 'links') { ui.showLinks = !ui.showLinks; linkNote = ''; saveUi(); render(); }
     else if (what === 'whoNew') {
       // "Who is this?" answered "Someone new": not asked about that account again.
       var nid = a.getAttribute('data-id'), nname = tracker.namesOf(nid)[0] || 'That player';
@@ -311,7 +514,7 @@ function slim(r) {
   });
   // A link changes the reads: advice on the table now was built from the old ones.
   function afterLink() {
-    save(DB_KEY, tracker.db);
+    saveDb(true);
     if (advice && !advice.stale) requestAdvice(); else render();
   }
   root.addEventListener('change', function (e) {
@@ -321,7 +524,7 @@ function slim(r) {
       linkNote = res.ok ? 'Reads joined: ' + res.info.names.join(' / ') + ', ' + handsTxt(res.info.hands) + '.' : res.error;
       afterLink();
     } else if (e.target.matches('select')) {
-      ui.tableStyle = e.target.value; save(UI_KEY, ui);
+      ui.tableStyle = e.target.value; saveUi();
       if (advice && !advice.stale) requestAdvice(); else render();
     }
   });
@@ -449,8 +652,9 @@ function slim(r) {
   }
 
   function render() {
+    if (!tracker) { mainEl.innerHTML = '<span class="act idle">Loading reads…</span>'; body.style.display = 'none'; place(); return; }
     var fresh = advice && !advice.stale;
-    var logDue = unexported() >= LOG_REMIND;
+    var logDue = unexported() >= (legacy ? 50 : LOG_REMIND);
     var asking = tracker.linkAsks && Object.keys(tracker.linkAsks).length;
     var askingWho = !asking && tracker.whoAsks && Object.keys(tracker.whoAsks).length;
     var logBadge = !fresh && !thinking ? (asking ? '<span class="badge">same player?</span>' : askingWho ? '<span class="badge">who is this?</span>' : '') + (logDue ? '<span class="badge">export log</span>' : '') : '';
@@ -460,7 +664,7 @@ function slim(r) {
 
     // Bar
     if (blocked) mainEl.innerHTML = '<span class="act idle">' + (status === WAIT_MSG ? 'Waiting for the table' : 'Off at public tables') + '</span>';
-    else if (thinking && !fresh) mainEl.innerHTML = '<span class="act idle"><span class="spin"></span>Thinking…</span>';
+    else if (thinking && !fresh) mainEl.innerHTML = '<span class="act idle"><span class="spin"></span>Thinking… <span class="secs">' + thinkSecs() + '</span></span>';
     else if (advice) {
       var b = advice.result.best;
       mainEl.innerHTML = '<span class="act ' + tone(b) + '">' + actionHtml(b, advice.ctx.heroStageBet, advice.result.toCall) + '</span>' +
@@ -490,6 +694,7 @@ function slim(r) {
       kv.push(['Position', r.inPosition ? 'In position' : 'Out of position']);
       if (r.lookahead) kv.push(['Plans ahead', r.street === 3 ? 'Turn and river' : 'River']);
       if (r.solver) kv.push([{ preflop: 'Preflop solve', turn: 'Turn + river solve', river: 'River solve' }[r.solver.kind] || 'Solve', r.solver.field ? 'Your range vs the field' : 'Your range vs theirs']);
+      if (advice.ms != null) kv.push(['Thinking', (advice.ms / 1000).toFixed(1) + ' s ' + (advice.workers ? 'on ' + advice.workers + ' workers' : 'on the page')]);
       if (best.foldPct > 0.02 && (best.kind === 'bet' || best.kind === 'raise' || best.kind === 'allin')) kv.push(['They fold to this', pct(best.foldPct)]);
       html += '<div class="kv">' + kv.map(function (p) { return '<span>' + p[0] + '</span><span>' + p[1] + '</span>'; }).join('') + '</div>';
       html += '<div><div class="sec" data-a="opts">All options ' + (ui.showOptions ? '▾' : '▸') + '</div>';
@@ -517,14 +722,25 @@ function slim(r) {
     var n = tracker.readGroups().length;
     html += '<div class="ft"><select>' + ['tight', 'typical', 'loose'].map(function (s) {
       return '<option value="' + s + '"' + (ui.tableStyle === s ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + ' table</option>';
-    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="links">Link reads</button> <button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reset">Reset reads</button></div>';
+    }).join('') + '</select><span style="flex:1"></span><button class="btn" data-a="links">Link reads</button> <button class="btn" data-a="log">Hand log</button> <button class="btn" data-a="reads">Reads file</button></div>';
+    if (ui.showLog) html += logSectionHtml();
+    if (ui.showReads) html += readsSectionHtml();
     html += '<div class="muted">Tracking ' + n + ' player' + (n === 1 ? '' : 's') + '. Reads sharpen as hands pile up.</div>';
     if (sizing.small) html += '<div class="muted">Bets this session under ' + Math.round(SMALL_SIZE * 100) + '% of the advised size: ' + sizing.small + ' of ' + sizing.n + '.</div>';
-    if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log to keep them: this phone keeps the newest 150 hands, with raw events for 60.</div>';
-    if (saveError) html += '<div class="status neg">Couldn\'t save reads: ' + esc(saveError) + '. The page\'s storage may be full; export the hand log.</div>';
+    if (logDue) html += '<div class="status neg">' + unexported() + ' hands since the last Hand log export. Tap Hand log, then New hands, to keep them' + (legacy ? ': this phone keeps the newest 150 hands, with raw events for 60.' : '.') + '</div>';
+    if (saveError) html += '<div class="status neg">Couldn\'t save reads and the hand log: ' + esc(saveError) + '.</div>';
+    if (poolNote) html += '<div class="status neg">' + esc(poolNote) + '</div>';
+    if (VERSION) html += '<div class="muted">Patio Solver ' + esc(VERSION) + (legacy ? ' · reads in page storage' : '') + '</div>';
     body.innerHTML = html;
+    // A confirm or a file that just appeared may sit below the fold of the scrolling panel: bring it into view.
+    if (reveal) {
+      reveal = false;
+      var el = body.querySelector('.ask.pin, .file');
+      if (el) { var top = el.offsetTop - body.offsetTop; body.scrollTop = Math.max(0, Math.min(top - 8, top + el.offsetHeight + 12 - body.clientHeight)); }
+    }
     place();
   }
+  var reveal = false;
 
   // Bets and raises well under the advised size (the tracker's sizeRatio), as on the computer's panel.
   var SMALL_SIZE = 0.6, sizing = { n: 0, small: 0, note: null }, sizeSeen = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
@@ -543,34 +759,278 @@ function slim(r) {
   }
 
   // ---------- solver ----------
-  function requestAdvice() {
+  // Only the full solve is shown, as on the computer: if you act before it is back, nothing is shown or logged for
+  // that decision.
+  function note(a) {
+    if (!a || a.noted) return;
+    a.noted = true;
+    var r = a.result, c = a.ctx;
+    tracker.noteAdvice(actionText(r.best, c.heroStageBet, r.toCall), r.best.ev || 0, r, function (sc) { return actionText(sc, c.heroStageBet, r.toCall); });
+  }
+  // Hero's turn (when it started and the game's clock then), so a re-solve after a link or a table-style change gets
+  // the time that is left.
+  var lastTurn = null;
+  function timeLeft() { return lastTurn && lastTurn.left > 0 ? Math.max(1, lastTurn.left - (Date.now() - lastTurn.at)) : 0; }
+  function thinkSecs() { return thinkStart ? Math.floor((Date.now() - thinkStart) / 1000) + ' s' : ''; }
+  // The bar counts the seconds while the solve runs (up to about 10 s on a phone).
+  setInterval(function () {
+    if (!thinking) return;
+    var el = mainEl.querySelector('.secs');
+    if (el) el.textContent = thinkSecs();
+  }, 500);
+  function requestAdvice(timeLeftMs) {
+    if (!tracker) return;
+    if (timeLeftMs === undefined) timeLeftMs = timeLeft();
     var built = tracker.solverInput(ui.tableStyle);
     if (built.error) { status = built.error; render(); return; }
     var id = ++reqId;
-    thinking = true;
+    thinking = true; thinkStart = Date.now();
     sizing.note = null;
     if (advice) advice.stale = true;
     render();
-    analyze(built.input).then(function (res) {
+    var input = timeLeftMs > 0 ? Object.assign({}, built.input, { timeLeftMs: timeLeftMs }) : built.input;
+    analyze(input).then(function (res) {
       if (id !== reqId) return;
       thinking = false;
+      if (res && res.superseded) { render(); return; }
       if (!res || !res.ok) { status = 'Solver error: ' + (res && res.error); advice = null; render(); return; }
-      advice = { result: res.result, ctx: built, stale: false };
-      tracker.noteAdvice(actionText(res.result.best, built.heroStageBet, res.result.toCall), res.result.best.ev || 0, res.result, function (sc) { return actionText(sc, built.heroStageBet, res.result.toCall); });
+      advice = { result: res.result, ctx: built, stale: false, ms: res.ms, workers: res.workers };
+      note(advice);
       render();
     });
   }
 
-  tracker.on(function (type, p) {
-    if (type === 'save') save(DB_KEY, tracker.db);
-    else if (type === 'hand') { advice = null; thinking = false; reqId++; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }
-    else if (type === 'handEnd') { if (advice) advice.stale = true; thinking = false; reqId++; status = 'Hand over. Waiting for the next one…'; render(); }
-    else if (type === 'turn') {
-      if (p.isHero) requestAdvice();
-      else if (advice && !advice.stale) { advice.stale = true; render(); }
-    } else if (type === 'heroDone') { reqId++; thinking = false; if (advice) advice.stale = true; render(); }
-    else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
-    else if (type === 'linkAsk' || type === 'whoAsk') render();
+  // ---------- files ----------
+  // A file made by "Hand log" or "Export reads" waits on the panel for a tap on "Save to Files" (a real link: iOS
+  // Safari only downloads from a tap) or "Share…" (AirDrop, Messages, Files).
+  function setReady(f) {
+    if (ready && ready.url) { var old = ready.url; setTimeout(function () { URL.revokeObjectURL(old); }, 60000); }
+    ready = f;
+    if (f) reveal = true;
+  }
+  function prepareFile(name, text, meta) {
+    var blob = new Blob([text], { type: 'application/json' });
+    setReady(Object.assign({ name: name, blob: blob, url: URL.createObjectURL(blob), size: blob.size }, meta || {}));
+  }
+  var shareOk = null;
+  function canShare() {
+    if (shareOk == null) {
+      try { shareOk = !!(W.navigator.share && W.navigator.canShare && W.navigator.canShare({ files: [new File(['{}'], 'x.json', { type: 'application/json' })] })); }
+      catch (e) { shareOk = false; }
+    }
+    return shareOk;
+  }
+  function sizeTxt(b) { return b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB'; }
+  function fileHtml() {
+    var f = ready;
+    return '<div class="file"><b>' + esc(f.name) + '</b> (' + sizeTxt(f.size) + (f.hands ? ', ' + handsTxt(f.hands.length) : f.info ? ', ' + f.info.players + ' players' : '') + ')' +
+      (f.done ? '' : ' is ready.') +
+      '<div class="row"><a class="btn" data-a="saveFile" href="' + f.url + '" download="' + esc(f.name) + '">Save to Files</a>' +
+      (canShare() ? '<button class="btn" data-a="shareFile">Share…</button>' : '') + '</div>' +
+      (f.note ? '<div class="status neg">' + esc(f.note) + '</div>' : '') +
+      (f.done ? '<div class="muted">' + esc(f.done) + '</div>' : '') + '</div>';
+  }
+  function fileSaved() {
+    var f = ready;
+    if (!f || f.saved) return;
+    f.saved = true;
+    if (f.kind === 'log') {
+      (f.partial ? Promise.resolve(null) : moveMark(f.hands, f.from)).then(function (mark) {
+        var last = f.hands[f.hands.length - 1].t;
+        var newest = logView && logView.times && logView.times.length ? logView.times[logView.times.length - 1] : last;
+        var extra = !f.partial && (!f.session || last === newest) && !(mark >= last) ? ' The last hand will be in the next export too, in case its result or shown cards still come in.' : '';
+        f.done = 'Saved: ' + handsTxt(f.hands.length) + '.' + extra;
+        refreshLog();
+      }, function () { render(); });
+    } else {
+      f.done = 'On the computer: tap Import on the panel and pick this file.';
+      render();
+    }
+  }
+  function readText(f) {
+    if (f.text) return f.text();
+    return new Promise(function (res, rej) {
+      var r = new FileReader();
+      r.onload = function () { res(r.result); };
+      r.onerror = function () { rej(r.error); };
+      r.readAsText(f);
+    });
+  }
+
+  // ---------- hand log ----------
+  // As on the computer: "Hand log" lists New hands (since the export mark, handlog.js nextMark), the newest sessions,
+  // and Everything. The mark is kept under its own key, apart from the reads.
+  var logMark = null;
+  function markOf(m) { return m && typeof m.to === 'number' ? m.to : null; }
+  function memHands(from, to) { return (tracker.db.history || []).filter(function (e) { return e.t > from && e.t <= to; }); }
+  function storedTimes() {
+    if (!handLog) return Promise.resolve((tracker.db.history || []).map(function (e) { return e.t || 0; }).sort(function (a, b) { return a - b; }));
+    return handLog.times(tracker.db).catch(function () { return null; });
+  }
+  function refreshLog() {
+    if (!tracker) return;
+    storedTimes().then(function (times) { logView = times ? { times: times } : { error: true }; render(); });
+  }
+  // Moves the mark past the hands just exported or imported, as far as they cover every hand.
+  function moveMark(entries, from) {
+    return storedTimes().then(function (times) {
+      if (!times) return logMark;
+      var to = PatioHandLog.nextMark(logMark, times, entries, Date.now(), from);
+      if (to != null && to !== logMark) { logMark = to; storeSet(MARK_KEY, { to: to, at: Date.now() }); }
+      return to;
+    });
+  }
+  function exportLog(what, from, to) {
+    if (!tracker || busy) return;
+    busy = 'log'; logNote = 'Preparing the file…'; setReady(null); render();
+    if (what !== 'logSession') { from = what === 'logNew' && logMark != null ? logMark : -Infinity; to = Infinity; }
+    (handLog ? handLog.exportRange(tracker.db, from, to).catch(function () { return null; }) : Promise.resolve(memHands(from, to))).then(function (hands) {
+      var partial = false;
+      if (!hands) { hands = memHands(from, to); partial = true; }
+      // Hands left out of the reads go out marked, so the log tools leave them out too (test/merge-logs.js).
+      var isOut = PatioTracker.leftOutTest(tracker.db.leftOut);
+      hands = hands.map(function (e) { return isOut(e) && !e.excluded ? Object.assign({}, e, { excluded: true }) : e; });
+      if (!hands.length) { logNote = 'No hands to export.'; return; }
+      prepareFile(PatioHandLog.fileName(hands), PatioHandLog.toFile(hands), {
+        kind: 'log', from: from, partial: partial, session: what === 'logSession',
+        hands: hands.map(function (e) { return { t: e.t, net: e.net }; }),
+        note: partial ? 'The stored hands couldn\'t be read, so this has only the newest 150.' : ''
+      });
+      logNote = '';
+    }).catch(function (e) { logNote = 'Export failed: ' + ((e && e.message) || e); }).then(function () { busy = ''; render(); });
+  }
+  var when = function (t) { return new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
+  var hhmm = function (t) { return new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); };
+  function logSectionHtml() {
+    var html = '<div><div class="sec">Hand log</div>';
+    if (!logView) return html + '<div class="muted">Reading the stored hands…</div></div>';
+    if (logView.error) return html + '<div class="status neg">The stored hands couldn\'t be read. Reload the page.</div></div>';
+    var times = logView.times, mark = logMark;
+    var fresh = mark == null ? times.length : times.filter(function (t) { return t > mark; }).length;
+    html += '<div class="muted">' + handsTxt(times.length) + ' stored on this phone (' + (handLog ? 'it keeps the newest ' + PatioHandLog.KEEP.toLocaleString('en-US') : 'this browser keeps the newest 150, with raw events for 60') + ').' +
+      (mark == null ? '' : ' Exported up to the hand at ' + esc(when(mark)) + '.') + '</div>';
+    html += '<div class="row">' + (fresh ? '<button class="btn" data-a="logNew">New hands (' + fresh + ')</button>' : '<span class="muted">No new hands since the last export.</span>') +
+      (times.length ? '<button class="btn" data-a="logAll">Everything (' + times.length + ')</button>' : '') + '</div>';
+    var ss = PatioHandLog.sessions(times).slice(-6).reverse();
+    if (ss.length) {
+      html += '<div class="sec" style="margin-top:6px">Sessions</div>';
+      ss.forEach(function (s) {
+        var end = day(s.from) === day(s.to) ? hhmm(s.to) : day(s.to) + ' ' + hhmm(s.to);
+        html += '<div class="lk"><span>' + esc(day(s.from) + ' ' + hhmm(s.from) + '–' + end) + ' · ' + handsTxt(s.n) + (mark != null && s.to <= mark ? ' · exported' : '') + '</span><span style="flex:1"></span>' +
+          '<button class="btn" data-a="logSession" data-from="' + (s.from - 1) + '" data-to="' + s.to + '">Export</button></div>';
+      });
+    }
+    if (ready && ready.kind === 'log') html += fileHtml();
+    if (logNote) html += '<div class="status' + (/failed|couldn't/.test(logNote) ? ' neg' : '') + '">' + esc(logNote) + '</div>';
+    return html + '</div>';
+  }
+
+  // ---------- reads files ----------
+  // "Export reads" makes a file of the reads alone (PatioTracker.readsFile); "Import" takes one from the computer's
+  // panel (Export reads there) and, after a tap on "Replace", puts its reads here in place of the phone's. Each side
+  // keeps its own reads otherwise. Import also takes hand-log exports, as the computer's does: their hands go into the
+  // hand log here and the reads are rebuilt from every stored hand.
+  function exportReads() {
+    if (!tracker) return;
+    var data = PatioTracker.readsFile(tracker.db, { from: 'phone', version: VERSION });
+    prepareFile(PatioTracker.readsFileName('phone'), JSON.stringify(data), { kind: 'reads', info: PatioTracker.readsInfo(tracker.db) });
+    readsNote = '';
+    render();
+  }
+  function importFiles(files) {
+    if (!tracker || busy || !files.length) return;
+    busy = 'import'; pendingReads = null; setReady(null); ui.showReads = true; ui.showLog = false;
+    readsNote = 'Reading ' + (files.length === 1 ? files[0].name : files.length + ' files') + '…'; render();
+    Promise.all(files.map(function (f) {
+      return readText(f).then(function (t) {
+        try { return { name: f.name, data: JSON.parse(t) }; } catch (e) { throw new Error(f.name + ' isn\'t a Patio Solver file (not JSON)'); }
+      });
+    })).then(function (got) {
+      var reads = got.filter(function (g) { return PatioTracker.readsFromFile(g.data); });
+      if (reads.length) {
+        if (got.length > 1) throw new Error('pick the reads file on its own');
+        pendingReads = Object.assign({ name: reads[0].name }, PatioTracker.readsFromFile(reads[0].data));
+        readsNote = ''; reveal = true;
+        return null;
+      }
+      return importHands(got);
+    }).catch(function (e) { readsNote = 'Import failed: ' + ((e && e.message) || e) + '.'; })
+      .then(function () { busy = ''; render(); });
+  }
+  function importHands(got) {
+    var list = [];
+    got.forEach(function (g) {
+      var d = g.data, l = Array.isArray(d) ? d : d && Array.isArray(d.history) ? d.history : null;
+      if (!l) throw new Error(g.name + ' is neither a reads file nor a hand-log export');
+      for (var i = 0; i < l.length; i++) list.push(l[i]);
+    });
+    if (!handLog) throw new Error('this browser can\'t store the full hand log, so only a reads file can be imported here');
+    var key = function (e) { return e.t + ':' + (e.hero || []).join(''); };
+    return handLog.exportAll(tracker.db).then(function (stored) {
+      var have = new Set(stored.map(key)), fresh = [];
+      list.forEach(function (e) { if (e && e.t != null && !have.has(key(e))) { have.add(key(e)); fresh.push(e); } });
+      return handLog.addHands(fresh).then(function (add) {
+        if (!add.ok) throw new Error(add.error || 'storage write failed');
+        // Names in logs without account ids map to the ids the reads here already use.
+        var known = {};
+        Object.keys(tracker.db.players).forEach(function (id) { var r = tracker.db.players[id]; if (r && r.name && id.slice(0, 5) !== 'name:') known[r.name] = tracker.canon(id); });
+        return PatioTracker.rebuildReads(stored.concat(fresh), {
+          known: known, heroAuth: tracker.snap && tracker.snap.heroAuthId, yieldEvery: 10, leftOut: tracker.db.leftOut,
+          same: tracker.db.same, notSame: tracker.db.notSame, linkLog: tracker.db.linkLog, setup: setupTracker,
+          onProgress: function (i, n) { readsNote = 'Rebuilding reads: ' + i + ' of ' + n + ' hands…'; render(); }
+        }).then(function (res) {
+          // A read built from more hands than the log still holds stays.
+          var kept = 0;
+          Object.keys(res.db.players).forEach(function (id) {
+            var cur = tracker.db.players[id], r = res.db.players[id];
+            if (cur && handsOfTally(cur) > handsOfTally(r) * 1.1 + 2) { kept++; return; }
+            tracker.db.players[id] = r;
+          });
+          tracker.absorbLinks(res.db);
+          return saveDb(true).then(function () { return moveMark(list).catch(function () { return null; }); }).then(function () {
+            if (ui.showLog) refreshLog();
+            readsNote = 'Imported ' + add.added + ' new hand' + (add.added === 1 ? '' : 's') + ' (' + (list.length - fresh.length) + ' already here). Reads rebuilt from ' + res.replayed + ' hands' +
+              (res.skipped ? '; ' + res.skipped + ' without raw events only went into the log' : '') + (res.leftOut ? '; ' + res.leftOut + ' you left out stay out' : '') +
+              (kept ? '; ' + kept + ' reads with more history kept as they were' : '') + '.';
+          });
+        });
+      });
+    });
+  }
+  function fromTxt(f) { return f === 'computer' ? 'the computer' : f === 'phone' ? 'a phone' : 'another device'; }
+  function replaceReads() {
+    var p = pendingReads;
+    if (!p || !tracker || busy) return;
+    pendingReads = null;
+    var history = tracker.db.history || [];
+    tracker.db = Object.assign({}, p.reads, { history: history });
+    tracker.linkAsks = null; tracker.whoAsks = null;
+    // Who sat together in the hands played here (two accounts in one hand are never one player).
+    tracker.learnSeats(history);
+    readsNote = 'Reads replaced with ' + fromTxt(p.from) + '\'s: ' + p.info.players + ' player' + (p.info.players === 1 ? '' : 's') + (p.info.last ? ', newest hand ' + when(p.info.last) : '') + '. The hand log here stays as it was.';
+    saveDb(true).then(function () { render(); });
+    if (advice && !advice.stale) requestAdvice(); else render();
+  }
+  function readsSectionHtml() {
+    var cur = PatioTracker.readsInfo(tracker.db), html = '<div><div class="sec">Reads file</div>';
+    html += '<div class="muted">' + cur.players + ' player' + (cur.players === 1 ? '' : 's') + ' on this phone' + (cur.linked ? ', ' + cur.linked + ' linked account' + (cur.linked === 1 ? '' : 's') : '') + (cur.last ? ', newest hand ' + esc(when(cur.last)) : '') + '.</div>';
+    html += '<div class="row"><button class="btn" data-a="exportReads">Export reads</button><label class="btn" for="ps-file">Import</label><button class="btn" data-a="reset">Reset reads</button></div>';
+    var p = pendingReads;
+    if (p) {
+      html += '<div class="ask pin"><b>' + esc(p.name) + '</b>: reads from ' + esc(fromTxt(p.from)) + (p.savedAt ? ', saved ' + esc(when(p.savedAt)) : '') + ': ' + p.info.players + ' player' + (p.info.players === 1 ? '' : 's') + (p.info.last ? ', newest hand ' + esc(when(p.info.last)) : '') + '.' +
+        '<br>This phone now: ' + cur.players + ' player' + (cur.players === 1 ? '' : 's') + (cur.last ? ', newest hand ' + esc(when(cur.last)) : '') + '.' +
+        (cur.players && cur.last > (p.info.last || 0) ? '<div class="neg">This phone has hands newer than the file. Replacing loses what they added to the reads (the hand log keeps them).</div>' : '') +
+        '<div class="row"><button class="btn" data-a="replaceReads">Replace this phone\'s reads</button><button class="btn" data-a="cancelReads">Cancel</button></div></div>';
+    }
+    if (ready && ready.kind === 'reads') html += fileHtml();
+    if (readsNote) html += '<div class="status' + (/failed/.test(readsNote) ? ' neg' : '') + '">' + esc(readsNote) + '</div>';
+    html += '<div class="muted">Export reads makes a file of these reads for the computer (Import on its panel). Import takes a reads file from the computer, which replaces the reads here, or hand-log exports, which go into this phone\'s hand log and rebuild the reads.</div>';
+    return html + '</div>';
+  }
+  fileIn.addEventListener('change', function () {
+    var files = fileIn.files ? [].slice.call(fileIn.files) : [];
+    fileIn.value = '';
+    if (files.length) importFiles(files);
   });
 
   // ---------- reading the game ----------
@@ -611,37 +1071,127 @@ function slim(r) {
     lastEventAt = Date.now(); sigMoves = 0;
     if (WANTED[ev] || (ev === 'chat_message' ? !!(data && data.msgType === 'game_log') : /^(game:|player:game:|admin:game:)/.test(ev))) onEvent(ev, data);
   }
-  setInterval(function () {
-    // Poker Patio's 3 Nov 2026 update moved the socket to GameManager.roomConnectionManager.socket
-    // (a new socket on every reconnect); before that it was GameManager.socket.
-    var gm = W.GameManager, rcm = gm && gm.roomConnectionManager;
-    var sock = (rcm && rcm.socket) || (gm && gm.socket);
-    if (!sock || sock === hooked || typeof sock.onAny !== 'function') return;
-    if (hooked && typeof hooked.offAny === 'function') hooked.offAny(onAnyEvent);
-    hooked = sock;
-    sock.onAny(onAnyEvent);
-    tracker.snap = snapshot();
-    if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
-    else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }
-    hookProblem = null;
+  // Starts once the reads are loaded (tracking starts at the next hand anyway).
+  function startHook() {
+    startedAt = Date.now();
+    setInterval(function () {
+      // Poker Patio's 3 Nov 2026 update moved the socket to GameManager.roomConnectionManager.socket
+      // (a new socket on every reconnect); before that it was GameManager.socket.
+      var gm = W.GameManager, rcm = gm && gm.roomConnectionManager;
+      var sock = (rcm && rcm.socket) || (gm && gm.socket);
+      if (!sock || sock === hooked || typeof sock.onAny !== 'function') return;
+      if (hooked && typeof hooked.offAny === 'function') hooked.offAny(onAnyEvent);
+      hooked = sock;
+      sock.onAny(onAnyEvent);
+      tracker.snap = snapshot();
+      if (tracker.snap.tableType !== 'private') { blocked = true; status = tracker.snap.tableType ? PUBLIC_MSG : WAIT_MSG; }
+      else if (!tracker.hand) { blocked = false; status = 'Connected. Advice starts next hand.'; }
+      hookProblem = null;
+      render();
+    }, 300);
+    // Watchdog, as in the extension's hook.js: a table on screen with no socket for noSocketMs ('nosocket'), or chips
+    // moving at least twice over silentMs with no socket event at all ('silent'). window.__patioSolverWatch shortens
+    // the waits on test pages.
+    setInterval(function () {
+      var gm = W.GameManager, cfg = W.__patioSolverWatch || {}, now = Date.now();
+      var noSocketMs = cfg.noSocketMs || 15000, silentMs = cfg.silentMs || 20000;
+      var ps = gm && gm.state && gm.state.players, table = !!(ps && ps.length), p = null;
+      if (table && !hooked && now - startedAt >= noSocketMs) p = 'nosocket';
+      if (table && hooked) {
+        var sig = ps.map(function (q) { return [q.id, q.stack, q.totalBetsMade, q.playState].join(':'); }).join('|');
+        if (lastSig != null && sig !== lastSig) { if (!sigMoves) firstMoveAt = now; sigMoves++; }
+        lastSig = sig;
+        if (sigMoves >= 2 && now - firstMoveAt >= silentMs && now - lastEventAt >= silentMs) p = 'silent';
+      }
+      if (p !== hookProblem && !(p && snapshot().tableType !== 'private')) { hookProblem = p; render(); }
+    }, 1000);
+  }
+
+  // ---------- start ----------
+  function setupTracker(t) {
+    t.scorer = function (show, tally) { return PokerEngine.scoreShow(show, tally, ui.tableStyle, t.poolTally()); };
+    t.predictor = PokerEngine.makePredictor(function () { return ui.tableStyle; }, function () { return t.poolTally(); });
+    t.fitVersion = PokerEngine.FIT_VERSION;
+  }
+  function wire() {
+    tracker.on(function (type, p) {
+      if (type === 'save') saveDb();
+      else if (type === 'hand') { cancelRunning(); advice = null; thinking = false; reqId++; lastTurn = null; sizing.note = null; status = 'New hand. Waiting for your turn…'; render(); }
+      else if (type === 'handEnd') {
+        cancelRunning(); if (advice) advice.stale = true; thinking = false; reqId++; lastTurn = null; status = 'Hand over. Waiting for the next one…';
+        if (ui.showLog) refreshLog(); else render();
+      } else if (type === 'turn') {
+        if (p.isHero) { lastTurn = { at: Date.now(), left: p.timeLeftMs || 0 }; requestAdvice(p.timeLeftMs || 0); }
+        else if (advice && !advice.stale) { advice.stale = true; render(); }
+      } else if (type === 'heroDone') { cancelRunning(); reqId++; thinking = false; lastTurn = null; if (advice) advice.stale = true; render(); }
+      else if (type === 'action' || type === 'street' || type === 'cards') { if (type === 'action') checkSize(); if (ui.expanded || (type === 'action' && sizing.note)) render(); }
+      else if (type === 'linkAsk' || type === 'whoAsk') render();
+    });
+  }
+  // Reads saved by older versions miss parts later reads count; each is filled in once from every stored hand
+  // (as on the computer's panel).
+  function retag() {
+    var d = tracker.db;
+    if (d.hpTagged && d.jamTagged && d.cbTagged && d.mwTagged && d.sdTagged && d.vrTagged && d.brTagged && d.stTagged && d.prTagged) return;
+    (handLog ? handLog.exportAll(d).catch(function () { return d.history || []; }) : Promise.resolve(d.history || [])).then(function (hands) {
+      if (tracker.db !== d) return;
+      if (!d.hpTagged) { tracker.tagHeroPot(hands); d.hpTagged = 1; }
+      if (!d.jamTagged) { tracker.tagJamShows(hands); d.jamTagged = 1; }
+      if (!d.cbTagged) { tracker.tagCheckBet(hands); d.cbTagged = 1; }
+      if (!d.mwTagged) { tracker.tagMwFolds(hands); d.mwTagged = 1; }
+      if (!d.sdTagged) { tracker.tagShowdown(hands); d.sdTagged = 1; }
+      if (!d.vrTagged) { tracker.tagVsRaise(hands); d.vrTagged = 1; }
+      if (!d.brTagged) { tracker.tagBetRecent(hands); d.brTagged = 1; }
+      if (!d.stTagged) { tracker.tagShowTimes(hands); d.stTagged = 1; }
+      if (!d.prTagged) { tracker.tagPfRecent(hands); d.prTagged = 1; }
+      saveDb(true);
+    });
+  }
+  function startTracker(db, error) {
+    tracker = new PatioTracker(db);
+    if (legacy) tracker.rawKeep = 60; // page storage is shared with the game
+    setupTracker(tracker);
+    if (error) noteSaved({ ok: false, error: error });
+    // Reads saved before v1.8.8 don't know who played together: learned from the stored hands.
+    tracker.learnSeats(tracker.db.history || []);
+    wire();
+    retag();
+    startHook();
     render();
-  }, 300);
-  // Watchdog, as in the extension's hook.js: a table on screen with no socket for noSocketMs ('nosocket'), or chips
-  // moving at least twice over silentMs with no socket event at all ('silent'). window.__patioSolverWatch shortens
-  // the waits on test pages.
-  setInterval(function () {
-    var gm = W.GameManager, cfg = W.__patioSolverWatch || {}, now = Date.now();
-    var noSocketMs = cfg.noSocketMs || 15000, silentMs = cfg.silentMs || 20000;
-    var ps = gm && gm.state && gm.state.players, table = !!(ps && ps.length), p = null;
-    if (table && !hooked && now - startedAt >= noSocketMs) p = 'nosocket';
-    if (table && hooked) {
-      var sig = ps.map(function (q) { return [q.id, q.stack, q.totalBetsMade, q.playState].join(':'); }).join('|');
-      if (lastSig != null && sig !== lastSig) { if (!sigMoves) firstMoveAt = now; sigMoves++; }
-      lastSig = sig;
-      if (sigMoves >= 2 && now - firstMoveAt >= silentMs && now - lastEventAt >= silentMs) p = 'silent';
-    }
-    if (p !== hookProblem && !(p && snapshot().tableType !== 'private')) { hookProblem = p; render(); }
-  }, 1000);
+  }
+  function init() {
+    var a = null;
+    try { a = W.indexedDB ? idbArea(IDB_NAME, 'kv') : null; } catch (e) { a = null; }
+    (a ? a.ok() : Promise.resolve(false)).then(function (ok) {
+      if (!ok) { legacy = true; logMark = markOf(load(MARK_KEY)); if (logMark == null) logMark = ui.loggedAt || null; startTracker(load(DB_KEY) || { players: {} }, null); return; }
+      area = a;
+      handLog = PatioHandLog.create(area, DB_KEY);
+      return Promise.all([handLog.load(PatioTracker.MAX_HISTORY, PatioTracker.RAW_KEEP), storeGet(MARK_KEY)]).then(function (got) {
+        var loaded = got[0];
+        logMark = markOf(got[1]);
+        // First start of this version: the reads and hands in localStorage move to IndexedDB, and the key is freed
+        // once they are saved there.
+        var old = loaded.error ? null : load(DB_KEY), moved = false;
+        if (old && old.players && Object.keys(old.players).length && !Object.keys(loaded.db.players || {}).length) {
+          loaded.db = old; moved = true;
+          if (logMark == null && ui.loggedAt) logMark = ui.loggedAt;
+        }
+        startTracker(loaded.db, loaded.error);
+        if (moved) {
+          saveDb(true).then(function (r) {
+            if (!r || !r.ok) return;
+            try { localStorage.removeItem(DB_KEY); } catch (e) { /* stays */ }
+            if (logMark != null) storeSet(MARK_KEY, { to: logMark, at: Date.now() });
+          });
+        }
+      });
+    }).catch(function (e) {
+      // Storage failed in some unexpected way: run on the page's storage rather than not at all.
+      if (tracker) return;
+      legacy = true; handLog = null; area = null;
+      startTracker(load(DB_KEY) || { players: {} }, 'the site storage failed (' + ((e && e.message) || e) + '), so reads are kept in page storage');
+    });
+  }
 
   function mount() {
     (document.body || document.documentElement).appendChild(host);
@@ -649,4 +1199,5 @@ function slim(r) {
     render();
   }
   if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
+  init();
 })();

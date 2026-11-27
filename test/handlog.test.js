@@ -478,6 +478,35 @@ test('export file: one hand per line, reads back as the same hands, named by its
   assert.strictEqual(HL.fileName([]), 'patio-hand-log.json');
 });
 
+test('reads files: the reads without the hand log, for the other panel to import (v1.8.51)', () => {
+  const fx = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'real-hand.json'), 'utf8'));
+  const t = new PatioTracker({ players: {} });
+  for (const m of fx) if (m.ev !== 'hook:attached') t.handle(m.ev, m.data, m.snap);
+  t.db.leftOut = [{ from: 1, to: 2, at: 3 }];
+  assert.ok(t.db.history.length >= 1 && Object.keys(t.db.players).length >= 1);
+  const file = JSON.parse(JSON.stringify(PatioTracker.readsFile(t.db, { from: 'computer', version: '1.8.51' })));
+  assert.strictEqual(file.kind, PatioTracker.READS_FILE);
+  assert.strictEqual(file.from, 'computer');
+  assert.ok(!('history' in file.reads), 'no hand log in a reads file');
+  assert.deepStrictEqual(file.reads.players, JSON.parse(JSON.stringify(t.db.players)));
+  assert.deepStrictEqual(file.reads.leftOut, t.db.leftOut);
+  assert.ok(t.db.history.length >= 1, 'the tracker keeps its hand log');
+  const got = PatioTracker.readsFromFile(file);
+  assert.ok(got && got.reads === file.reads && got.from === 'computer' && got.version === '1.8.51');
+  assert.strictEqual(got.info.players, Object.keys(t.db.players).length);
+  assert.ok(got.info.last > 0, 'newest hand the reads saw');
+  // A tracker on the imported reads (plus its own hand log) reads every player the same.
+  const t2 = new PatioTracker(Object.assign({}, got.reads, { history: [] }));
+  for (const id of Object.keys(t.db.players)) assert.deepStrictEqual(t2.readTally(id), JSON.parse(JSON.stringify(t.readTally(id))));
+  // Hand logs, other JSON and empty reads are not reads files.
+  assert.strictEqual(PatioTracker.readsFromFile(t.db.history), null);
+  assert.strictEqual(PatioTracker.readsFromFile({ history: t.db.history }), null);
+  assert.strictEqual(PatioTracker.readsFromFile({ kind: 'something-else', reads: file.reads }), null);
+  assert.strictEqual(PatioTracker.readsFromFile({ kind: PatioTracker.READS_FILE }), null);
+  assert.strictEqual(PatioTracker.readsFromFile(null), null);
+  assert.match(PatioTracker.readsFileName('phone', new Date(2026, 10, 27, 21, 5).getTime()), /^patio-reads-phone-2026-11-27-2105\.json$/);
+});
+
 test('merge-logs: files and folders, each hand once, the fuller copy kept', () => {
   const fs = require('fs'), os = require('os'), path = require('path');
   const M = require('./merge-logs.js');

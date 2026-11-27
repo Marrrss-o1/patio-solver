@@ -18,7 +18,9 @@ src/engine.js            The solver (exploitative Monte Carlo + CFR solvers). Pu
                          there; the "kernels: ... bit-identical" test catches drift for the spots it covers.
                          The manifest allows 'wasm-unsafe-eval' for this.
 src/tracker.js           Socket events -> hand state, opponent tallies, solver input, linked reads. Pure JS, unit-tested.
-src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver.
+src/userscript-core.js   iPhone/userscript UI + in-page socket hook + Web Worker solver. Since v1.8.51 the computer's full
+                         solve on the phone's cores, reads and hand log in the site's IndexedDB, reads files (Known
+                         gaps: Phone). The build adds extension/handlog.js and PATIO_VERSION.
 extension/               Chrome MV3 extension (Load unpacked on this folder).
   hook.js                MAIN-world script: attaches socket.onAny, posts events + state snapshot via postMessage.
                          The socket is GameManager.roomConnectionManager.socket since the game's 3 Nov 2026 update
@@ -550,8 +552,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   can be in two exports. With no mark yet (first export of this version), a session export counts the hands before
   it as exported. Files are named by their hands' local time range and hold one hand per line (about 40% smaller than
   the old indented JSON; a session is about 20 KB a hand). Analysis: pass the folder of exports (or several files) to
-  any log tool, or merge them with `node test/merge-logs.js`. The phone's export is unchanged (its 150 hands), one
-  hand per line too. Each entry has `log` (every action in order with
+  any log tool, or merge them with `node test/merge-logs.js`. The phone's "Hand log" works the same since v1.8.51
+  (its newest 1,000 hands in IndexedDB; before, its 150). Each entry has `log` (every action in order with
   `amt` added, `to`, `pot` before it, `facing`, `stack` before it, `potPct` for bets/raises, blinds as `sb`/`bb`),
   each player's starting `stack`, `advice` (pot, price, equity, hand, top 5 options with EVs, reads, hero's actual
   action in `did` and `followed`), and `net`/`heroNet`/`heroNetBB`, filled in from the next hand's starting stacks.
@@ -650,8 +652,8 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   (rrStick -1.2 ± 24.9), so read the plain tables as no loss, not a win. Files: sims/2026-11-27-rrtree/ (RESULTS.md).
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
-  v1.8.1), for the newest 100 hands (60 on the
-  userscript, whose localStorage is shared with the game; `save` drops raw first when full). Both hooks forward all
+  v1.8.1), for the newest 100 hands in memory (stored for the newest 1,000 by both panels; the userscript kept 60 in
+  localStorage until v1.8.50, and still does where IndexedDB fails, dropping raw first when full). Both hooks forward all
   `game:`/`player:game:`/`admin:game:` events and `game_log` chat for this; the tracker ignores unknown ones.
   Replay a raw hand by feeding `d` back through `handle`.
   When a replay script keeps solver inputs to solve later, copy each one when it is taken
@@ -843,7 +845,34 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   seated players, so an account that played one session and left could only be joined once it sat down again (11 Nov:
   Mark played 18 hands as "Mark" on a new account, K98C..., then went back to his usual one; "Who is this?" never asked,
   since that release went in as the session started).
-- Extension and userscript keep separate read databases (chrome.storage vs page localStorage).
+- Extension and userscript keep separate read databases (chrome.storage vs the site's IndexedDB "patio-solver-phone";
+  page localStorage before v1.8.51). Reads files (v1.8.51, `PatioTracker.readsFile` / `readsFromFile`, kind
+  "patio-solver-reads": every part of the db but `history`) copy them across by hand: "Export reads" on one panel,
+  "Import" and "Replace" on the other. No sync (Marwin keeps the two apart; on 27 Nov he chose the one-tap copy).
+- Phone (v1.8.51; Marwin, 27 Nov: plays on his phone the next day, up to about 10 s a decision is fine): the userscript
+  runs the computer's full solve on Web Workers (src/userscript-core.js `analyze`: POWER budgets, partial Monte Carlo
+  shares stopped at mcMs = 0.35 x the clock, 2.5-7 s, never under the old phone budget; the turn solve on one worker
+  for turnMs = 0.25 x the clock, 2-5 s; the final pass with the river solver's 4,000 and the preflop solver's 1,200
+  iterations, PREFLOP_MS 3 s). WORKERS = cores - 1, 2-3 (iOS Safari reports 2). A new decision, hero acting or the
+  hand ending replace the workers still busy (`cancelRunning`), and workers that crash three times in a minute leave
+  the old phone budget on the page. The bar counts the seconds while it thinks; the panel says how long it took.
+  Logged decisions (frozen captures, mix off, cloud sandbox), phone against the computer's scheme (8 workers, 1.5 s
+  turn solves), a second computer run on other seeds for the noise: river 30 of 30 the same pick (both), preflop 40 of
+  40 (both; the old phone budget 39), flop 12 of 15 (computer 13; 0.002 bb lost a decision by the computer's EVs,
+  computer 0.018), turn 39 of 40 and 29 of 30 with two turn solves, 30 of 30 with one (computer 70 of 70; the old phone
+  budget 40 of 70, 0.29-0.69 bb lost a decision). Phone time on a sandbox core: turn about 5.2 s, flop median 4.2 s
+  (max 7.1), river up to 1.6 s, preflop up to 0.8 s. Memory per worker: a turn solve about 250-300 MB, other spots about
+  120 MB; Safari's page process limit is about 1.5 GB on most iPhones (iOS reloads the page above it), so only one
+  worker solves the turn. Not measured on an iPhone: a slower core gets fewer Monte Carlo iterations and turn
+  iterations in the same time (the sandbox gets about 500 turn iterations in 5 s; 100 is the target).
+  Storage: reads and hand log in IndexedDB "patio-solver-phone" (store "kv") through PatioHandLog, as chrome.storage on
+  the computer (newest 1,000 hands with raw events; reads saved at most every 1.5 s and when the page is hidden); the
+  first start moves the localStorage reads over and frees the key; without IndexedDB it falls back to localStorage
+  (`legacy`, raw for 60 hands). Hand log, export mark and sessions as on the computer (no Leave out on the phone). Files
+  wait on the panel for a tap ("Save to Files" is a real <a download>, "Share…" is navigator.share), since iOS only
+  downloads from a tap. Import is a <label> for a file input outside the re-rendered part. test/harness-mobile.js:
+  FILES=1 checks export, import and replace, the hand-log file, a reload, and the move from localStorage; LANDSCAPE=1.
+  test/harness-extension.js READS=1 checks the computer's Export reads and Import of a reads file.
 - Blueprint (self-play MCCFR, 3/4/5-handed 150bb, 270-320M iterations; 4-handed exports preflop to turn, 5-handed
   preflop and flop): shown on the panel's "Blueprint (self-play)" line and in each hand-log advice as `bp`. It does
   not change the advice unless `input.blueprint === true`: blending it in lost in the friends simulator (3-handed
