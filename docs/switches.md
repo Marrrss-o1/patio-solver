@@ -30,13 +30,13 @@ Merge bar (5 Nov): a sim win, or clear log evidence with no real loss in the sim
 | `pfShoveBB` | 25 | | 40 lost: -41.8 ± 6.0 (whole table at 30bb) | |
 | `bigCliff` (`bigCliffFloor` 0.25) | on | v1.8.3 | logs (96 spots: continues 67-72% to 35bb, 9% above); sim about +22 ± 10 | |
 | `pfRaisedRead` | on (to 30bb, `pfRaisedReadBB`) | v1.8.4 | logs (raisers facing a re-raise fold 16%, n 45); sim with the cliff about +39 ± 8 | `pfRaisedReadBB` 45: neutral (+8.1 ± 9.6), off |
-| `pfReraiserRead` (a raiser whose own raise was a re-raise keeps the read above 30bb too) | on | v1.8.49 | logs to 27 Nov: re-raisers facing 30bb+ fold 1 of 9 (openers 45bb+ 8 of 11), at hero's 12 big re-raises predicted folds 4.4 -> 1.0 (1 done); sim: pending (sims/2026-11-27-rrread) | |
+| `pfReraiserRead` (a raiser whose own raise was a re-raise keeps the read above 30bb too) | on | v1.8.49 | logs to 27 Nov: re-raisers facing 30bb+ fold 1 of 10 (openers 45bb+ 8 of 12), at hero's 13 big re-raises predicted folds 4.7 -> 1.1 (1 done); sim (no-loss rule): rrStick bots -17.1 ± 19.4, plain v16r +23.1 ± 26.2 (sims/2026-11-27-rrread) | the knock-on preflop changes (-27.1 ± 14.4 on the rrStick bots, picked after the runs) holding up: try the read for real re-raisers only, not inside the tree |
 | `bigRaiseRange` | on | v1.8.15 | logs: 5 shown 30bb+ raises with chips behind; sim can't judge | more shown huge raises |
 | `pfCommitCall`, `pfCommitRamp` | on | v1.8.15-18 | logs: players a third in called 3 of 3 | |
 | `shoveRange` | on | v1.8.17 | logs: 5 shown all-in re-raises, +1.8 nats | |
 | `deepShove` (`low` 20) | on, per player | v1.8.27 (low v1.8.30) | logs: Mark's 7 shown deep jams all top 14%; sim with a tight shover about +28 ± 6, plain regulars -3.3 ± 2.3 | |
 | `allinTie` | 1bb | v1.8.25 | Marwin's ask; sim +11.7 ± 3.0 | |
-| `allinTieLeft` (for `allinTie`, a call or raise leaving under a quarter of the pot behind counts as all-in) | 0.25 | v1.8.49 | logs: 27 Nov #66 (a 4-bet leaving 28 into 302) and #68 (a call leaving 4 into 72); 3 of 2,095 preflop and 8 of 2,575 postflop picks change, all toward the all-in; sim: pending (sims/2026-11-27-rrread) | |
+| `allinTieLeft` (for `allinTie`, a call or raise leaving under a quarter of the pot behind counts as all-in) | 0.25 | v1.8.49 | logs: 27 Nov #66 (a 4-bet leaving 28 into 302) and #68 (a call leaving 4 into 72); 3 of 2,095 preflop and 8 of 2,575 postflop picks change, all toward the all-in; sim (no-loss rule): +0.7 ± 8.3 (sims/2026-11-27-rrread) | |
 | `pfCommit` | off | v1.8.10 | sim -24.5 ± 14.2 and -18.8 ± 18.0 | |
 | `pfImplied` | unset | sim only | 0.5: -55.3 ± 18.0 | |
 

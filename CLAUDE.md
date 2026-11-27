@@ -608,11 +608,12 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   raise was a re-raise ('3bet', '4bet', '5bet') answers a further re-raise of any size with foldTo3bet / fourBet (plus
   the PF_COMMIT_RAMP lift toward 0.97 with a fifth of their stack in), where the rule above gave them the opener's 30bb
   step and bigFade. The preflop solver's tree passes the level down (`villainRaised` 're'), so a villain who 3-bets
-  inside the tree answers hero's 4-bet the same way. All logs to 27 Nov, the first time a friend who had raised faces a
-  re-raise: openers fold 9 of 108 up to 30bb, 1 of 6 at 30-45bb and 8 of 11 above 45bb (the step fits them); re-raisers
-  fold 2 of 33 up to 30bb and 1 of 9 above (Mark 0 of 4 at 35, 40, 78 and 75.5bb; Dew345 0 of 2 at 131 and 184bb; Jagger
-  0 of 1 at 117bb; the one fold Dew666 at 64bb with 56bb). At hero's 12 re-raises to 30bb+ into a re-raiser everyone
-  folded once; predicted 4.4 folds with the old rule, 1.0 with this (log-likelihood -5.8 -> -3.1). 27 Nov #66 (K9o, Mark
+  inside the tree answers hero's 4-bet the same way. All logs to 27 Nov 10:52, the first time a friend who had raised faces
+  a re-raise: openers fold 10 of 115 up to 30bb, 1 of 6 at 30-45bb and 8 of 12 above 45bb (the step fits them);
+  re-raisers fold 2 of 35 up to 30bb and 1 of 10 above (Mark 0 of 4 at 35, 40, 78 and 75.5bb; Dew345 0 of 2 at 131 and
+  184bb; Jagger 0 of 1 at 117bb; mewbw 0 of 1, 5-bet all-in with AA over a 100bb 4-bet; the one fold Dew666 at 64bb with
+  56bb). At hero's 13 re-raises to 30bb+ into a re-raiser everyone folded once; predicted 4.7 folds with the old rule, 1.1
+  with this (log-likelihood -6.1 -> -3.1). 27 Nov #66 (K9o, Mark
   3-bet to 18bb): the old rule read him folding 57% to a 4-bet to 75.5bb and advised it (all-in +5.5, the 4-bet leaving
   28 behind +5.4 by allinTie); he called with AJo. Now a call. Log replay (frozen captures, all 2,095 preflop decisions,
   live budget, mix off): 56 picks change in kind and 212 in size (187 smaller). The big ones are the 4-bets into
@@ -622,7 +623,15 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   become calls, 6 folds become raises and 6 raises folds, and opens move a step, mostly smaller (premium hands' EVs go
   up: AA's open +35.7 -> +55.7 chips, as a 3-bet now gets 4-bet and called). The simulator's bots fold to big 4-bets after 3-betting as openers do (the cliff in bots.js),
   so `--bot-params '{"rrStick":0.9}'` gives them the friends' habit (a bot whose own raise was a re-raise continues at
-  least 90% facing a further raise). Simulator: see sims/2026-11-27-rrread/RESULTS.md.
+  least 90% facing a further raise). Simulator (v16r regulars, live budget, 15 cloud chunks, B on vs A
+  `{"pfReraiserRead":false}`; rule set before the runs: stays on unless the habit bots or the plain bots pool below -1
+  SE): rrStick bots (heads-up, 3-, 4-handed, 150 and 300bb, 2,000 deals) -17.1 ± 19.4, plain v16r (1,400 deals)
+  +23.1 ± 26.2, so it stays on. Split by the first hero decision where A and B differ, on the rrStick bots: the spot itself
+  (hero facing a re-raise after raising) +6.7 ± 3.7, the other preflop spots the tree's change reaches (smaller raises,
+  big-blind checks over a limp) -27.1 ± 14.4, after the flop (reads drifted) +1.1 ± 15.6; on the plain bots -2.0 ± 3.6,
+  -3.3 ± 20.8, +13.4 ± 24.8. The middle one was picked after the runs, so it is a watch item: the old read's phantom
+  4-bet folds may have stood in for raise EV the flop leaves miss (PF_FLOP_EDGE), and a version that keeps the read for
+  real re-raisers but not inside the tree is the thing to try if it holds up. Files: sims/2026-11-27-rrread/ (RESULTS.md).
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the
@@ -1209,7 +1218,9 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   both stack off just the same and give up the shove's fold equity. Log replay (frozen captures, live budget, mix off,
   the re-raiser read on): 3 of 2,095 preflop picks change (88 facing a 3-bet shoves 365 instead of raising to 307; two
   short-stack opens a step smaller) and 8 of 2,575 after the flop (4 calls and 4 bets leaving 1-13% of the pot become
-  all-ins, 0.0-1.4 chips better by the EVs).
+  all-ins, 0.0-1.4 chips better by the EVs). Simulator (v16r regulars, live budget, on vs `{"allinTieLeft":false}`; rule
+  set before the runs: stays on unless below -1 SE): heads-up 25bb +10.8 ± 10.8 (162 of 400 deals differ), 4-handed 150bb
+  -13.3 ± 12.7 (9 of 200); pooled +0.7 ± 8.3, so it stays on. Files: sims/2026-11-27-rrread/.
 - All-in audit (5 Nov, scripts/2026-11-05-evening/allin-audit.js, allin-sum.js): every hero decision of all logs that
   shoves, calls an all-in or folds to one (84), re-solved on reads rebuilt from earlier hands, against the shown cards.
   Calls of all-ins (opponents always show): preflop 4, predicted equity 0.61, real 0.30 (-0.31 ± 0.12; ATs vs AA 24bb,
