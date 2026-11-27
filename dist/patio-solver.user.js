@@ -5791,7 +5791,9 @@ function ENGINE() {
         const kind = amt >= maxAdd - 1e-9 ? 'allin' : 'raise';
         const [l3, hi3] = childRange('raise');
         // The villain's raise level: 're' once they raise over a raise (facing one), else 'raise' (over a limp or check).
-        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, player === 1 ? (facing > 0 || vRaised === 're' ? 're' : 'raise') : vRaised, depth + 1));
+        // With input.pfReraiserTree false only a re-raise made at the table counts ('re' from cfg.villainRaised): a villain
+        // who re-raises inside the tree answers hero's next raise as an opener (the v1.8.48 rule there).
+        add({ kind, amount: amt }, () => node(1 - player, h3, o3, raises - 1, l3, hi3, player === 1 ? ((facing > 0 && cfg.reraiserTree !== false) || vRaised === 're' ? 're' : 'raise') : vRaised, depth + 1));
       }
       if (isRoot && cfg.noLimp) {
         const j = acts.findIndex((a) => a.kind === 'call');
@@ -7369,7 +7371,7 @@ function ENGINE() {
         option: field ? fieldOther && pendingOpps.length > 0 && toCall > 0 : opps[0].pending && toCall > 0,
         isoShare: 1 - (field && fieldOther ? pendingOpps : opps).reduce((a, o) => a * (1 - clamp(o.stats.pfr * 0.8, 0.03, 0.3)), 1),
         rootResp, deepStats: deep.stats, villainRaised: (!field || fieldOther) && vRaised ? (reraised ? 're' : 'raise') : false,
-        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, reraiserRead: input.pfReraiserRead !== false,
+        raises, noLimp: fieldOpen, multi, heroBet: +input.heroBet || 0, raisedRead: input.pfRaisedRead !== false, raisedReadBB: input.pfRaisedReadBB, reraiserRead: input.pfReraiserRead !== false, reraiserTree: input.pfReraiserTree !== false,
         p: Math.min(...opps.map((o) => o.stats.exploitWeight)),
         iterations: input.preflopIterations, timeMs: input.preflopTimeMs,
         implied: +input.pfImplied || 0, flopEdge: pfFlopEdgeFor(input, field), flopEdgeAggr: pfFlopEdgeAggrFor(input, field),

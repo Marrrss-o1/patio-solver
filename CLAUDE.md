@@ -632,6 +632,10 @@ Playwright harnesses write screenshots to `test/out/` (gitignored). Always rebui
   -3.3 ± 20.8, +13.4 ± 24.8. The middle one was picked after the runs, so it is a watch item: the old read's phantom
   4-bet folds may have stood in for raise EV the flop leaves miss (PF_FLOP_EDGE), and a version that keeps the read for
   real re-raisers but not inside the tree is the thing to try if it holds up. Files: sims/2026-11-27-rrread/ (RESULTS.md).
+  Narrower version under test (`input.pfReraiserTree: false`, a simulator option; default true is the rule above): a
+  villain's raise inside the preflop solver's tree passes 're' down only when they re-raised at the table
+  (cfg.villainRaised), so in-tree 3-bets answer hero's 4-bets as openers (v1.8.48) and real re-raisers keep the read.
+  27 Nov #66 is identical either way. Files: sims/2026-11-27-rrtree/.
 - Raw recorder (`recordRaw` in tracker.js): each hand-log entry has `raw`, every game event of the hand
   (`{ t: ms since set_blinds, ev, d, s?: [id, name, stack, pos, state, authUserId] }`; the account id since
   v1.8.1), for the newest 100 hands (60 on the
