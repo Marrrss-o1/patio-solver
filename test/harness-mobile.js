@@ -13,10 +13,12 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
   const us = fs.readFileSync(path.join(__dirname, '..', 'dist', 'patio-solver.user.js'), 'utf8');
   const img = fs.readFileSync(path.join(__dirname, 'fixtures', 'table-mobile.jpg')).toString('base64');
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({ ...devices['iPhone 13'] });
+  const ctx = await browser.newContext({ ...devices[process.env.LANDSCAPE ? 'iPhone 13 landscape' : 'iPhone 13'] }); // LANDSCAPE=1: the phone turned sideways
   await ctx.route('https://pokerpatio.com/**', r => r.fulfill({ status: 200, contentType: 'text/html', body:
     `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;height:100vh;background:#111 url(data:image/jpeg;base64,${img}) center top/cover no-repeat">
     <script>window.__L=[];window.GameManager={data:{tableType:${TABLE_TYPE}},playerData:{id:'H'},state:{players:[],settings:{blind_sizes:[{sb:5,bb:10}]}},${process.env.OLD_SOCKET ? "socket:{onAny(f){__L.push(f)}}" : "roomConnectionManager:{socket:{onAny(f){__L.push(f)}}}"}};</script></body></html>` }));
+  // CORES=2: the core count iOS Safari reports (the userscript then runs 2 solver workers).
+  if (process.env.CORES) await ctx.addInitScript((n) => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => n }), +process.env.CORES);
   const page = await ctx.newPage();
   const errs = []; page.on('pageerror', e => errs.push(String(e))); page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   await page.goto('https://pokerpatio.com/mp?game=test');
@@ -27,11 +29,18 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
     const m = msgs[i];
     if (m.ev === 'hook:attached') continue;
     await page.evaluate(m => { GameManager.state.players = m.snap.players; __L.forEach(f => f(m.ev, m.data)); }, m);
-    await page.waitForTimeout(m.ev === 'game:player_turn_started' ? 3000 : 30);
+    await page.waitForTimeout(m.ev === 'game:player_turn_started' ? 300 : 30);
+    // The full solve runs on Web Workers for up to about 10 s (v1.8.51): wait for it on hero's turns.
+    if (m.ev === 'game:player_turn_started') {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 25000 && await page.evaluate(() => /Thinking/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.bar').innerText))) await page.waitForTimeout(100);
+      const ms = Date.now() - t0 + 300;
+      if (ms > 20000) errs.push('a decision took over 20 s (message ' + i + ')');
+    }
     // PANELS=1 opens the panel and prints it after each turn (to see the advice).
     if (process.env.PANELS && m.ev === 'game:player_turn_started') {
       console.log('--- after message ' + i + ' ---');
-      console.log(await page.evaluate(() => { const r = document.getElementById('patio-solver-host').shadowRoot; const p = r.querySelector('.panel'); if (p && p.innerText.length < 80) { const b = r.querySelector('.bar'); if (b) b.click(); } return r.querySelector('.panel').innerText; }));
+      console.log(await page.evaluate(() => { const r = document.getElementById('patio-solver-host').shadowRoot; if (r.querySelector('.bd').style.display === 'none') r.querySelector('[data-a="toggle"]').click(); return r.querySelector('.panel').innerText; }));
     }
     if (shots.includes(i)) { await page.screenshot({ path: path.join(out, `mobile_${i}.png`) }); const bb = await page.evaluate(() => { const r = document.getElementById("patio-solver-host").shadowRoot.querySelector(".bar").getBoundingClientRect(); return [r.left + 60, r.top + r.height/2]; }); await page.touchscreen.tap(bb[0], bb[1]); await page.waitForTimeout(300); await page.screenshot({ path: path.join(out, `mobile_${i}_open.png`) }); }
   }
@@ -100,6 +109,78 @@ const TABLE_TYPE = process.env.TABLE_TYPE == null ? "'private'" : process.env.TA
     await page.waitForTimeout(200);
     const joined = await text();
     console.log(/Reads joined/.test(joined) && !/Who is this/.test(joined) ? 'WHO JOINED' : 'WHO NOT JOINED\n' + joined);
+  }
+  // FILES=1 (v1.8.51): Export reads and the hand log as files, Import a reads file from "the computer" (Replace), the
+  // reads and log kept in IndexedDB over a reload, and an older version's reads moved over from localStorage.
+  if (process.env.FILES) {
+    const sr = (fn, arg) => page.evaluate(([f, a]) => { const r = document.getElementById('patio-solver-host').shadowRoot; return new Function('r', 'a', f)(r, a); }, [fn, arg]);
+    const text = () => sr("return r.querySelector('.panel').innerText");
+    const click = (q) => sr("const el = r.querySelector(a); if (!el) throw new Error('no ' + a); el.click(); return true", q);
+    const waitFor = async (re, ms = 5000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (re.test(await text())) return true; await page.waitForTimeout(100); } return false; };
+    const blobJson = () => sr("const l = r.querySelector('a[data-a=\"saveFile\"]'); return l ? fetch(l.href).then((x) => x.text()).then((t) => ({ name: l.getAttribute('download'), text: t })) : null");
+    const check = (ok, what, extra) => { console.log((ok ? 'OK   ' : 'FAIL ') + what); if (!ok) { errs.push('files: ' + what); if (extra) console.log(extra); } };
+    if (await sr("return r.querySelector('.bd').style.display === 'none'")) await click('[data-a="toggle"]');
+    await click('[data-a="reads"]');
+    await page.waitForTimeout(200);
+    await click('[data-a="exportReads"]');
+    await page.waitForTimeout(200);
+    const ex = await blobJson();
+    const file = ex && JSON.parse(ex.text);
+    check(file && file.kind === 'patio-solver-reads' && file.from === 'phone' && !file.reads.history && Object.keys(file.reads.players).length >= 1 && /^patio-reads-phone-.*\.json$/.test(ex.name), 'Export reads makes a reads file (' + (ex && ex.name) + ')');
+    const before = Object.keys(file.reads.players).length;
+    // "The computer's" reads: the phone's plus one more player.
+    const comp = JSON.parse(JSON.stringify(file));
+    comp.from = 'computer';
+    const someone = Object.keys(comp.reads.players)[0];
+    comp.reads.players['COMP-1'] = Object.assign({}, comp.reads.players[someone], { name: 'FromComputer' });
+    comp.reads.seen = Object.assign({}, comp.reads.seen, { 'COMP-1': { names: ['FromComputer'], first: Date.now() - 864e5, last: Date.now() + 1000 } });
+    await page.locator('#ps-file').setInputFiles({ name: 'patio-reads-computer-test.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(comp)) });
+    check(await waitFor(/Replace this phone's reads/), 'Import of a reads file asks before replacing', await text());
+    await page.screenshot({ path: path.join(out, 'mobile_reads_import.png') });
+    await click('[data-a="replaceReads"]');
+    check(await waitFor(new RegExp('Reads replaced with the computer\'s: ' + (before + 1) + ' players')), 'Replace puts the computer\'s reads here', await text());
+    check(new RegExp((before + 1) + ' players on this phone').test(await text()), 'the phone now reads ' + (before + 1) + ' players');
+    // A hand-log file is not taken as reads: its hands go into the log (and the reads are rebuilt).
+    await click('[data-a="log"]');
+    check(await waitFor(/New hands \(\d+\)/), 'Hand log lists the new hands', await text());
+    await click('[data-a="logNew"]');
+    check(await waitFor(/Save to Files/), 'New hands makes a file to save');
+    const lg = await blobJson();
+    const hands = lg && JSON.parse(lg.text);
+    check(Array.isArray(hands) && hands.length >= 1 && hands[0].raw && /^patio-hand-log-/.test(lg.name), 'the hand-log file holds the hands with raw events (' + (hands && hands.length) + ', ' + (lg && lg.name) + ')');
+    const dl = page.waitForEvent('download', { timeout: 5000 }).catch(() => null);
+    await click('a[data-a="saveFile"]');
+    const d = await dl;
+    check(d && d.suggestedFilename() === lg.name, 'Save to Files downloads it');
+    check(await waitFor(/Saved: \d+ hand/), 'the panel notes the save', await text());
+    await page.screenshot({ path: path.join(out, 'mobile_log_saved.png') });
+    // Everything stays over a reload (IndexedDB), and nothing is left in localStorage.
+    await page.waitForTimeout(1800);
+    await page.reload();
+    await page.addScriptTag({ content: us });
+    await page.waitForTimeout(1200);
+    if (await sr("return r.querySelector('.bd').style.display === 'none'")) await click('[data-a="toggle"]');
+    await click('[data-a="reads"]');
+    check(await waitFor(new RegExp((before + 1) + ' players on this phone')), 'the replaced reads are still there after a reload', await text());
+    check(await page.evaluate(() => localStorage.getItem('patioSolverDb') == null), 'no reads in localStorage');
+    await click('[data-a="log"]');
+    check(await waitFor(/No new hands since the last export|New hands \(1\)/), 'the export mark is kept over a reload', await text());
+    // An older version's reads in localStorage move to IndexedDB on the first start.
+    const ctx2 = await browser.newContext({ ...devices['iPhone 13'] });
+    await ctx2.route('https://pokerpatio.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><html><body></body></html>' }));
+    const p2 = await ctx2.newPage();
+    p2.on('pageerror', (e) => errs.push(String(e)));
+    await p2.goto('https://pokerpatio.com/mp?game=test');
+    await p2.evaluate((db) => localStorage.setItem('patioSolverDb', JSON.stringify(db)), Object.assign({}, file.reads, { history: hands }));
+    await p2.addScriptTag({ content: us });
+    await p2.waitForTimeout(2500);
+    const moved = await p2.evaluate(() => new Promise((res) => {
+      const q = indexedDB.open('patio-solver-phone', 1);
+      q.onsuccess = () => { const g = q.result.transaction('kv').objectStore('kv').getAllKeys(); g.onsuccess = () => res({ keys: g.result.length, ls: localStorage.getItem('patioSolverDb') }); };
+      q.onerror = () => res(null);
+    }));
+    check(moved && moved.ls == null && moved.keys >= 1 + hands.length, 'older reads move from localStorage to IndexedDB (' + JSON.stringify(moved && { keys: moved.keys, left: moved.ls != null }) + ')');
+    await ctx2.close();
   }
   // expand and screenshot the last advice state
   console.log(await page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText));

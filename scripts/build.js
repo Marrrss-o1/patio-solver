@@ -15,6 +15,9 @@ const pkg = JSON.parse(read('package.json'));
 const engine = read('src/engine.js');
 const tracker = read('src/tracker.js');
 const core = read('src/userscript-core.js');
+// The hand log's storage (one record per hand, newest 1,000), shared with the extension: the phone keeps it in the
+// site's IndexedDB (v1.8.51).
+const handlog = read('extension/handlog.js');
 
 // 1. Extension copies
 write('extension/engine.js', engine);
@@ -41,7 +44,7 @@ const header = `// ==UserScript==
 `;
 const userscript = header +
   '\n(function () {\n"use strict";\n// ---- Solver engine (also loaded into a background worker via ENGINE.toString()) ----\nfunction ENGINE() {\n' +
-  engine + '\n}\nENGINE();\n\n' + tracker + '\n\n' + core + '\n})();\n';
+  engine + '\n}\nENGINE();\n\n' + tracker + '\n\n' + handlog + '\n\nvar PATIO_VERSION = ' + JSON.stringify(pkg.version) + ';\n\n' + core + '\n})();\n';
 write('dist/patio-solver.user.js', userscript);
 
 // 3. Zip (optional)

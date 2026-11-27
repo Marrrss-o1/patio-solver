@@ -62,6 +62,7 @@
   let ui = { tableStyle: 'typical', x: null, y: 80, collapsed: false, showOptions: true, showLinks: false, showLog: false };
   let status = 'Connecting to the table…';
   let importNote = '', importing = false, restored = false;
+  let pendingReads = null; // a reads file picked in Import, waiting for a click on "Replace these reads"
   let linkNote = ''; // the last link answer (or why a link was refused)
   let advice = null; // { result, ctx, forHandStreet, stale }
   let thinking = false;
@@ -198,7 +199,8 @@
       <span class="sp" style="flex:1"></span>
       <button class="btn" data-a="log" title="Download the hands since your last export, one session, or every stored hand">Hand log</button>
       <button class="btn" data-a="links" title="Join the reads of a friend who came back on a new account, or split them again">Link reads</button>
-      <button class="btn" data-a="import" title="Load hand-log exports (from an older install) and rebuild the reads from every stored hand">Import</button>
+      <button class="btn" data-a="exportReads" title="Save these reads to a file for the phone's panel (Import there)">Export reads</button>
+      <button class="btn" data-a="import" title="Load a reads file (Export reads on the phone) to replace these reads, or hand-log exports to add their hands and rebuild the reads">Import</button>
       <button class="btn" data-a="reset">Reset reads</button>
       <input type="file" accept=".json,application/json" multiple style="display:none">
     </div>
@@ -255,6 +257,26 @@
       if (!tracker || importing) return;
       fileIn.value = '';
       fileIn.click();
+    } else if (what === 'exportReads') {
+      if (!tracker) return;
+      // The reads alone, for the phone's panel (PatioTracker.readsFile): Import there replaces its reads with these.
+      const name = PatioTracker.readsFileName('computer');
+      const data = PatioTracker.readsFile(tracker.db, { from: 'computer', version: chrome.runtime.getManifest().version });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = name;
+      root.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const info = PatioTracker.readsInfo(tracker.db);
+      pendingReads = null;
+      importNote = `Saved ${name}: ${info.players} player${info.players === 1 ? '' : 's'}. On the phone: Reads, then Import, and pick this file.`;
+      render();
+    } else if (what === 'replaceReads') {
+      replaceReads();
+    } else if (what === 'cancelReads') {
+      pendingReads = null;
+      importNote = 'Kept these reads as they were.';
+      render();
     } else if (what === 'reset') {
       if (!tracker) return;
       if (a.dataset.confirm !== '1') { a.dataset.confirm = '1'; a.textContent = 'Sure? Click again'; setTimeout(() => { a.dataset.confirm = ''; a.textContent = 'Reset reads'; }, 3000); return; }
@@ -309,6 +331,36 @@
   }
   fileIn.addEventListener('change', () => { if (fileIn.files && fileIn.files.length) importLogs([...fileIn.files]); });
 
+  // Reads files (v1.8.51, PatioTracker.readsFile): the phone's panel exports its reads, and Import here puts them in
+  // place of these after a click on "Replace these reads". The hand log stays as it is.
+  const fromTxt = (f) => (f === 'phone' ? 'the phone' : f === 'computer' ? 'a computer' : 'another device');
+  function replaceReads() {
+    const p = pendingReads;
+    if (!p || !tracker || importing) return;
+    pendingReads = null;
+    const history = tracker.db.history || [];
+    tracker.db = Object.assign({}, p.reads, { history });
+    tracker.linkAsks = null; tracker.whoAsks = null;
+    // Who sat together in the hands stored here (two accounts in one hand are never one player).
+    tracker.learnSeats(history);
+    // A deliberate replace: the site's copy may get smaller.
+    backup.reset();
+    saveDb();
+    importNote = `Reads replaced with ${fromTxt(p.from)}'s: ${p.info.players} player${p.info.players === 1 ? '' : 's'}${p.info.last ? ', newest hand ' + when(p.info.last) : ''}. The hand log here stays as it was.`;
+    if (advice && !advice.stale) requestAdvice();
+    else render();
+  }
+  function pendingReadsHtml() {
+    const p = pendingReads;
+    if (!p) return '';
+    const cur = PatioTracker.readsInfo(tracker.db);
+    const pl = (n) => `${n} player${n === 1 ? '' : 's'}`;
+    return `<div class="ask"><b>${esc(p.name)}</b>: reads from ${esc(fromTxt(p.from))}${p.savedAt ? ', saved ' + esc(when(p.savedAt)) : ''}: ${pl(p.info.players)}${p.info.last ? ', newest hand ' + esc(when(p.info.last)) : ''}.` +
+      `<br>These reads: ${pl(cur.players)}${cur.last ? ', newest hand ' + esc(when(cur.last)) : ''}.` +
+      (cur.players && cur.last > (p.info.last || 0) ? '<div class="neg">This computer has hands newer than the file. Replacing loses what they added to the reads (the hand log keeps them).</div>' : '') +
+      '<div class="row"><button class="btn" data-a="replaceReads">Replace these reads</button> <button class="btn" data-a="cancelReads">Cancel</button></div></div>';
+  }
+
   // "Import": hand-log exports (this install's or an older one's) go into the stored log, and the
   // reads are rebuilt by replaying every stored hand that has raw events, as at the table. Removing
   // the extension in Chrome deletes its storage; this brings the reads back from a backup export.
@@ -317,10 +369,26 @@
     importNote = 'Importing…'; render();
     try {
       const got = [];
+      const parsed = [];
+      pendingReads = null;
       for (const f of files) {
-        const data = JSON.parse(await f.text());
+        let data;
+        try { data = JSON.parse(await f.text()); } catch (e) { throw new Error(f.name + " isn't a Patio Solver file (not JSON)"); }
+        parsed.push({ name: f.name, data });
+      }
+      // A reads file (Export reads on the phone) waits for "Replace these reads".
+      const readsFiles = parsed.filter((x) => PatioTracker.readsFromFile(x.data));
+      if (readsFiles.length) {
+        if (parsed.length > 1) throw new Error('pick the reads file on its own');
+        pendingReads = Object.assign({ name: readsFiles[0].name }, PatioTracker.readsFromFile(readsFiles[0].data));
+        importNote = '';
+        importing = false;
+        render();
+        return;
+      }
+      for (const { name, data } of parsed) {
         const list = Array.isArray(data) ? data : data && Array.isArray(data.history) ? data.history : null;
-        if (!list) throw new Error(f.name + ' is not a hand-log export');
+        if (!list) throw new Error(name + ' is neither a reads file nor a hand-log export');
         got.push(...list);
       }
       const key = (e) => e.t + ':' + (e.hero || []).join('');
@@ -731,6 +799,7 @@
     html += `<div class="muted">Tracking ${n} player${n === 1 ? '' : 's'}. Reads sharpen as hands pile up.</div>`;
     if (sizing.small) html += `<div class="muted">Bets this session under ${Math.round(SMALL_SIZE * 100)}% of the advised size: ${sizing.small} of ${sizing.n}.</div>`;
     if (saveError) html += `<div class="status neg">Couldn't save reads and the hand log: ${esc(saveError)}</div>`;
+    if (pendingReads) html += pendingReadsHtml();
     if (importNote) html += `<div class="status${/failed/.test(importNote) ? ' neg' : ''}">${esc(importNote)}</div>`;
     body.innerHTML = html;
   }

@@ -14,10 +14,23 @@ Advice only: it never clicks or acts for you. It also switches itself off at pub
 3. Open or refresh your lobby. The panel appears top-right. Drag it to move it, or press – to shrink it.
 
 ### iPhone (Safari)
-1. Install **Userscripts** (free) from the App Store and open it once.
+1. Install **Userscripts** (free) from the App Store and open it once. It asks you to pick a folder for scripts: pick
+   (or make) a **Userscripts** folder in Files, On My iPhone.
 2. Settings → Apps → Safari → Extensions → **Userscripts**: turn it on and allow it on all websites (or pokerpatio.com).
-3. Save `dist/patio-solver.user.js` into the **Userscripts** folder in Files.
-4. Open your lobby in **Safari**. Tap the bar to expand it, and drag it to move it.
+3. Save `dist/patio-solver.user.js` into that folder (from the Files app, or Safari's download button → Save to Files).
+   To update later, save the new file over the old one.
+4. Open your lobby in **Safari**. Tap the bar to expand it, and drag it to move it. The bottom line of the panel says
+   the version.
+
+The phone runs the computer's full solve on its own cores (two Web Workers on an iPhone), so a decision takes about
+2-8 seconds instead of under one; the bar counts the seconds while it thinks. If you act before it is done, nothing is
+shown for that decision. Reads and the hand log (newest 1,000 hands) are kept in the site's storage in Safari.
+
+**Copy the computer's reads to the phone:** on the computer's panel click **Export reads**, get the file to the phone
+(AirDrop, or iCloud Drive), then on the phone tap **Reads file → Import**, pick the file, and tap **Replace this
+phone's reads**. Back the other way after a phone session: **Reads file → Export reads** on the phone (Share… →
+AirDrop), then **Import** on the computer's panel and **Replace these reads**. Each side keeps its own reads otherwise,
+so copy them over before switching, or the reads you replace lose the hands played since.
 
 Also works with Tampermonkey / Violentmonkey on desktop browsers and Firefox for Android.
 
@@ -52,9 +65,10 @@ Also works with Tampermonkey / Violentmonkey on desktop browsers and Firefox for
 5. **River solve.** On the river against one player, it solves your whole range against theirs (the same kind of
    real-time solving the strongest poker bots use), with their tendencies built in. The panel shows how often to
    play each option, so it can tell you to bluff some hands and call down with the right bluff-catchers.
-6. **Review.** "Hand log" downloads hands with everyone's actions, shown cards and the advice given. On the computer it
-   offers the hands since your last export, one session, or every stored hand (it keeps the newest 1,000); the phone
-   downloads its last 150. `node test/merge-logs.js all.json <exports or folders>` joins several exports into one.
+6. **Review.** "Hand log" downloads hands with everyone's actions, shown cards and the advice given. It offers the
+   hands since your last export, one session, or every stored hand (it keeps the newest 1,000; on the phone, tap Save
+   to Files or Share… once the file is ready). `node test/merge-logs.js all.json <exports or folders>` joins several
+   exports into one.
 
 See `docs/protocol.md` for the game's message format and `CLAUDE.md` for developer notes.
 

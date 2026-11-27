@@ -2121,6 +2121,38 @@
     for (const k of ['same', 'notSame', 'seen', 'linkLog']) if (t.db[k]) db[k] = t.db[k];
     return { db, replayed: list.length, skipped: entries.length - all.length, leftOut: all.length - list.length };
   }
+  // Reads files (v1.8.51): the reads alone (every part of the db but the hand log: counts, shows, links, "not the same
+  // player" answers, left-out ranges), so the computer's panel and the phone's can hand them to each other ("Export
+  // reads", then "Import" on the other side). Each side keeps its own reads otherwise.
+  const READS_FILE = 'patio-solver-reads';
+  function readsFile(db, info) {
+    const reads = {};
+    for (const k of Object.keys(db || {})) if (k !== 'history') reads[k] = db[k];
+    return Object.assign({ kind: READS_FILE, v: 1, savedAt: Date.now() }, info || {}, { reads });
+  }
+  // What a panel shows before its reads are replaced: players, linked accounts, and the newest hand the reads saw.
+  function readsInfo(reads) {
+    const r = reads || {};
+    let last = 0;
+    for (const s of Object.values(r.seen || {})) if (s && s.last > last) last = s.last;
+    return { players: Object.keys(r.players || {}).length, linked: Object.keys(r.same || {}).length, last };
+  }
+  // A parsed file -> { reads, savedAt, from, version, info } when it is a reads file, else null.
+  function readsFromFile(data) {
+    if (!data || data.kind !== READS_FILE || !data.reads || !data.reads.players || typeof data.reads.players !== 'object') return null;
+    return { reads: data.reads, savedAt: +data.savedAt || 0, from: data.from || '', version: data.version || '', info: readsInfo(data.reads) };
+  }
+  // patio-reads-<from>-2026-11-27-2140.json (local time).
+  function readsFileName(from, t) {
+    const d = new Date(t || Date.now());
+    const pad = (x) => String(x).padStart(2, '0');
+    return `patio-reads-${from ? from + '-' : ''}${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+  }
+  PatioTracker.READS_FILE = READS_FILE;
+  PatioTracker.readsFile = readsFile;
+  PatioTracker.readsInfo = readsInfo;
+  PatioTracker.readsFromFile = readsFromFile;
+  PatioTracker.readsFileName = readsFileName;
   PatioTracker.rebuildReads = rebuildReads;
   PatioTracker.dropHands = dropHands;
   PatioTracker.leftOutTest = leftOutTest;

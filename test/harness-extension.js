@@ -148,6 +148,38 @@ const fs = require('fs');
     const mark = await sw.evaluate(() => new Promise((res) => chrome.storage.local.get('patioSolverLogMark', res)));
     console.log('MARK ' + JSON.stringify(mark));
   }
+  // READS=1 (v1.8.51): "Export reads" downloads the reads alone; Import of a reads file (here "the phone's": the same
+  // reads plus one player) asks first, and "Replace these reads" puts them in place, kept over a reload.
+  if (process.env.READS) {
+    const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
+    const click = (sel) => page.evaluate((q) => document.getElementById('patio-solver-host').shadowRoot.querySelector(q).click(), sel);
+    const check = (ok, what, extra) => { console.log((ok ? 'OK   ' : 'FAIL ') + what); if (!ok) { errs.push('reads: ' + what); if (extra) console.log(extra); } };
+    await page.waitForTimeout(1200);
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), click('[data-a="exportReads"]')]);
+    const file = path.join(out, dl.suggestedFilename());
+    await dl.saveAs(file);
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const n = Object.keys(data.reads.players).length;
+    check(data.kind === 'patio-solver-reads' && data.from === 'computer' && !data.reads.history && n >= 1 && /^patio-reads-computer-/.test(dl.suggestedFilename()), 'Export reads downloads a reads file (' + dl.suggestedFilename() + ', ' + n + ' players)');
+    const phone = JSON.parse(JSON.stringify(data));
+    phone.from = 'phone';
+    const k0 = Object.keys(phone.reads.players)[0];
+    phone.reads.players['PHONE-1'] = Object.assign({}, phone.reads.players[k0], { name: 'FromPhone' });
+    const pf = path.join(out, 'patio-reads-phone-test.json');
+    fs.writeFileSync(pf, JSON.stringify(phone));
+    await page.locator('#patio-solver-host input[type=file]').setInputFiles(pf);
+    await page.waitForFunction(() => /Replace these reads/.test(document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText), null, { timeout: 10000 }).catch(() => null);
+    check(/reads from the phone/.test(await text()), 'Import of a reads file asks first', await text());
+    await page.screenshot({ path: path.join(out, 'ext_reads_import.png') });
+    await click('[data-a="replaceReads"]');
+    await page.waitForTimeout(300);
+    check(new RegExp("Reads replaced with the phone's: " + (n + 1) + ' players').test(await text()), 'Replace these reads puts the phone\'s reads here', await text());
+    await page.waitForTimeout(1500);
+    let [sw] = ctx.serviceWorkers();
+    if (!sw) sw = await ctx.waitForEvent('serviceworker');
+    const stored = await sw.evaluate(() => new Promise((res) => chrome.storage.local.get('patioSolverDb', (o) => res(Object.keys((o.patioSolverDb || {}).players || {})))));
+    check(stored.includes('PHONE-1') && stored.length === n + 1, 'the replaced reads are stored (' + stored.length + ' players)');
+  }
   // LEAVEOUT=1: "Leave out" on the session (v1.8.47) takes its hands out of the reads; "Put back" puts them in again.
   if (process.env.LEAVEOUT) {
     const text = () => page.evaluate(() => document.getElementById('patio-solver-host').shadowRoot.querySelector('.panel').innerText);
